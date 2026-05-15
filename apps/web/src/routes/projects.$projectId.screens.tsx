@@ -1,7 +1,18 @@
 import { Button } from "@blabla/ui/components/button";
+import { Card, CardContent } from "@blabla/ui/components/card";
+import {
+	Empty,
+	EmptyDescription,
+	EmptyHeader,
+	EmptyMedia,
+	EmptyTitle,
+} from "@blabla/ui/components/empty";
+import { Field, FieldGroup, FieldLabel } from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
+import { Skeleton } from "@blabla/ui/components/skeleton";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import { Plus, ScrollText } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -33,33 +44,69 @@ function ScreensRoute() {
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader title="Screens" description="Group strings by app screen." />
-			<form onSubmit={submit} className="mb-4 flex gap-2 border p-3">
-				<Input
-					value={name}
-					onChange={(event) => setName(event.target.value)}
-					placeholder="Checkout"
-				/>
-				<Button type="submit">Save</Button>
-			</form>
-			<div className="divide-y border">
-				{(screens ?? []).map((screen: any) => (
-					<div
-						key={screen._id}
-						className="flex items-center justify-between p-3 text-sm"
-					>
-						<div>
-							<div className="font-medium">{screen.name}</div>
-							<div className="text-muted-foreground text-xs">{screen.slug}</div>
-						</div>
-						<Button
-							size="sm"
-							variant="outline"
-							onClick={() => archive({ screenId: screen._id })}
-						>
-							Archive
-						</Button>
-					</div>
-				))}
+			<div className="flex flex-col gap-4">
+				<Card size="sm">
+					<CardContent>
+						<form onSubmit={submit}>
+							<FieldGroup className="grid grid-cols-[1fr_auto] items-end gap-3">
+								<Field>
+									<FieldLabel htmlFor="screen-name">Name</FieldLabel>
+									<Input
+										id="screen-name"
+										value={name}
+										onChange={(event) => setName(event.target.value)}
+										placeholder="Checkout"
+									/>
+								</Field>
+								<Button type="submit" disabled={!name.trim()}>
+									<Plus data-icon="inline-start" />
+									Save
+								</Button>
+							</FieldGroup>
+						</form>
+					</CardContent>
+				</Card>
+
+				{screens === undefined ? (
+					<Skeleton className="h-32 w-full" />
+				) : screens.length === 0 ? (
+					<Empty className="border">
+						<EmptyHeader>
+							<EmptyMedia variant="icon">
+								<ScrollText />
+							</EmptyMedia>
+							<EmptyTitle>No screens yet</EmptyTitle>
+							<EmptyDescription>
+								Add a screen name to group related strings.
+							</EmptyDescription>
+						</EmptyHeader>
+					</Empty>
+				) : (
+					<Card size="sm">
+						<CardContent className="divide-y">
+							{screens.map((screen: any) => (
+								<div
+									key={screen._id}
+									className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
+								>
+									<div className="flex flex-col">
+										<span className="font-medium text-sm">{screen.name}</span>
+										<span className="font-mono text-muted-foreground text-xs">
+											{screen.slug}
+										</span>
+									</div>
+									<Button
+										size="sm"
+										variant="outline"
+										onClick={() => archive({ screenId: screen._id })}
+									>
+										Archive
+									</Button>
+								</div>
+							))}
+						</CardContent>
+					</Card>
+				)}
 			</div>
 		</ProjectShell>
 	);

@@ -1,8 +1,19 @@
+import { Badge } from "@blabla/ui/components/badge";
 import { Button } from "@blabla/ui/components/button";
+import { Card, CardContent } from "@blabla/ui/components/card";
+import {
+	Empty,
+	EmptyDescription,
+	EmptyHeader,
+	EmptyMedia,
+	EmptyTitle,
+} from "@blabla/ui/components/empty";
+import { Field, FieldGroup, FieldLabel } from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
-import { Label } from "@blabla/ui/components/label";
+import { Skeleton } from "@blabla/ui/components/skeleton";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import { Languages, Plus } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -39,53 +50,90 @@ function LocalesRoute() {
 				title="Locales"
 				description="Create and archive target locales."
 			/>
-			<form
-				onSubmit={submit}
-				className="mb-4 grid grid-cols-[160px_1fr_auto] gap-2 border p-3"
-			>
-				<div className="flex flex-col gap-1">
-					<Label>Code</Label>
-					<Input
-						value={code}
-						onChange={(event) => setCode(event.target.value)}
-						placeholder="hy"
-					/>
-				</div>
-				<div className="flex flex-col gap-1">
-					<Label>Label</Label>
-					<Input
-						value={label}
-						onChange={(event) => setLabel(event.target.value)}
-						placeholder="Armenian"
-					/>
-				</div>
-				<Button className="self-end" type="submit">
-					Create
-				</Button>
-			</form>
-			<div className="divide-y border">
-				{(locales ?? []).map((locale: any) => (
-					<div
-						key={locale._id}
-						className="flex items-center justify-between p-3 text-sm"
-					>
-						<div>
-							<div className="font-medium">{locale.label}</div>
-							<div className="text-muted-foreground text-xs">{locale.code}</div>
-						</div>
-						{locale.isSource ? (
-							<span className="text-muted-foreground text-xs">Source</span>
-						) : (
-							<Button
-								size="sm"
-								variant="outline"
-								onClick={() => archiveLocale({ localeId: locale._id })}
-							>
-								Archive
-							</Button>
-						)}
-					</div>
-				))}
+			<div className="flex flex-col gap-4">
+				<Card size="sm">
+					<CardContent>
+						<form onSubmit={submit}>
+							<FieldGroup className="grid grid-cols-[160px_1fr_auto] items-end gap-3">
+								<Field>
+									<FieldLabel htmlFor="locale-code">Code</FieldLabel>
+									<Input
+										id="locale-code"
+										value={code}
+										onChange={(event) => setCode(event.target.value)}
+										placeholder="hy"
+									/>
+								</Field>
+								<Field>
+									<FieldLabel htmlFor="locale-label">Label</FieldLabel>
+									<Input
+										id="locale-label"
+										value={label}
+										onChange={(event) => setLabel(event.target.value)}
+										placeholder="Armenian"
+									/>
+								</Field>
+								<Button
+									type="submit"
+									disabled={!code.trim() || !label.trim()}
+								>
+									<Plus data-icon="inline-start" />
+									Add locale
+								</Button>
+							</FieldGroup>
+						</form>
+					</CardContent>
+				</Card>
+
+				{locales === undefined ? (
+					<Skeleton className="h-32 w-full" />
+				) : locales.length === 0 ? (
+					<Empty className="border">
+						<EmptyHeader>
+							<EmptyMedia variant="icon">
+								<Languages />
+							</EmptyMedia>
+							<EmptyTitle>No locales yet</EmptyTitle>
+							<EmptyDescription>
+								Add a target locale to start translating.
+							</EmptyDescription>
+						</EmptyHeader>
+					</Empty>
+				) : (
+					<Card size="sm">
+						<CardContent className="divide-y">
+							{locales.map((locale: any) => (
+								<div
+									key={locale._id}
+									className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
+								>
+									<div className="flex min-w-0 flex-col">
+										<div className="flex items-center gap-2">
+											<span className="font-medium text-sm">{locale.label}</span>
+											{locale.isSource ? (
+												<Badge variant="outline" className="border-brand/40 text-brand">
+													Source
+												</Badge>
+											) : null}
+										</div>
+										<span className="font-mono text-muted-foreground text-xs">
+											{locale.code}
+										</span>
+									</div>
+									{!locale.isSource ? (
+										<Button
+											size="sm"
+											variant="outline"
+											onClick={() => archiveLocale({ localeId: locale._id })}
+										>
+											Archive
+										</Button>
+									) : null}
+								</div>
+							))}
+						</CardContent>
+					</Card>
+				)}
 			</div>
 		</ProjectShell>
 	);

@@ -1,7 +1,27 @@
+import { Badge } from "@blabla/ui/components/badge";
 import { Button } from "@blabla/ui/components/button";
+import { Card, CardContent } from "@blabla/ui/components/card";
+import {
+	Empty,
+	EmptyDescription,
+	EmptyHeader,
+	EmptyMedia,
+	EmptyTitle,
+} from "@blabla/ui/components/empty";
+import { Field, FieldGroup, FieldLabel } from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
+import {
+	Select,
+	SelectContent,
+	SelectGroup,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@blabla/ui/components/select";
+import { Skeleton } from "@blabla/ui/components/skeleton";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import { UserPlus, Users } from "lucide-react";
 import { useState } from "react";
 
 import {
@@ -14,6 +34,14 @@ export const Route = createFileRoute("/projects/$projectId/settings/members")({
 	component: MembersRoute,
 });
 
+const ROLE_VARIANT: Record<string, "default" | "secondary" | "outline"> = {
+	owner: "default",
+	editor: "secondary",
+	viewer: "outline",
+};
+
+type Role = "owner" | "editor" | "viewer";
+
 function MembersRoute() {
 	const { projectId } = useParams({
 		from: "/projects/$projectId/settings/members",
@@ -24,7 +52,7 @@ function MembersRoute() {
 	const updateRole = useMutation(apiAny.projects.updateMemberRole);
 	const removeMember = useMutation(apiAny.projects.removeMember);
 	const [userId, setUserId] = useState("");
-	const [role, setRole] = useState<"owner" | "editor" | "viewer">("viewer");
+	const [role, setRole] = useState<Role>("viewer");
 
 	async function submit(event: React.FormEvent) {
 		event.preventDefault();
@@ -38,53 +66,109 @@ function MembersRoute() {
 				title="Members"
 				description="Simple owner, editor, and viewer access."
 			/>
-			<form
-				onSubmit={submit}
-				className="mb-4 grid grid-cols-[1fr_160px_auto] gap-2 border p-3"
-			>
-				<Input
-					value={userId}
-					onChange={(event) => setUserId(event.target.value)}
-					placeholder="Better Auth user id"
-				/>
-				<select
-					className="h-8 border bg-background px-2 text-xs"
-					value={role}
-					onChange={(event) => setRole(event.target.value as any)}
-				>
-					<option value="viewer">Viewer</option>
-					<option value="editor">Editor</option>
-					<option value="owner">Owner</option>
-				</select>
-				<Button type="submit">Add</Button>
-			</form>
-			<div className="divide-y border">
-				{(members ?? []).map((member: any) => (
-					<div
-						key={member._id}
-						className="grid grid-cols-[1fr_140px_auto] items-center gap-2 p-3 text-sm"
-					>
-						<div className="font-mono text-xs">{member.userId}</div>
-						<select
-							className="h-8 border bg-background px-2 text-xs"
-							value={member.role}
-							onChange={(event) =>
-								updateRole({ memberId: member._id, role: event.target.value })
-							}
-						>
-							<option value="viewer">Viewer</option>
-							<option value="editor">Editor</option>
-							<option value="owner">Owner</option>
-						</select>
-						<Button
-							size="sm"
-							variant="outline"
-							onClick={() => removeMember({ memberId: member._id })}
-						>
-							Remove
-						</Button>
-					</div>
-				))}
+			<div className="flex flex-col gap-4">
+				<Card size="sm">
+					<CardContent>
+						<form onSubmit={submit}>
+							<FieldGroup className="grid grid-cols-[1fr_160px_auto] items-end gap-3">
+								<Field>
+									<FieldLabel htmlFor="member-id">User ID</FieldLabel>
+									<Input
+										id="member-id"
+										value={userId}
+										onChange={(event) => setUserId(event.target.value)}
+										placeholder="Better Auth user id"
+									/>
+								</Field>
+								<Field>
+									<FieldLabel htmlFor="member-role">Role</FieldLabel>
+									<Select
+										value={role}
+										onValueChange={(value) => setRole(value as Role)}
+									>
+										<SelectTrigger id="member-role" className="w-full">
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectGroup>
+												<SelectItem value="viewer">Viewer</SelectItem>
+												<SelectItem value="editor">Editor</SelectItem>
+												<SelectItem value="owner">Owner</SelectItem>
+											</SelectGroup>
+										</SelectContent>
+									</Select>
+								</Field>
+								<Button type="submit" disabled={!userId.trim()}>
+									<UserPlus data-icon="inline-start" />
+									Add
+								</Button>
+							</FieldGroup>
+						</form>
+					</CardContent>
+				</Card>
+
+				{members === undefined ? (
+					<Skeleton className="h-32 w-full" />
+				) : members.length === 0 ? (
+					<Empty className="border">
+						<EmptyHeader>
+							<EmptyMedia variant="icon">
+								<Users />
+							</EmptyMedia>
+							<EmptyTitle>No members yet</EmptyTitle>
+							<EmptyDescription>
+								Invite teammates by their Better Auth user id.
+							</EmptyDescription>
+						</EmptyHeader>
+					</Empty>
+				) : (
+					<Card size="sm">
+						<CardContent className="divide-y">
+							{members.map((member: any) => (
+								<div
+									key={member._id}
+									className="grid grid-cols-[1fr_140px_auto] items-center gap-3 py-3 first:pt-0 last:pb-0"
+								>
+									<div className="min-w-0 truncate font-mono text-xs">
+										{member.userId}
+									</div>
+									<div className="flex items-center gap-2">
+										<Badge
+											variant={ROLE_VARIANT[member.role] ?? "outline"}
+											className="capitalize"
+										>
+											{member.role}
+										</Badge>
+										<Select
+											value={member.role}
+											onValueChange={(value) =>
+												updateRole({ memberId: member._id, role: value })
+											}
+										>
+											<SelectTrigger size="sm" className="w-full">
+												<SelectValue />
+											</SelectTrigger>
+											<SelectContent>
+												<SelectGroup>
+													<SelectItem value="viewer">Viewer</SelectItem>
+													<SelectItem value="editor">Editor</SelectItem>
+													<SelectItem value="owner">Owner</SelectItem>
+												</SelectGroup>
+											</SelectContent>
+										</Select>
+									</div>
+									<Button
+										size="sm"
+										variant="outline"
+										onClick={() => removeMember({ memberId: member._id })}
+									>
+										Remove
+									</Button>
+								</div>
+							))}
+						</CardContent>
+					</Card>
+				)}
 			</div>
 		</ProjectShell>
 	);

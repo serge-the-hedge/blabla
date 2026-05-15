@@ -1,5 +1,13 @@
-import { createFileRoute, useParams } from "@tanstack/react-router";
+import {
+	Card,
+	CardContent,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+} from "@blabla/ui/components/card";
+import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
+import { ArrowUpRight, KeyRound, Users } from "lucide-react";
 
 import {
 	PageHeader,
@@ -11,6 +19,21 @@ export const Route = createFileRoute("/projects/$projectId/settings")({
 	component: SettingsRoute,
 });
 
+const settingsLinks = [
+	{
+		to: "/projects/$projectId/settings/api-tokens" as const,
+		title: "API tokens",
+		description: "Project-scoped credentials for external agents.",
+		icon: KeyRound,
+	},
+	{
+		to: "/projects/$projectId/settings/members" as const,
+		title: "Members",
+		description: "Owners, editors, and viewers.",
+		icon: Users,
+	},
+];
+
 function SettingsRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/settings" });
 	const project = useQuery(apiAny.projects.get, { projectId });
@@ -18,18 +41,30 @@ function SettingsRoute() {
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader title="Settings" description="Project administration." />
 			<div className="grid gap-3 md:grid-cols-2">
-				<a
-					className="border p-4 hover:bg-muted/40"
-					href={`/projects/${projectId}/settings/api-tokens`}
-				>
-					API tokens
-				</a>
-				<a
-					className="border p-4 hover:bg-muted/40"
-					href={`/projects/${projectId}/settings/members`}
-				>
-					Members
-				</a>
+				{settingsLinks.map(({ to, title, description, icon: Icon }) => (
+					<Link
+						key={to}
+						to={to}
+						params={{ projectId }}
+						className="group outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					>
+						<Card size="sm" className="h-full transition-colors group-hover:bg-muted/40">
+							<CardHeader>
+								<div className="flex items-center justify-between gap-2">
+									<span
+										aria-hidden
+										className="inline-flex size-7 items-center justify-center rounded-md bg-muted text-foreground"
+									>
+										<Icon className="size-4" />
+									</span>
+									<ArrowUpRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+								</div>
+								<CardTitle className="mt-2">{title}</CardTitle>
+								<CardDescription>{description}</CardDescription>
+							</CardHeader>
+						</Card>
+					</Link>
+				))}
 			</div>
 		</ProjectShell>
 	);

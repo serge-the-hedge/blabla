@@ -11,38 +11,58 @@ import {
 } from "@blabla/ui/components/dropdown-menu";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
+import { LogOut } from "lucide-react";
 
 import { authClient } from "@/lib/auth-client";
+
+function initialsOf(name: string | undefined, email: string | undefined) {
+	if (name?.trim()) {
+		const parts = name.trim().split(/\s+/).slice(0, 2);
+		return parts.map((part) => part[0]?.toUpperCase()).join("");
+	}
+	return email?.slice(0, 2).toUpperCase() ?? "";
+}
 
 export default function UserMenu() {
 	const navigate = useNavigate();
 	const user = useQuery(api.auth.getCurrentUser);
 
+	const initials = initialsOf(user?.name, user?.email);
+
 	return (
 		<DropdownMenu>
-			<DropdownMenuTrigger render={<Button variant="outline" />}>
-				{user?.name}
+			<DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
+				<span
+					aria-hidden
+					className="inline-flex size-5 items-center justify-center rounded-full bg-brand text-[10px] text-brand-foreground"
+				>
+					{initials}
+				</span>
+				<span className="max-w-[10rem] truncate">{user?.name ?? "Account"}</span>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent className="bg-card">
+			<DropdownMenuContent align="end" className="min-w-56">
 				<DropdownMenuGroup>
-					<DropdownMenuLabel>My Account</DropdownMenuLabel>
+					<DropdownMenuLabel className="flex flex-col gap-0.5">
+						<span className="font-medium text-sm">{user?.name}</span>
+						<span className="font-normal text-muted-foreground text-xs">
+							{user?.email}
+						</span>
+					</DropdownMenuLabel>
 					<DropdownMenuSeparator />
-					<DropdownMenuItem>{user?.email}</DropdownMenuItem>
 					<DropdownMenuItem
 						variant="destructive"
 						onClick={() => {
 							authClient.signOut({
 								fetchOptions: {
 									onSuccess: () => {
-										navigate({
-											to: "/dashboard",
-										});
+										navigate({ to: "/dashboard" });
 									},
 								},
 							});
 						}}
 					>
-						Sign Out
+						<LogOut data-icon="inline-start" />
+						Sign out
 					</DropdownMenuItem>
 				</DropdownMenuGroup>
 			</DropdownMenuContent>

@@ -18,11 +18,12 @@ export const Route = createRootRouteWithContext<RouterAppContext>()({
 	head: () => ({
 		meta: [
 			{
-				title: "blabla",
+				title: "blabla — localization workspace",
 			},
 			{
 				name: "description",
-				content: "blabla is a web application",
+				content:
+					"Project-scoped strings, reviewable agent edits, JSON and ARB workflows.",
 			},
 		],
 		links: [
@@ -44,9 +45,11 @@ function RootComponent() {
 				disableTransitionOnChange
 				storageKey="vite-ui-theme"
 			>
-				<div className="grid h-svh grid-rows-[auto_1fr]">
+				<div className="grid h-svh grid-rows-[auto_1fr] bg-background">
 					<Header />
-					<Outlet />
+					<main className="min-h-0 overflow-hidden">
+						<Outlet />
+					</main>
 				</div>
 				<Toaster richColors />
 			</ThemeProvider>

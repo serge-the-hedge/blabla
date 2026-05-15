@@ -1,9 +1,26 @@
 import { Button } from "@blabla/ui/components/button";
+import { Card, CardContent } from "@blabla/ui/components/card";
+import {
+	Field,
+	FieldDescription,
+	FieldGroup,
+	FieldLabel,
+} from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
-import { Label } from "@blabla/ui/components/label";
+import {
+	Select,
+	SelectContent,
+	SelectGroup,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@blabla/ui/components/select";
+import { Textarea } from "@blabla/ui/components/textarea";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import { Copy, Download } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 
 import {
 	PageHeader,
@@ -15,6 +32,8 @@ export const Route = createFileRoute("/projects/$projectId/export")({
 	component: ExportRoute,
 });
 
+type SelectionType = "all" | "keys" | "tag" | "screen";
+
 function ExportRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/export" });
 	const project = useQuery(apiAny.projects.get, { projectId });
@@ -23,9 +42,7 @@ function ExportRoute() {
 	const exportArb = useMutation(apiAny.exports.startArbExport);
 	const [format, setFormat] = useState<"json" | "arb">("json");
 	const [localeCode, setLocaleCode] = useState("");
-	const [selectionType, setSelectionType] = useState<
-		"all" | "keys" | "tag" | "screen"
-	>("all");
+	const [selectionType, setSelectionType] = useState<SelectionType>("all");
 	const [selectionValue, setSelectionValue] = useState("");
 	const [content, setContent] = useState("");
 
@@ -50,6 +67,13 @@ function ExportRoute() {
 				? await exportJson({ projectId, localeCode, selection })
 				: await exportArb({ projectId, localeCode, selection });
 		setContent(result.content ?? "");
+		toast.success("Export ready");
+	}
+
+	async function copyContent() {
+		if (!content) return;
+		await navigator.clipboard.writeText(content);
+		toast.success("Copied to clipboard");
 	}
 
 	return (
@@ -58,64 +82,125 @@ function ExportRoute() {
 				title="Export"
 				description="Export all or selected strings to JSON and Flutter ARB."
 			/>
-			<form onSubmit={submit} className="flex max-w-3xl flex-col gap-3">
-				<div className="grid grid-cols-4 gap-3">
-					<div className="flex flex-col gap-1">
-						<Label>Format</Label>
-						<select
-							className="h-8 border bg-background px-2 text-xs"
-							value={format}
-							onChange={(event) =>
-								setFormat(event.target.value as "json" | "arb")
-							}
-						>
-							<option value="json">JSON</option>
-							<option value="arb">Flutter ARB</option>
-						</select>
-					</div>
-					<div className="flex flex-col gap-1">
-						<Label>Locale</Label>
-						<select
-							className="h-8 border bg-background px-2 text-xs"
-							value={localeCode}
-							onChange={(event) => setLocaleCode(event.target.value)}
-						>
-							<option value="">Choose locale</option>
-							{(locales ?? []).map((locale: any) => (
-								<option key={locale._id} value={locale.code}>
-									{locale.code}
-								</option>
-							))}
-						</select>
-					</div>
-					<div className="flex flex-col gap-1">
-						<Label>Selection</Label>
-						<select
-							className="h-8 border bg-background px-2 text-xs"
-							value={selectionType}
-							onChange={(event) => setSelectionType(event.target.value as any)}
-						>
-							<option value="all">All</option>
-							<option value="keys">Keys</option>
-							<option value="tag">Tag</option>
-							<option value="screen">Screen</option>
-						</select>
-					</div>
-					<div className="flex flex-col gap-1">
-						<Label>Value</Label>
-						<Input
-							value={selectionValue}
-							onChange={(event) => setSelectionValue(event.target.value)}
-						/>
-					</div>
-				</div>
-				<Button type="submit">Export</Button>
-				<textarea
-					className="min-h-96 rounded-sm border bg-background p-3 font-mono text-xs outline-none"
-					readOnly
-					value={content}
-				/>
-			</form>
+			<Card size="sm" className="max-w-3xl">
+				<CardContent>
+					<form onSubmit={submit}>
+						<FieldGroup>
+							<div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+								<Field>
+									<FieldLabel htmlFor="export-format">Format</FieldLabel>
+									<Select
+										value={format}
+										onValueChange={(value) =>
+											setFormat(value as "json" | "arb")
+										}
+									>
+										<SelectTrigger id="export-format" className="w-full">
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectGroup>
+												<SelectItem value="json">JSON</SelectItem>
+												<SelectItem value="arb">Flutter ARB</SelectItem>
+											</SelectGroup>
+										</SelectContent>
+									</Select>
+								</Field>
+								<Field>
+									<FieldLabel htmlFor="export-locale">Locale</FieldLabel>
+									<Select
+										value={localeCode}
+										onValueChange={(value) => setLocaleCode(value ?? "")}
+									>
+										<SelectTrigger id="export-locale" className="w-full">
+											<SelectValue placeholder="Choose locale" />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectGroup>
+												{(locales ?? []).map((locale: any) => (
+													<SelectItem key={locale._id} value={locale.code}>
+														{locale.code}
+													</SelectItem>
+												))}
+											</SelectGroup>
+										</SelectContent>
+									</Select>
+								</Field>
+								<Field>
+									<FieldLabel htmlFor="export-selection">Selection</FieldLabel>
+									<Select
+										value={selectionType}
+										onValueChange={(value) =>
+											setSelectionType(value as SelectionType)
+										}
+									>
+										<SelectTrigger id="export-selection" className="w-full">
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectGroup>
+												<SelectItem value="all">All strings</SelectItem>
+												<SelectItem value="keys">Specific keys</SelectItem>
+												<SelectItem value="tag">By tag</SelectItem>
+												<SelectItem value="screen">By screen</SelectItem>
+											</SelectGroup>
+										</SelectContent>
+									</Select>
+								</Field>
+								<Field>
+									<FieldLabel htmlFor="export-value">Value</FieldLabel>
+									<Input
+										id="export-value"
+										value={selectionValue}
+										onChange={(event) => setSelectionValue(event.target.value)}
+										disabled={selectionType === "all"}
+										placeholder={
+											selectionType === "keys"
+												? "key1, key2"
+												: selectionType === "tag"
+													? "tag-slug"
+													: selectionType === "screen"
+														? "screen-slug"
+														: ""
+										}
+									/>
+								</Field>
+							</div>
+							<Button type="submit" disabled={!localeCode}>
+								<Download data-icon="inline-start" />
+								Generate export
+							</Button>
+							<Field>
+								<div className="flex items-center justify-between">
+									<FieldLabel htmlFor="export-content">Output</FieldLabel>
+									{content ? (
+										<Button
+											size="xs"
+											type="button"
+											variant="ghost"
+											onClick={copyContent}
+										>
+											<Copy data-icon="inline-start" />
+											Copy
+										</Button>
+									) : null}
+								</div>
+								<Textarea
+									id="export-content"
+									className="min-h-80 font-mono"
+									readOnly
+									value={content}
+									placeholder="Generated output will appear here."
+								/>
+								<FieldDescription>
+									Result is generated synchronously. Long exports may take a
+									moment.
+								</FieldDescription>
+							</Field>
+						</FieldGroup>
+					</form>
+				</CardContent>
+			</Card>
 		</ProjectShell>
 	);
 }

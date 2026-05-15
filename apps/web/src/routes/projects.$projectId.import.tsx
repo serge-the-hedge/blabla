@@ -1,8 +1,24 @@
 import { Button } from "@blabla/ui/components/button";
+import { Card, CardContent } from "@blabla/ui/components/card";
+import {
+	Field,
+	FieldDescription,
+	FieldGroup,
+	FieldLabel,
+} from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
-import { Label } from "@blabla/ui/components/label";
+import {
+	Select,
+	SelectContent,
+	SelectGroup,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@blabla/ui/components/select";
+import { Textarea } from "@blabla/ui/components/textarea";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import { Upload } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -53,59 +69,91 @@ function ImportRoute() {
 				title="Import"
 				description="Bootstrap or update strings from JSON and Flutter ARB."
 			/>
-			<form onSubmit={submit} className="flex max-w-3xl flex-col gap-3">
-				<div className="grid grid-cols-4 gap-3">
-					<div className="flex flex-col gap-1">
-						<Label>Format</Label>
-						<select
-							className="h-8 border bg-background px-2 text-xs"
-							value={format}
-							onChange={(event) =>
-								setFormat(event.target.value as "json" | "arb")
-							}
-						>
-							<option value="json">JSON</option>
-							<option value="arb">Flutter ARB</option>
-						</select>
-					</div>
-					<div className="flex flex-col gap-1">
-						<Label>Locale</Label>
-						<select
-							className="h-8 border bg-background px-2 text-xs"
-							value={localeCode}
-							onChange={(event) => setLocaleCode(event.target.value)}
-						>
-							<option value="">Choose locale</option>
-							{(locales ?? []).map((locale: any) => (
-								<option key={locale._id} value={locale.code}>
-									{locale.code}
-								</option>
-							))}
-						</select>
-					</div>
-					<div className="flex flex-col gap-1">
-						<Label>Screen slug</Label>
-						<Input
-							value={screenSlug}
-							onChange={(event) => setScreenSlug(event.target.value)}
-						/>
-					</div>
-					<div className="flex flex-col gap-1">
-						<Label>Tags</Label>
-						<Input
-							value={tagSlugs}
-							onChange={(event) => setTagSlugs(event.target.value)}
-							placeholder="checkout, legal"
-						/>
-					</div>
-				</div>
-				<textarea
-					className="min-h-96 rounded-sm border bg-background p-3 font-mono text-xs outline-none focus:border-ring"
-					value={content}
-					onChange={(event) => setContent(event.target.value)}
-				/>
-				<Button type="submit">Import</Button>
-			</form>
+			<Card size="sm" className="max-w-3xl">
+				<CardContent>
+					<form onSubmit={submit}>
+						<FieldGroup>
+							<div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+								<Field>
+									<FieldLabel htmlFor="import-format">Format</FieldLabel>
+									<Select
+										value={format}
+										onValueChange={(value) =>
+											setFormat(value as "json" | "arb")
+										}
+									>
+										<SelectTrigger id="import-format" className="w-full">
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectGroup>
+												<SelectItem value="json">JSON</SelectItem>
+												<SelectItem value="arb">Flutter ARB</SelectItem>
+											</SelectGroup>
+										</SelectContent>
+									</Select>
+								</Field>
+								<Field>
+									<FieldLabel htmlFor="import-locale">Locale</FieldLabel>
+									<Select
+										value={localeCode}
+										onValueChange={(value) => setLocaleCode(value ?? "")}
+									>
+										<SelectTrigger id="import-locale" className="w-full">
+											<SelectValue placeholder="Choose locale" />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectGroup>
+												{(locales ?? []).map((locale: any) => (
+													<SelectItem key={locale._id} value={locale.code}>
+														{locale.code}
+													</SelectItem>
+												))}
+											</SelectGroup>
+										</SelectContent>
+									</Select>
+								</Field>
+								<Field>
+									<FieldLabel htmlFor="import-screen">Screen slug</FieldLabel>
+									<Input
+										id="import-screen"
+										value={screenSlug}
+										onChange={(event) => setScreenSlug(event.target.value)}
+										placeholder="(optional)"
+									/>
+								</Field>
+								<Field>
+									<FieldLabel htmlFor="import-tags">Tags</FieldLabel>
+									<Input
+										id="import-tags"
+										value={tagSlugs}
+										onChange={(event) => setTagSlugs(event.target.value)}
+										placeholder="checkout, legal"
+									/>
+								</Field>
+							</div>
+							<Field>
+								<FieldLabel htmlFor="import-content">Payload</FieldLabel>
+								<Textarea
+									id="import-content"
+									className="min-h-80 font-mono"
+									value={content}
+									onChange={(event) => setContent(event.target.value)}
+									spellCheck={false}
+								/>
+								<FieldDescription>
+									Paste a JSON object of <code>key → value</code> pairs, or a
+									Flutter ARB document.
+								</FieldDescription>
+							</Field>
+							<Button type="submit" disabled={!localeCode}>
+								<Upload data-icon="inline-start" />
+								Queue import
+							</Button>
+						</FieldGroup>
+					</form>
+				</CardContent>
+			</Card>
 		</ProjectShell>
 	);
 }
