@@ -1,5 +1,10 @@
 import type { Doc } from "./_generated/dataModel";
 
+type PatchItem = Pick<
+	Doc<"changeSetItems">,
+	"fieldPath" | "previousValue" | "nextValue"
+>;
+
 function escapePatchLine(line: string): string {
 	return line.length === 0 ? "" : line;
 }
@@ -36,7 +41,7 @@ export function buildItemVirtualPath(
 		: `locales/${safePath || "change"}.json`;
 }
 
-export function buildUnifiedPatch(items: Doc<"changeSetItems">[]): string {
+export function buildUnifiedPatch(items: PatchItem[]): string {
 	return items
 		.map((item) => {
 			const path = buildItemVirtualPath(item);

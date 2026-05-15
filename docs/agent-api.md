@@ -25,11 +25,14 @@ Authorization: Bearer <project_api_token>
    `tag`, `status`, and `q` to keep the working set small.
 3. Fetch exact context for the keys you plan to edit with `POST /context`.
    Include `includeHistory: true` for copy that may have review history.
-4. Propose translation edits with `POST /change-sets`. Always send the
+4. When reviewing source copy, separate real language issues from app-context
+   artifacts. Note any intentionally preserved casing, spacing, or punctuation
+   in your report so later agents do not propose the same cosmetic changes.
+5. Propose translation edits with `POST /change-sets`. Always send the
    `baseVersion` from search or context so reviewers can see conflicts if the
    live value changed.
-5. Check review state with `GET /change-sets/:id` when you need to report back.
-6. Export release files with `POST /export` only when the token has the
+6. Check review state with `GET /change-sets/:id` when you need to report back.
+7. Export release files with `POST /export` only when the token has the
    `export` scope.
 
 Do not invent locale codes, screens, tags, or keys. Read them from
@@ -40,6 +43,10 @@ human to create it in the web app before proposing translations.
 
 - Preserve ICU syntax, placeholder names, interpolation markers, whitespace that
   is semantically meaningful, and product terminology.
+- Preserve casing, extra spaces around symbols, compact symbols, and similar
+  punctuation when they may come from UI composition or app context. Do not
+  normalize these as style edits unless the human explicitly asks for UI-copy
+  formatting cleanup.
 - Treat the source locale as the source of truth. Only edit source strings when
   the human explicitly asks for source-copy changes.
 - Use `status=missing`, `status=stale`, or `status=needs_review` to prioritize
@@ -126,6 +133,28 @@ Creates an open review. Humans approve and apply changes in the web app.
 it whenever possible. If the live value version differs from `baseVersion`, the
 item is created as conflicted instead of pending.
 
+The request fails if the title is blank, no items are provided, or any key or
+locale is unknown or archived. Items whose `nextValue` already matches the live
+value are omitted as no-ops; if every item is a no-op, the request fails instead
+of creating an empty review.
+
+Response:
+
+```json
+{
+  "changeSetId": "k...",
+  "status": "open",
+  "itemsProposed": 1,
+  "itemsConflicted": 0,
+  "itemsRejected": 0,
+  "itemsAccepted": 1,
+  "reviewUrl": "/projects/j.../reviews/k..."
+}
+```
+
+`itemsAccepted` is kept for older integrations. Prefer `itemsProposed`,
+`itemsConflicted`, and `itemsRejected` for new clients.
+
 ### `POST /strings/tags`
 
 Creates an open review that adds one or more tags to a selected batch of
@@ -147,6 +176,9 @@ Body:
 ```
 
 Selections: `all`, `keys`, `tag`, `screen`.
+
+The request fails if the selection matches no active strings or if every
+selected string already has the requested tags.
 
 ### `GET /change-sets/:id`
 

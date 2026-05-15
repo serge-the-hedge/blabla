@@ -23,6 +23,7 @@ import { Route as ProjectsProjectIdReviewsRouteImport } from './routes/projects.
 import { Route as ProjectsProjectIdLocalesRouteImport } from './routes/projects.$projectId.locales'
 import { Route as ProjectsProjectIdImportRouteImport } from './routes/projects.$projectId.import'
 import { Route as ProjectsProjectIdExportRouteImport } from './routes/projects.$projectId.export'
+import { Route as ProjectsProjectIdReviewsIndexRouteImport } from './routes/projects.$projectId.reviews.index'
 import { Route as ProjectsProjectIdSettingsMembersRouteImport } from './routes/projects.$projectId.settings.members'
 import { Route as ProjectsProjectIdSettingsApiTokensRouteImport } from './routes/projects.$projectId.settings.api-tokens'
 import { Route as ProjectsProjectIdReviewsChangeSetIdRouteImport } from './routes/projects.$projectId.reviews.$changeSetId'
@@ -102,6 +103,12 @@ const ProjectsProjectIdExportRoute = ProjectsProjectIdExportRouteImport.update({
   path: '/export',
   getParentRoute: () => ProjectsProjectIdRoute,
 } as any)
+const ProjectsProjectIdReviewsIndexRoute =
+  ProjectsProjectIdReviewsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => ProjectsProjectIdReviewsRoute,
+  } as any)
 const ProjectsProjectIdSettingsMembersRoute =
   ProjectsProjectIdSettingsMembersRouteImport.update({
     id: '/members',
@@ -139,6 +146,7 @@ export interface FileRoutesByFullPath {
   '/projects/$projectId/reviews/$changeSetId': typeof ProjectsProjectIdReviewsChangeSetIdRoute
   '/projects/$projectId/settings/api-tokens': typeof ProjectsProjectIdSettingsApiTokensRoute
   '/projects/$projectId/settings/members': typeof ProjectsProjectIdSettingsMembersRoute
+  '/projects/$projectId/reviews/': typeof ProjectsProjectIdReviewsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -150,7 +158,6 @@ export interface FileRoutesByTo {
   '/projects/$projectId/export': typeof ProjectsProjectIdExportRoute
   '/projects/$projectId/import': typeof ProjectsProjectIdImportRoute
   '/projects/$projectId/locales': typeof ProjectsProjectIdLocalesRoute
-  '/projects/$projectId/reviews': typeof ProjectsProjectIdReviewsRouteWithChildren
   '/projects/$projectId/screens': typeof ProjectsProjectIdScreensRoute
   '/projects/$projectId/settings': typeof ProjectsProjectIdSettingsRouteWithChildren
   '/projects/$projectId/strings': typeof ProjectsProjectIdStringsRoute
@@ -158,6 +165,7 @@ export interface FileRoutesByTo {
   '/projects/$projectId/reviews/$changeSetId': typeof ProjectsProjectIdReviewsChangeSetIdRoute
   '/projects/$projectId/settings/api-tokens': typeof ProjectsProjectIdSettingsApiTokensRoute
   '/projects/$projectId/settings/members': typeof ProjectsProjectIdSettingsMembersRoute
+  '/projects/$projectId/reviews': typeof ProjectsProjectIdReviewsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -178,6 +186,7 @@ export interface FileRoutesById {
   '/projects/$projectId/reviews/$changeSetId': typeof ProjectsProjectIdReviewsChangeSetIdRoute
   '/projects/$projectId/settings/api-tokens': typeof ProjectsProjectIdSettingsApiTokensRoute
   '/projects/$projectId/settings/members': typeof ProjectsProjectIdSettingsMembersRoute
+  '/projects/$projectId/reviews/': typeof ProjectsProjectIdReviewsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -199,6 +208,7 @@ export interface FileRouteTypes {
     | '/projects/$projectId/reviews/$changeSetId'
     | '/projects/$projectId/settings/api-tokens'
     | '/projects/$projectId/settings/members'
+    | '/projects/$projectId/reviews/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -210,7 +220,6 @@ export interface FileRouteTypes {
     | '/projects/$projectId/export'
     | '/projects/$projectId/import'
     | '/projects/$projectId/locales'
-    | '/projects/$projectId/reviews'
     | '/projects/$projectId/screens'
     | '/projects/$projectId/settings'
     | '/projects/$projectId/strings'
@@ -218,6 +227,7 @@ export interface FileRouteTypes {
     | '/projects/$projectId/reviews/$changeSetId'
     | '/projects/$projectId/settings/api-tokens'
     | '/projects/$projectId/settings/members'
+    | '/projects/$projectId/reviews'
   id:
     | '__root__'
     | '/'
@@ -237,6 +247,7 @@ export interface FileRouteTypes {
     | '/projects/$projectId/reviews/$changeSetId'
     | '/projects/$projectId/settings/api-tokens'
     | '/projects/$projectId/settings/members'
+    | '/projects/$projectId/reviews/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -346,6 +357,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectIdExportRouteImport
       parentRoute: typeof ProjectsProjectIdRoute
     }
+    '/projects/$projectId/reviews/': {
+      id: '/projects/$projectId/reviews/'
+      path: '/'
+      fullPath: '/projects/$projectId/reviews/'
+      preLoaderRoute: typeof ProjectsProjectIdReviewsIndexRouteImport
+      parentRoute: typeof ProjectsProjectIdReviewsRoute
+    }
     '/projects/$projectId/settings/members': {
       id: '/projects/$projectId/settings/members'
       path: '/members'
@@ -372,12 +390,14 @@ declare module '@tanstack/react-router' {
 
 interface ProjectsProjectIdReviewsRouteChildren {
   ProjectsProjectIdReviewsChangeSetIdRoute: typeof ProjectsProjectIdReviewsChangeSetIdRoute
+  ProjectsProjectIdReviewsIndexRoute: typeof ProjectsProjectIdReviewsIndexRoute
 }
 
 const ProjectsProjectIdReviewsRouteChildren: ProjectsProjectIdReviewsRouteChildren =
   {
     ProjectsProjectIdReviewsChangeSetIdRoute:
       ProjectsProjectIdReviewsChangeSetIdRoute,
+    ProjectsProjectIdReviewsIndexRoute: ProjectsProjectIdReviewsIndexRoute,
   }
 
 const ProjectsProjectIdReviewsRouteWithChildren =

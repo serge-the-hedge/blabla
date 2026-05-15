@@ -1,10 +1,21 @@
 import { ConvexError, v } from "convex/values";
 
+import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { hashToken } from "./apiTokens";
 import { summarizeItems } from "./diffs";
 import { buildExportContent } from "./exports";
 import { buildReviewUrl, slugify } from "./lib";
+
+type ResolvedTranslationProposal = {
+	keyId: Id<"translationKeys">;
+	localeId: Id<"locales">;
+	fieldPath: string;
+	nextValue: string;
+	baseVersion?: number;
+	liveValue: Doc<"translationValues"> | null;
+	status: "pending" | "conflicted";
+};
 
 const scopeValidator = v.union(
 	v.literal("read"),
@@ -278,7 +289,22 @@ export const createChangeSetFromKeys = internalMutation({
 	},
 	handler: async (ctx, args) => {
 		const token = await authenticate(ctx, args.token, "propose");
-		const resolvedItems = [];
+		const title = args.title.trim();
+		if (!title) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Provide a change set title.",
+			});
+		}
+		if (args.items.length === 0) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Provide at least one proposed translation change.",
+			});
+		}
+		const invalidItems = [];
+		const resolvedItems: ResolvedTranslationProposal[] = [];
+		let rejectedNoops = 0;
 		for (const item of args.items) {
 			const key = await ctx.db
 				.query("translationKeys")
@@ -292,18 +318,65 @@ export const createChangeSetFromKeys = internalMutation({
 					q.eq("projectId", token.projectId).eq("code", item.locale),
 				)
 				.unique();
-			if (!key || !locale) continue;
+			if (
+				!key ||
+				key.archivedAt !== undefined ||
+				!locale ||
+				locale.archivedAt !== undefined
+			) {
+				invalidItems.push(`${item.locale}:${item.key}`);
+				continue;
+			}
+			const liveValue = await ctx.db
+				.query("translationValues")
+				.withIndex("by_project_key_locale", (q: any) =>
+					q
+						.eq("projectId", token.projectId)
+						.eq("keyId", key._id)
+						.eq("localeId", locale._id),
+				)
+				.unique();
+			const status: "pending" | "conflicted" =
+				item.baseVersion !== undefined &&
+				liveValue !== null &&
+				liveValue.version !== item.baseVersion
+					? "conflicted"
+					: "pending";
+			if (status !== "conflicted" && liveValue?.value === item.nextValue) {
+				rejectedNoops += 1;
+				continue;
+			}
 			resolvedItems.push({
 				keyId: key._id,
 				localeId: locale._id,
 				fieldPath: `locales/${locale.code}/${key.key}.json`,
 				nextValue: item.nextValue,
 				baseVersion: item.baseVersion,
+				liveValue,
+				status,
+			});
+		}
+		if (invalidItems.length > 0) {
+			const sample = invalidItems.slice(0, 5).join(", ");
+			const more =
+				invalidItems.length > 5 ? ` and ${invalidItems.length - 5} more` : "";
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: `Unknown or archived key/locale pairs: ${sample}${more}.`,
+			});
+		}
+		if (resolvedItems.length === 0) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					rejectedNoops > 0
+						? "No proposed translation changes differ from live values."
+						: "No valid translation changes were provided.",
 			});
 		}
 		const changeSetId = await ctx.db.insert("changeSets", {
 			projectId: token.projectId,
-			title: args.title,
+			title,
 			description: args.description,
 			author: { kind: "agent", id: token._id },
 			authorKind: "agent",
@@ -323,22 +396,7 @@ export const createChangeSetFromKeys = internalMutation({
 		const createdItems = [];
 		let conflicts = 0;
 		for (const item of resolvedItems) {
-			const liveValue = await ctx.db
-				.query("translationValues")
-				.withIndex("by_project_key_locale", (q: any) =>
-					q
-						.eq("projectId", token.projectId)
-						.eq("keyId", item.keyId)
-						.eq("localeId", item.localeId),
-				)
-				.unique();
-			const status: "pending" | "conflicted" =
-				item.baseVersion !== undefined &&
-				liveValue !== null &&
-				liveValue.version !== item.baseVersion
-					? "conflicted"
-					: "pending";
-			if (status === "conflicted") conflicts += 1;
+			if (item.status === "conflicted") conflicts += 1;
 			const created = {
 				projectId: token.projectId,
 				changeSetId,
@@ -346,10 +404,10 @@ export const createChangeSetFromKeys = internalMutation({
 				keyId: item.keyId,
 				localeId: item.localeId,
 				fieldPath: item.fieldPath,
-				previousValue: liveValue?.value ?? null,
+				previousValue: item.liveValue?.value ?? null,
 				nextValue: item.nextValue,
 				baseVersion: item.baseVersion,
-				status,
+				status: item.status,
 				createdAt: Date.now(),
 			};
 			await ctx.db.insert("changeSetItems", created);
@@ -359,7 +417,13 @@ export const createChangeSetFromKeys = internalMutation({
 			summary: summarizeItems(createdItems),
 			updatedAt: Date.now(),
 		});
-		return { changeSetId, conflicts };
+		return {
+			projectId: token.projectId,
+			changeSetId,
+			proposed: createdItems.length,
+			conflicts,
+			rejected: rejectedNoops,
+		};
 	},
 });
 
@@ -441,9 +505,42 @@ export const proposeTagBatch = internalMutation({
 			token.projectId,
 			args.selection,
 		);
+		if (keys.length === 0) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Selection did not match any active strings.",
+			});
+		}
+		const proposedItems = [];
+		let rejectedNoops = 0;
+		for (const key of keys) {
+			const currentTags = await Promise.all(
+				key.tagIds.map((tagId: any) => ctx.db.get(tagId)),
+			);
+			const currentSlugs = currentTags
+				.filter((tag: any) => tag && tag.archivedAt === undefined)
+				.map((tag: any) => tag.slug);
+			const missingTagSlugs = tagSlugs.filter(
+				(tagSlug) => !currentSlugs.includes(tagSlug),
+			);
+			if (missingTagSlugs.length === 0) {
+				rejectedNoops += 1;
+				continue;
+			}
+			proposedItems.push({
+				key,
+				currentSlugs,
+			});
+		}
+		if (proposedItems.length === 0) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Selected strings already have the requested tags.",
+			});
+		}
 		const changeSetId = await ctx.db.insert("changeSets", {
 			projectId: token.projectId,
-			title: args.title ?? `Tag ${keys.length} strings`,
+			title: args.title ?? `Tag ${proposedItems.length} strings`,
 			description: args.description,
 			author: { kind: "agent", id: token._id },
 			authorKind: "agent",
@@ -460,10 +557,8 @@ export const proposeTagBatch = internalMutation({
 				deletions: 0,
 			},
 		});
-		for (const key of keys) {
-			const currentTags = await Promise.all(
-				key.tagIds.map((tagId: any) => ctx.db.get(tagId)),
-			);
+		for (const item of proposedItems) {
+			const key = item.key;
 			await ctx.db.insert("changeSetItems", {
 				projectId: token.projectId,
 				changeSetId,
@@ -471,9 +566,7 @@ export const proposeTagBatch = internalMutation({
 				keyId: key._id,
 				fieldPath: `keys/${key.key}.tags.json`,
 				previousValue: JSON.stringify({
-					tagSlugs: currentTags
-						.filter((tag: any) => tag && tag.archivedAt === undefined)
-						.map((tag: any) => tag.slug),
+					tagSlugs: item.currentSlugs,
 				}),
 				nextValue: JSON.stringify({ tagSlugs }),
 				status: "pending",
@@ -488,7 +581,12 @@ export const proposeTagBatch = internalMutation({
 			summary: summarizeItems(items),
 			updatedAt: Date.now(),
 		});
-		return { changeSetId, proposed: keys.length };
+		return {
+			projectId: token.projectId,
+			changeSetId,
+			proposed: proposedItems.length,
+			rejected: rejectedNoops,
+		};
 	},
 });
 

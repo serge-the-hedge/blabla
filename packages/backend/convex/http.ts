@@ -173,12 +173,11 @@ http.route({
 			return json({
 				changeSetId: result.changeSetId,
 				status: "open",
-				itemsAccepted: Math.max(
-					0,
-					(body.items ?? []).length - result.conflicts,
-				),
+				itemsProposed: result.proposed,
 				itemsConflicted: result.conflicts,
-				reviewUrl: `/projects/current/reviews/${result.changeSetId}`,
+				itemsRejected: result.rejected,
+				itemsAccepted: result.proposed - result.conflicts,
+				reviewUrl: `/projects/${result.projectId}/reviews/${result.changeSetId}`,
 			});
 		} catch (error) {
 			return routeError(error);
@@ -209,9 +208,11 @@ http.route({
 			return json({
 				changeSetId: result.changeSetId,
 				status: "open",
-				itemsAccepted: result.proposed,
+				itemsProposed: result.proposed,
 				itemsConflicted: 0,
-				reviewUrl: `/projects/current/reviews/${result.changeSetId}`,
+				itemsRejected: result.rejected,
+				itemsAccepted: result.proposed,
+				reviewUrl: `/projects/${result.projectId}/reviews/${result.changeSetId}`,
 			});
 		} catch (error) {
 			return routeError(error);

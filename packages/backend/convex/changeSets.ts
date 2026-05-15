@@ -16,12 +16,34 @@ const itemKind = v.union(
 	v.literal("key_create"),
 	v.literal("key_archive"),
 );
-const itemStatus = v.union(
-	v.literal("pending"),
-	v.literal("accepted"),
-	v.literal("rejected"),
-	v.literal("conflicted"),
-);
+const reviewableChangeSetStatuses = new Set(["draft", "open"]);
+const terminalChangeSetStatuses = new Set(["rejected", "applied"]);
+
+function isApplicableItem(item: { status: string }) {
+	return item.status === "pending" || item.status === "accepted";
+}
+
+function isSupportedApplyKind(item: { kind: string }) {
+	return item.kind === "translation_value" || item.kind === "key_metadata";
+}
+
+function assertCanReview(changeSet: { status: string }) {
+	if (!reviewableChangeSetStatuses.has(changeSet.status)) {
+		throw new ConvexError({
+			code: "BAD_STATE",
+			message: "Change set is not open for review.",
+		});
+	}
+}
+
+function assertNotTerminal(changeSet: { status: string }) {
+	if (terminalChangeSetStatuses.has(changeSet.status)) {
+		throw new ConvexError({
+			code: "BAD_STATE",
+			message: "Change set is already closed.",
+		});
+	}
+}
 
 async function getLiveValue(
 	ctx: any,
@@ -150,6 +172,7 @@ export const get = query({
 			...changeSet,
 			items,
 			patch: buildUnifiedPatch(items),
+			applicablePatch: buildUnifiedPatch(items.filter(isApplicableItem)),
 			reviewUrl: buildReviewUrl(changeSet.projectId, args.changeSetId),
 		};
 	},
@@ -253,6 +276,7 @@ export const open = mutation({
 				message: "Change set not found.",
 			});
 		await requireEditor(ctx, changeSet.projectId);
+		assertCanReview(changeSet);
 		await ctx.db.patch(args.changeSetId, {
 			status: "open",
 			openedAt: now(),
@@ -272,8 +296,16 @@ export const acceptItem = mutation({
 				message: "Change item not found.",
 			});
 		await requireEditor(ctx, item.projectId);
-		if (item.status !== "conflicted")
+		const changeSet = await ctx.db.get(item.changeSetId);
+		if (!changeSet)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Change set not found.",
+			});
+		assertCanReview(changeSet);
+		if (item.status !== "conflicted") {
 			await ctx.db.patch(args.itemId, { status: "accepted" });
+		}
 		return null;
 	},
 });
@@ -288,6 +320,13 @@ export const rejectItem = mutation({
 				message: "Change item not found.",
 			});
 		await requireEditor(ctx, item.projectId);
+		const changeSet = await ctx.db.get(item.changeSetId);
+		if (!changeSet)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Change set not found.",
+			});
+		assertCanReview(changeSet);
 		await ctx.db.patch(args.itemId, { status: "rejected" });
 		return null;
 	},
@@ -304,6 +343,7 @@ export const approve = mutation({
 				message: "Change set not found.",
 			});
 		await requireEditor(ctx, changeSet.projectId);
+		assertCanReview(changeSet);
 		await ctx.db.patch(args.changeSetId, {
 			status: "approved",
 			reviewedAt: now(),
@@ -325,6 +365,7 @@ export const reject = mutation({
 				message: "Change set not found.",
 			});
 		await requireEditor(ctx, changeSet.projectId);
+		assertNotTerminal(changeSet);
 		await ctx.db.patch(args.changeSetId, {
 			status: "rejected",
 			reviewedAt: now(),
@@ -345,23 +386,59 @@ export const apply = mutation({
 				message: "Change set not found.",
 			});
 		await requireEditor(ctx, changeSet.projectId);
+		assertNotTerminal(changeSet);
 		const items = await ctx.db
 			.query("changeSetItems")
 			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
 			.collect();
-		let conflicted = 0;
-		for (const item of items) {
-			if (item.status === "rejected" || item.status === "conflicted") continue;
+
+		const existingConflicted = items.filter(
+			(item) => item.status === "conflicted",
+		).length;
+		if (existingConflicted > 0) {
+			return { conflicted: existingConflicted };
+		}
+
+		const applicableItems = items.filter(isApplicableItem);
+		if (applicableItems.length === 0) {
+			return { conflicted: 0 };
+		}
+		const unsupportedItem = applicableItems.find(
+			(item) => !isSupportedApplyKind(item),
+		);
+		if (unsupportedItem) {
+			throw new ConvexError({
+				code: "BAD_STATE",
+				message: `Cannot apply ${unsupportedItem.kind} review items yet.`,
+			});
+		}
+
+		const newlyConflicted = [];
+		for (const item of applicableItems) {
 			const liveValue = await getLiveValue(ctx, item.keyId, item.localeId);
 			if (
 				item.baseVersion !== undefined &&
 				liveValue !== null &&
 				liveValue.version !== item.baseVersion
 			) {
-				conflicted += 1;
-				await ctx.db.patch(item._id, { status: "conflicted" });
-				continue;
+				newlyConflicted.push(item);
 			}
+		}
+
+		if (newlyConflicted.length > 0) {
+			await Promise.all(
+				newlyConflicted.map((item) =>
+					ctx.db.patch(item._id, { status: "conflicted" }),
+				),
+			);
+			await ctx.db.patch(args.changeSetId, {
+				status: "open",
+				updatedAt: now(),
+			});
+			return { conflicted: newlyConflicted.length };
+		}
+
+		for (const item of applicableItems) {
 			if (
 				item.kind === "translation_value" &&
 				item.keyId !== undefined &&
@@ -384,11 +461,130 @@ export const apply = mutation({
 			}
 		}
 		await ctx.db.patch(args.changeSetId, {
-			status: conflicted > 0 ? "open" : "applied",
-			appliedAt: conflicted > 0 ? undefined : now(),
+			status: "applied",
+			appliedAt: now(),
 			updatedAt: now(),
 		});
-		return { conflicted };
+		return { conflicted: 0 };
+	},
+});
+
+export const reviewAndApply = mutation({
+	args: { changeSetId: v.id("changeSets") },
+	handler: async (ctx, args) => {
+		const user = await requireUser(ctx);
+		const changeSet = await ctx.db.get(args.changeSetId);
+		if (!changeSet)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Change set not found.",
+			});
+		await requireEditor(ctx, changeSet.projectId);
+		assertCanReview(changeSet);
+
+		const items = await ctx.db
+			.query("changeSetItems")
+			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
+			.collect();
+		const rejected = items.filter((item) => item.status === "rejected").length;
+		const existingConflicted = items.filter(
+			(item) => item.status === "conflicted",
+		).length;
+		if (existingConflicted > 0) {
+			return {
+				status: "blocked" as const,
+				applied: 0,
+				conflicted: existingConflicted,
+				rejected,
+			};
+		}
+
+		const applicableItems = items.filter(isApplicableItem);
+		if (applicableItems.length === 0) {
+			return {
+				status: "blocked" as const,
+				applied: 0,
+				conflicted: 0,
+				rejected,
+			};
+		}
+
+		const unsupportedItem = applicableItems.find(
+			(item) => !isSupportedApplyKind(item),
+		);
+		if (unsupportedItem) {
+			throw new ConvexError({
+				code: "BAD_STATE",
+				message: `Cannot apply ${unsupportedItem.kind} review items yet.`,
+			});
+		}
+
+		const newlyConflicted = [];
+		for (const item of applicableItems) {
+			const liveValue = await getLiveValue(ctx, item.keyId, item.localeId);
+			if (
+				item.baseVersion !== undefined &&
+				liveValue !== null &&
+				liveValue.version !== item.baseVersion
+			) {
+				newlyConflicted.push(item);
+			}
+		}
+
+		if (newlyConflicted.length > 0) {
+			await Promise.all(
+				newlyConflicted.map((item) =>
+					ctx.db.patch(item._id, { status: "conflicted" }),
+				),
+			);
+			await ctx.db.patch(args.changeSetId, {
+				status: "open",
+				updatedAt: now(),
+			});
+			return {
+				status: "blocked" as const,
+				applied: 0,
+				conflicted: newlyConflicted.length,
+				rejected,
+			};
+		}
+
+		for (const item of applicableItems) {
+			if (
+				item.kind === "translation_value" &&
+				item.keyId !== undefined &&
+				item.localeId !== undefined &&
+				item.nextValue !== null
+			) {
+				await upsertTranslationValue(ctx, {
+					projectId: changeSet.projectId,
+					keyId: item.keyId,
+					localeId: item.localeId,
+					value: item.nextValue,
+					actor: changeSet.author,
+					changeSetId: args.changeSetId,
+				});
+			}
+			if (item.kind === "key_metadata") {
+				await applyTagMetadataChange(ctx, item);
+			}
+			await ctx.db.patch(item._id, { status: "accepted" });
+		}
+
+		const timestamp = now();
+		await ctx.db.patch(args.changeSetId, {
+			status: "applied",
+			reviewedAt: timestamp,
+			reviewedByUserId: user.id,
+			appliedAt: timestamp,
+			updatedAt: timestamp,
+		});
+		return {
+			status: "applied" as const,
+			applied: applicableItems.length,
+			conflicted: 0,
+			rejected,
+		};
 	},
 });
 

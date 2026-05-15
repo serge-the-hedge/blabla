@@ -72,6 +72,8 @@ creating or switching a dev deployment, set the auth env on that deployment:
 ```bash
 cd packages/backend
 bunx convex env set SITE_URL http://localhost:3001
+BUILT_CONVEX_SITE_URL="$(grep '^CONVEX_SITE_URL=' .env.local | cut -d= -f2-)"
+bunx convex env set BETTER_AUTH_URL "$BUILT_CONVEX_SITE_URL"
 bunx convex env set BETTER_AUTH_SECRET "$(openssl rand -base64 32)"
 ```
 
