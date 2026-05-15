@@ -1,10 +1,16 @@
 import { ConvexError, v } from "convex/values";
 
-import type { Id } from "./_generated/dataModel";
-import { internalMutation, mutation, query } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import {
+	internalMutation,
+	type MutationCtx,
+	mutation,
+	type QueryCtx,
+	query,
+} from "./_generated/server";
 import { requireUser } from "./auth";
 import { buildUnifiedPatch, summarizeItems } from "./diffs";
-import { buildReviewUrl, makeSearchText, now, slugify } from "./lib";
+import { buildReviewUrl, makeSearchText, now, slugify, toArbKey } from "./lib";
 import { requireEditor, requireViewer } from "./permissions";
 import { upsertTranslationValue } from "./values";
 
@@ -18,6 +24,14 @@ const itemKind = v.union(
 );
 const reviewableChangeSetStatuses = new Set(["draft", "open"]);
 const terminalChangeSetStatuses = new Set(["rejected", "applied"]);
+const changeSetStatus = v.union(
+	v.literal("draft"),
+	v.literal("open"),
+	v.literal("approved"),
+	v.literal("rejected"),
+	v.literal("applied"),
+);
+type ReviewCtx = QueryCtx | MutationCtx;
 
 function isApplicableItem(item: { status: string }) {
 	return item.status === "pending" || item.status === "accepted";
@@ -46,7 +60,7 @@ function assertNotTerminal(changeSet: { status: string }) {
 }
 
 async function getLiveValue(
-	ctx: any,
+	ctx: ReviewCtx,
 	keyId?: Id<"translationKeys">,
 	localeId?: Id<"locales">,
 ) {
@@ -55,7 +69,7 @@ async function getLiveValue(
 	if (!key) return null;
 	return await ctx.db
 		.query("translationValues")
-		.withIndex("by_project_key_locale", (q: any) =>
+		.withIndex("by_project_key_locale", (q) =>
 			q
 				.eq("projectId", key.projectId)
 				.eq("keyId", keyId)
@@ -64,10 +78,57 @@ async function getLiveValue(
 		.unique();
 }
 
-async function refreshSummary(ctx: any, changeSetId: Id<"changeSets">) {
+async function getSourceValue(ctx: ReviewCtx, key: Doc<"translationKeys">) {
+	const project = await ctx.db.get(key.projectId);
+	const sourceLocaleId = project?.sourceLocaleId;
+	if (!sourceLocaleId) return null;
+	return await ctx.db
+		.query("translationValues")
+		.withIndex("by_project_key_locale", (q) =>
+			q
+				.eq("projectId", key.projectId)
+				.eq("keyId", key._id)
+				.eq("localeId", sourceLocaleId),
+		)
+		.unique();
+}
+
+async function hydrateReviewItem(ctx: ReviewCtx, item: Doc<"changeSetItems">) {
+	const key = item.keyId ? await ctx.db.get(item.keyId) : null;
+	const locale = item.localeId ? await ctx.db.get(item.localeId) : null;
+	const sourceValue = key ? await getSourceValue(ctx, key) : null;
+	const project = key ? await ctx.db.get(key.projectId) : null;
+	const sourceLocale = project?.sourceLocaleId
+		? await ctx.db.get(project.sourceLocaleId)
+		: null;
+	return {
+		...item,
+		key: key
+			? {
+					id: key._id,
+					key: key.key,
+					description: key.description,
+					placeholders: key.placeholders,
+				}
+			: null,
+		locale: locale
+			? { id: locale._id, code: locale.code, label: locale.label }
+			: null,
+		sourceLocale: sourceLocale
+			? {
+					id: sourceLocale._id,
+					code: sourceLocale.code,
+					label: sourceLocale.label,
+				}
+			: null,
+		sourceValue: sourceValue?.value ?? null,
+	};
+}
+
+async function refreshSummary(ctx: MutationCtx, changeSetId: Id<"changeSets">) {
 	const items = await ctx.db
 		.query("changeSetItems")
-		.withIndex("by_changeSet", (q: any) => q.eq("changeSetId", changeSetId))
+		.withIndex("by_changeSet", (q) => q.eq("changeSetId", changeSetId))
 		.collect();
 	await ctx.db.patch(changeSetId, {
 		summary: summarizeItems(items),
@@ -76,7 +137,7 @@ async function refreshSummary(ctx: any, changeSetId: Id<"changeSets">) {
 }
 
 async function findOrCreateTags(
-	ctx: any,
+	ctx: MutationCtx,
 	projectId: Id<"projects">,
 	tagSlugs: string[],
 ) {
@@ -86,7 +147,7 @@ async function findOrCreateTags(
 		if (!slug) continue;
 		const existing = await ctx.db
 			.query("tags")
-			.withIndex("by_project_slug", (q: any) =>
+			.withIndex("by_project_slug", (q) =>
 				q.eq("projectId", projectId).eq("slug", slug),
 			)
 			.unique();
@@ -109,7 +170,10 @@ async function findOrCreateTags(
 	return Array.from(new Set(tagIds));
 }
 
-async function applyTagMetadataChange(ctx: any, item: any) {
+async function applyTagMetadataChange(
+	ctx: MutationCtx,
+	item: Doc<"changeSetItems">,
+) {
 	if (!item.keyId || item.nextValue === null) return;
 	const key = await ctx.db.get(item.keyId);
 	if (!key || key.archivedAt !== undefined) return;
@@ -134,23 +198,24 @@ async function applyTagMetadataChange(ctx: any, item: any) {
 }
 
 export const list = query({
-	args: { projectId: v.id("projects"), status: v.optional(v.string()) },
+	args: { projectId: v.id("projects"), status: v.optional(changeSetStatus) },
 	handler: async (ctx, args) => {
 		await requireViewer(ctx, args.projectId);
-		const sets = args.status
-			? await ctx.db
-					.query("changeSets")
-					.withIndex("by_project_status", (q) =>
-						q.eq("projectId", args.projectId).eq("status", args.status as any),
-					)
-					.order("desc")
-					.collect()
-			: await ctx.db
-					.query("changeSets")
-					.withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-					.order("desc")
-					.collect();
-		return sets;
+		if (args.status) {
+			const status = args.status;
+			return await ctx.db
+				.query("changeSets")
+				.withIndex("by_project_status", (q) =>
+					q.eq("projectId", args.projectId).eq("status", status),
+				)
+				.order("desc")
+				.collect();
+		}
+		return await ctx.db
+			.query("changeSets")
+			.withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+			.order("desc")
+			.collect();
 	},
 });
 
@@ -168,9 +233,12 @@ export const get = query({
 			.query("changeSetItems")
 			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
 			.collect();
+		const hydratedItems = await Promise.all(
+			items.map((item) => hydrateReviewItem(ctx, item)),
+		);
 		return {
 			...changeSet,
-			items,
+			items: hydratedItems,
 			patch: buildUnifiedPatch(items),
 			applicablePatch: buildUnifiedPatch(items.filter(isApplicableItem)),
 			reviewUrl: buildReviewUrl(changeSet.projectId, args.changeSetId),
@@ -329,6 +397,114 @@ export const rejectItem = mutation({
 		assertCanReview(changeSet);
 		await ctx.db.patch(args.itemId, { status: "rejected" });
 		return null;
+	},
+});
+
+export const acceptUnmarkedItems = mutation({
+	args: { changeSetId: v.id("changeSets") },
+	handler: async (ctx, args) => {
+		const changeSet = await ctx.db.get(args.changeSetId);
+		if (!changeSet)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Change set not found.",
+			});
+		await requireEditor(ctx, changeSet.projectId);
+		assertCanReview(changeSet);
+		const items = await ctx.db
+			.query("changeSetItems")
+			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
+			.collect();
+		const pendingItems = items.filter((item) => item.status === "pending");
+		await Promise.all(
+			pendingItems.map((item) =>
+				ctx.db.patch(item._id, { status: "accepted" }),
+			),
+		);
+		return { updated: pendingItems.length };
+	},
+});
+
+export const rejectUnmarkedItems = mutation({
+	args: { changeSetId: v.id("changeSets") },
+	handler: async (ctx, args) => {
+		const changeSet = await ctx.db.get(args.changeSetId);
+		if (!changeSet)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Change set not found.",
+			});
+		await requireEditor(ctx, changeSet.projectId);
+		assertCanReview(changeSet);
+		const items = await ctx.db
+			.query("changeSetItems")
+			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
+			.collect();
+		const pendingItems = items.filter((item) => item.status === "pending");
+		await Promise.all(
+			pendingItems.map((item) =>
+				ctx.db.patch(item._id, { status: "rejected" }),
+			),
+		);
+		return { updated: pendingItems.length };
+	},
+});
+
+export const exportAcceptedByLocale = mutation({
+	args: {
+		changeSetId: v.id("changeSets"),
+		format: v.union(v.literal("json"), v.literal("arb")),
+	},
+	handler: async (ctx, args) => {
+		const changeSet = await ctx.db.get(args.changeSetId);
+		if (!changeSet)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Change set not found.",
+			});
+		await requireViewer(ctx, changeSet.projectId);
+		const project = await ctx.db.get(changeSet.projectId);
+		const items = await ctx.db
+			.query("changeSetItems")
+			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
+			.collect();
+		const acceptedItems = items.filter(
+			(item) =>
+				item.status === "accepted" &&
+				item.kind === "translation_value" &&
+				item.keyId !== undefined &&
+				item.localeId !== undefined &&
+				item.nextValue !== null,
+		);
+		const grouped: Record<string, Record<string, unknown>> = {};
+		for (const item of acceptedItems) {
+			const key = await ctx.db.get(item.keyId as Id<"translationKeys">);
+			const locale = await ctx.db.get(item.localeId as Id<"locales">);
+			if (!key || !locale) continue;
+			grouped[locale.code] ??=
+				args.format === "arb" ? { "@@locale": locale.code } : {};
+			if (args.format === "arb") {
+				const arbKey = toArbKey(key.key);
+				grouped[locale.code][arbKey] = item.nextValue;
+				grouped[locale.code][`@${arbKey}`] = {
+					description: key.description,
+					placeholders: Object.fromEntries(
+						key.placeholders.map((placeholder) => [
+							placeholder.name,
+							placeholder,
+						]),
+					),
+					"x-source-key": key.key,
+				};
+			} else {
+				grouped[locale.code][key.key] = item.nextValue;
+			}
+		}
+		return {
+			content: JSON.stringify(grouped, null, 2),
+			count: acceptedItems.length,
+			projectSlug: project?.slug,
+		};
 	},
 });
 

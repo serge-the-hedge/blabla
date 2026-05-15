@@ -25,7 +25,14 @@ import { Textarea } from "@blabla/ui/components/textarea";
 import { cn } from "@blabla/ui/lib/utils";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { Inbox, Plus, Search, Sparkles, Tag as TagIcon } from "lucide-react";
+import {
+	Download,
+	Inbox,
+	Plus,
+	Search,
+	Sparkles,
+	Tag as TagIcon,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -34,6 +41,11 @@ import {
 	ProjectShell,
 } from "@/components/localization/project-shell";
 import { apiAny } from "@/lib/convex-api";
+import {
+	buildExportFileName,
+	downloadExportFile,
+	type ExportFormat,
+} from "@/lib/export-download";
 
 export const Route = createFileRoute("/projects/$projectId/strings")({
 	component: StringsRoute,
@@ -61,6 +73,29 @@ type Locale = {
 	code: string;
 	label: string;
 	isSource?: boolean;
+};
+
+type TranslationValue = {
+	localeId: string;
+	value: string;
+	status: string;
+};
+
+type Tag = {
+	_id: string;
+	slug: string;
+};
+
+type Screen = {
+	_id: string;
+	slug: string;
+};
+
+type TranslationKey = {
+	_id: string;
+	key: string;
+	description?: string;
+	tags?: Tag[];
 };
 
 function LocaleEditor({
@@ -104,7 +139,7 @@ function LocaleEditor({
 		>
 			<div className="flex items-center justify-between gap-2">
 				<div className="flex items-center gap-1.5">
-					<span className="font-mono font-medium text-[11px]">
+					<span className="font-medium font-mono text-[11px]">
 						{locale.code}
 					</span>
 					<span className="truncate text-[10px] text-muted-foreground">
@@ -158,23 +193,23 @@ function KeyRow({
 	selected,
 	onSelectedChange,
 }: {
-	item: any;
+	item: TranslationKey;
 	locales: Locale[];
 	selected: boolean;
 	onSelectedChange: (checked: boolean) => void;
 }) {
 	const values = useQuery(apiAny.values.listForKey, { keyId: item._id });
 	const valuesByLocale = new Map(
-		(values ?? []).map((value: any) => [value.localeId, value]),
+		((values ?? []) as TranslationValue[]).map((value) => [
+			value.localeId,
+			value,
+		]),
 	);
 
 	return (
 		<Card
 			size="sm"
-			className={cn(
-				"transition-colors",
-				selected && "ring-2 ring-ring/40",
-			)}
+			className={cn("transition-colors", selected && "ring-2 ring-ring/40")}
 		>
 			<CardContent className="flex flex-col gap-3">
 				<div className="flex items-start gap-3">
@@ -182,9 +217,7 @@ function KeyRow({
 						<Checkbox
 							aria-label={`Select ${item.key}`}
 							checked={selected}
-							onCheckedChange={(checked) =>
-								onSelectedChange(Boolean(checked))
-							}
+							onCheckedChange={(checked) => onSelectedChange(Boolean(checked))}
 						/>
 					</div>
 					<div className="flex min-w-0 flex-1 flex-col gap-1.5">
@@ -196,7 +229,7 @@ function KeyRow({
 						) : null}
 						{item.tags?.length ? (
 							<div className="flex flex-wrap gap-1">
-								{item.tags.map((tag: any) => (
+								{item.tags.map((tag) => (
 									<Badge
 										key={tag._id}
 										variant="outline"
@@ -217,8 +250,8 @@ function KeyRow({
 								key={locale._id}
 								keyId={item._id}
 								locale={locale}
-								initialValue={(stored as any)?.value ?? ""}
-								status={(stored as any)?.status ?? "missing"}
+								initialValue={stored?.value ?? ""}
+								status={stored?.status ?? "missing"}
 							/>
 						);
 					})}
@@ -257,9 +290,9 @@ function StringsRoute() {
 		tagId,
 	});
 
-	const orderedLocales: Locale[] = (locales ?? [])
+	const orderedLocales: Locale[] = ((locales ?? []) as Locale[])
 		.slice()
-		.sort((a: any, b: any) => {
+		.sort((a, b) => {
 			if (a.isSource && !b.isSource) return -1;
 			if (b.isSource && !a.isSource) return 1;
 			return a.code.localeCompare(b.code);
@@ -267,8 +300,13 @@ function StringsRoute() {
 
 	const createKey = useMutation(apiAny.keys.create);
 	const addTagsBatch = useMutation(apiAny.keys.addTagsBatch);
+	const exportJson = useMutation(apiAny.exports.startJsonExport);
+	const exportArb = useMutation(apiAny.exports.startArbExport);
 	const [newKey, setNewKey] = useState("");
 	const [newValue, setNewValue] = useState("");
+	const [selectedExportFormat, setSelectedExportFormat] =
+		useState<ExportFormat>("json");
+	const [selectedExportLocale, setSelectedExportLocale] = useState("");
 
 	async function addKey(event: React.FormEvent) {
 		event.preventDefault();
@@ -283,16 +321,15 @@ function StringsRoute() {
 		toast.success("String created");
 	}
 
-	const filteredKeys = (keys ?? []).filter((item: any) =>
+	const filteredKeys = ((keys ?? []) as TranslationKey[]).filter((item) =>
 		query.trim() ? item.key.toLowerCase().includes(query.toLowerCase()) : true,
 	);
-	const selectedVisibleCount = filteredKeys.filter((item: any) =>
+	const selectedVisibleCount = filteredKeys.filter((item) =>
 		selectedKeyIds.has(item._id),
 	).length;
 	const allVisibleSelected =
 		filteredKeys.length > 0 && selectedVisibleCount === filteredKeys.length;
-	const indeterminate =
-		selectedVisibleCount > 0 && !allVisibleSelected;
+	const indeterminate = selectedVisibleCount > 0 && !allVisibleSelected;
 
 	function toggleVisibleKeys(checked: boolean) {
 		setSelectedKeyIds((current) => {
@@ -332,8 +369,46 @@ function StringsRoute() {
 		toast.success(`Tagged ${result.updated} strings`);
 	}
 
-	const screenOptions = screens ?? [];
-	const tagOptions = tags ?? [];
+	async function downloadSelectedStrings() {
+		const selectedKeys = filteredKeys
+			.filter((item) => selectedKeyIds.has(item._id))
+			.map((item) => item.key);
+		if (selectedKeys.length === 0) {
+			toast.error("Select at least one string");
+			return;
+		}
+		if (!selectedExportLocale) {
+			toast.error("Choose a locale");
+			return;
+		}
+		const selection = { type: "keys" as const, keys: selectedKeys };
+		const result =
+			selectedExportFormat === "json"
+				? await exportJson({
+						projectId,
+						localeCode: selectedExportLocale,
+						selection,
+					})
+				: await exportArb({
+						projectId,
+						localeCode: selectedExportLocale,
+						selection,
+					});
+		downloadExportFile({
+			content: result.content ?? "",
+			fileName: buildExportFileName({
+				projectSlug: project?.slug ?? project?.name,
+				localeCode: selectedExportLocale,
+				scope: "selected",
+				format: selectedExportFormat,
+			}),
+			format: selectedExportFormat,
+		});
+		toast.success("Selected strings downloaded");
+	}
+
+	const screenOptions = (screens ?? []) as Screen[];
+	const tagOptions = (tags ?? []) as Tag[];
 
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
@@ -408,7 +483,7 @@ function StringsRoute() {
 							<SelectContent>
 								<SelectGroup>
 									<SelectItem value="__all__">All screens</SelectItem>
-									{screenOptions.map((screen: any) => (
+									{screenOptions.map((screen) => (
 										<SelectItem key={screen._id} value={screen._id}>
 											{screen.slug}
 										</SelectItem>
@@ -422,9 +497,7 @@ function StringsRoute() {
 						<Select
 							value={tagId ?? "__all__"}
 							onValueChange={(next) =>
-								setTagId(
-									next === "__all__" || next == null ? undefined : next,
-								)
+								setTagId(next === "__all__" || next == null ? undefined : next)
 							}
 						>
 							<SelectTrigger id="strings-tag" className="w-full">
@@ -433,7 +506,7 @@ function StringsRoute() {
 							<SelectContent>
 								<SelectGroup>
 									<SelectItem value="__all__">All tags</SelectItem>
-									{tagOptions.map((tag: any) => (
+									{tagOptions.map((tag) => (
 										<SelectItem key={tag._id} value={tag._id}>
 											{tag.slug}
 										</SelectItem>
@@ -447,20 +520,19 @@ function StringsRoute() {
 				<Separator />
 
 				<div className="flex flex-wrap items-center gap-3">
-					<label className="flex items-center gap-2 text-xs">
+					<div className="flex items-center gap-2 text-xs">
 						<Checkbox
+							aria-label="Select visible strings"
 							checked={allVisibleSelected}
 							indeterminate={indeterminate}
-							onCheckedChange={(checked) =>
-								toggleVisibleKeys(Boolean(checked))
-							}
+							onCheckedChange={(checked) => toggleVisibleKeys(Boolean(checked))}
 						/>
 						<span>
 							{selectedKeyIds.size > 0
 								? `${selectedKeyIds.size} selected`
 								: `Select visible (${filteredKeys.length})`}
 						</span>
-					</label>
+					</div>
 					<form
 						onSubmit={applyBatchTags}
 						className="flex flex-1 flex-wrap items-end gap-2"
@@ -479,7 +551,7 @@ function StringsRoute() {
 							<SelectContent>
 								<SelectGroup>
 									<SelectItem value="__none__">No existing tag</SelectItem>
-									{tagOptions.map((tag: any) => (
+									{tagOptions.map((tag) => (
 										<SelectItem key={tag._id} value={tag._id}>
 											{tag.slug}
 										</SelectItem>
@@ -502,6 +574,51 @@ function StringsRoute() {
 							Add tags
 						</Button>
 					</form>
+					<div className="flex flex-wrap items-center gap-2">
+						<Select
+							value={selectedExportFormat}
+							onValueChange={(value) =>
+								setSelectedExportFormat(value as ExportFormat)
+							}
+						>
+							<SelectTrigger size="sm" className="w-28">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectGroup>
+									<SelectItem value="json">JSON</SelectItem>
+									<SelectItem value="arb">ARB</SelectItem>
+								</SelectGroup>
+							</SelectContent>
+						</Select>
+						<Select
+							value={selectedExportLocale}
+							onValueChange={(value) => setSelectedExportLocale(value ?? "")}
+						>
+							<SelectTrigger size="sm" className="w-32">
+								<SelectValue placeholder="Locale" />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectGroup>
+									{orderedLocales.map((locale) => (
+										<SelectItem key={locale._id} value={locale.code}>
+											{locale.code}
+										</SelectItem>
+									))}
+								</SelectGroup>
+							</SelectContent>
+						</Select>
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							disabled={selectedKeyIds.size === 0 || !selectedExportLocale}
+							onClick={downloadSelectedStrings}
+						>
+							<Download data-icon="inline-start" />
+							Download selected
+						</Button>
+					</div>
 				</div>
 
 				{keys === undefined ? (
@@ -520,7 +637,7 @@ function StringsRoute() {
 					</Empty>
 				) : (
 					<div className="flex flex-col gap-2">
-						{filteredKeys.map((item: any) => (
+						{filteredKeys.map((item) => (
 							<KeyRow
 								key={item._id}
 								item={item}

@@ -27,12 +27,21 @@ import {
 	ProjectShell,
 } from "@/components/localization/project-shell";
 import { apiAny } from "@/lib/convex-api";
+import {
+	buildExportFileName,
+	downloadExportFile,
+	type ExportFormat,
+} from "@/lib/export-download";
 
 export const Route = createFileRoute("/projects/$projectId/export")({
 	component: ExportRoute,
 });
 
 type SelectionType = "all" | "keys" | "tag" | "screen";
+type LocaleOption = {
+	_id: string;
+	code: string;
+};
 
 function ExportRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/export" });
@@ -40,11 +49,12 @@ function ExportRoute() {
 	const locales = useQuery(apiAny.locales.list, { projectId });
 	const exportJson = useMutation(apiAny.exports.startJsonExport);
 	const exportArb = useMutation(apiAny.exports.startArbExport);
-	const [format, setFormat] = useState<"json" | "arb">("json");
+	const [format, setFormat] = useState<ExportFormat>("json");
 	const [localeCode, setLocaleCode] = useState("");
 	const [selectionType, setSelectionType] = useState<SelectionType>("all");
 	const [selectionValue, setSelectionValue] = useState("");
 	const [content, setContent] = useState("");
+	const [generatedFileName, setGeneratedFileName] = useState("");
 
 	async function submit(event: React.FormEvent) {
 		event.preventDefault();
@@ -67,6 +77,17 @@ function ExportRoute() {
 				? await exportJson({ projectId, localeCode, selection })
 				: await exportArb({ projectId, localeCode, selection });
 		setContent(result.content ?? "");
+		setGeneratedFileName(
+			buildExportFileName({
+				projectSlug: project?.slug ?? project?.name,
+				localeCode,
+				scope:
+					selectionType === "all"
+						? "all"
+						: `${selectionType}-${selectionValue || "selection"}`,
+				format,
+			}),
+		);
 		toast.success("Export ready");
 	}
 
@@ -74,6 +95,22 @@ function ExportRoute() {
 		if (!content) return;
 		await navigator.clipboard.writeText(content);
 		toast.success("Copied to clipboard");
+	}
+
+	function downloadContent() {
+		if (!content) return;
+		downloadExportFile({
+			content,
+			fileName:
+				generatedFileName ||
+				buildExportFileName({
+					projectSlug: project?.slug ?? project?.name,
+					localeCode,
+					scope: "export",
+					format,
+				}),
+			format,
+		});
 	}
 
 	return (
@@ -91,9 +128,7 @@ function ExportRoute() {
 									<FieldLabel htmlFor="export-format">Format</FieldLabel>
 									<Select
 										value={format}
-										onValueChange={(value) =>
-											setFormat(value as "json" | "arb")
-										}
+										onValueChange={(value) => setFormat(value as ExportFormat)}
 									>
 										<SelectTrigger id="export-format" className="w-full">
 											<SelectValue />
@@ -117,7 +152,7 @@ function ExportRoute() {
 										</SelectTrigger>
 										<SelectContent>
 											<SelectGroup>
-												{(locales ?? []).map((locale: any) => (
+												{((locales ?? []) as LocaleOption[]).map((locale) => (
 													<SelectItem key={locale._id} value={locale.code}>
 														{locale.code}
 													</SelectItem>
@@ -174,15 +209,26 @@ function ExportRoute() {
 								<div className="flex items-center justify-between">
 									<FieldLabel htmlFor="export-content">Output</FieldLabel>
 									{content ? (
-										<Button
-											size="xs"
-											type="button"
-											variant="ghost"
-											onClick={copyContent}
-										>
-											<Copy data-icon="inline-start" />
-											Copy
-										</Button>
+										<div className="flex items-center gap-1">
+											<Button
+												size="xs"
+												type="button"
+												variant="ghost"
+												onClick={copyContent}
+											>
+												<Copy data-icon="inline-start" />
+												Copy
+											</Button>
+											<Button
+												size="xs"
+												type="button"
+												variant="outline"
+												onClick={downloadContent}
+											>
+												<Download data-icon="inline-start" />
+												Download
+											</Button>
+										</div>
 									) : null}
 								</div>
 								<Textarea

@@ -18,6 +18,27 @@ Authentication:
 Authorization: Bearer <project_api_token>
 ```
 
+## Human Setup
+
+1. Open the project in the web app.
+2. Go to **Settings -> API tokens**.
+3. Create a project-scoped token with the minimum scopes:
+   - Translation agents: `read`, `search`, `propose`.
+   - Release export automation: add `export`.
+4. Copy the raw token immediately. The app stores only a hash and cannot show
+   the raw value again.
+5. Give agents the site base URL and token:
+
+```text
+https://<convex-site>.convex.site/api/agent/v1
+Authorization: Bearer <project_api_token>
+```
+
+If token creation is blocked in development, fix the UI/auth route first and
+then create the token through the app. Do not seed raw tokens directly in the
+database: the API authenticates against the stored token hash and tokens are
+intentionally one-time visible.
+
 ## Agent Workflow
 
 1. Discover the project with `GET /projects/current`.

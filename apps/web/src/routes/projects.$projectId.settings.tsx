@@ -1,11 +1,16 @@
 import {
 	Card,
-	CardContent,
 	CardDescription,
 	CardHeader,
 	CardTitle,
 } from "@blabla/ui/components/card";
-import { createFileRoute, Link, useParams } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	Outlet,
+	useParams,
+	useRouterState,
+} from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { ArrowUpRight, KeyRound, Users } from "lucide-react";
 
@@ -36,7 +41,15 @@ const settingsLinks = [
 
 function SettingsRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/settings" });
+	const pathname = useRouterState({
+		select: (state) => state.location.pathname,
+	});
 	const project = useQuery(apiAny.projects.get, { projectId });
+
+	if (pathname !== `/projects/${projectId}/settings`) {
+		return <Outlet />;
+	}
+
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader title="Settings" description="Project administration." />
@@ -48,7 +61,10 @@ function SettingsRoute() {
 						params={{ projectId }}
 						className="group outline-none focus-visible:ring-2 focus-visible:ring-ring"
 					>
-						<Card size="sm" className="h-full transition-colors group-hover:bg-muted/40">
+						<Card
+							size="sm"
+							className="h-full transition-colors group-hover:bg-muted/40"
+						>
 							<CardHeader>
 								<div className="flex items-center justify-between gap-2">
 									<span
