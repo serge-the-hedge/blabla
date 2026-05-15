@@ -1,8 +1,10 @@
-# Agent API
+# Agent Translation Guide
 
-The localization app exposes a compact HTTP API for external agents. Agents use
-project-scoped API tokens and can read/search/export strings or propose edits as
-reviewable change sets. Agents cannot directly apply changes.
+This app exposes a compact HTTP API for LLM agents working on translations.
+Agents use project-scoped API tokens and can read/search/export strings or
+propose edits as reviewable change sets. Agents cannot directly apply changes.
+
+Use this document as the canonical workflow guide for translation agents.
 
 Base path:
 
@@ -15,6 +17,50 @@ Authentication:
 ```text
 Authorization: Bearer <project_api_token>
 ```
+
+## Agent Workflow
+
+1. Discover the project with `GET /projects/current`.
+2. Search for strings with `GET /strings/search`, using `locale`, `screen`,
+   `tag`, `status`, and `q` to keep the working set small.
+3. Fetch exact context for the keys you plan to edit with `POST /context`.
+   Include `includeHistory: true` for copy that may have review history.
+4. Propose translation edits with `POST /change-sets`. Always send the
+   `baseVersion` from search or context so reviewers can see conflicts if the
+   live value changed.
+5. Check review state with `GET /change-sets/:id` when you need to report back.
+6. Export release files with `POST /export` only when the token has the
+   `export` scope.
+
+Do not invent locale codes, screens, tags, or keys. Read them from
+`/projects/current` or `/strings/search`. If a target locale is missing, ask a
+human to create it in the web app before proposing translations.
+
+## Translation Rules
+
+- Preserve ICU syntax, placeholder names, interpolation markers, whitespace that
+  is semantically meaningful, and product terminology.
+- Treat the source locale as the source of truth. Only edit source strings when
+  the human explicitly asks for source-copy changes.
+- Use `status=missing`, `status=stale`, or `status=needs_review` to prioritize
+  work. Avoid touching already translated strings unless the task asks for
+  polish or consistency.
+- Keep proposals reviewable. Prefer focused change sets by locale, screen, tag,
+  or feature area instead of one large mixed batch.
+- Use `POST /strings/tags` for organization work. It creates a reviewable
+  metadata change set and does not mutate live string tags directly.
+- Never claim changes are live after creating a change set. Humans must approve
+  and apply the review in the web app.
+
+## Scopes
+
+- `read`: project metadata, context, and change-set status.
+- `search`: string search.
+- `propose`: translation and tag change-set creation.
+- `export`: JSON or ARB export.
+
+Create tokens in the web app under project settings. Pick the minimum scopes the
+integration needs.
 
 ## Endpoints
 
@@ -36,6 +82,10 @@ Query params:
 
 Returns compact rows with key, source value, target value, locale, status, and
 version.
+
+Each row includes the string's own `screen` slug and full `tags` list. When no
+target value exists for the requested locale, `target` is empty, `status` is
+`missing`, and `version` is `0`.
 
 ### `POST /context`
 
@@ -71,6 +121,10 @@ Body:
 ```
 
 Creates an open review. Humans approve and apply changes in the web app.
+
+`baseVersion` is optional for backwards compatibility, but agents should include
+it whenever possible. If the live value version differs from `baseVersion`, the
+item is created as conflicted instead of pending.
 
 ### `POST /strings/tags`
 

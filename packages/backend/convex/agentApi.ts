@@ -158,22 +158,42 @@ export const searchStrings = internalQuery({
 			.withIndex("by_project", (q) => q.eq("projectId", token.projectId))
 			.collect();
 		const project = (await ctx.db.get(token.projectId)) as any;
+		const screens = await ctx.db
+			.query("screens")
+			.withIndex("by_project", (q) => q.eq("projectId", token.projectId))
+			.collect();
+		const tags = await ctx.db
+			.query("tags")
+			.withIndex("by_project", (q) => q.eq("projectId", token.projectId))
+			.collect();
 		const valuesByKey = new Map(values.map((value) => [value.keyId, value]));
 		const sourceByKey = new Map(
 			sourceValues
 				.filter((value) => value.localeId === project?.sourceLocaleId)
 				.map((value) => [value.keyId, value]),
 		);
+		const screenById = new Map(screens.map((screen) => [screen._id, screen]));
+		const tagById = new Map(tags.map((tag) => [tag._id, tag]));
 		return keys
 			.filter((key) => key.archivedAt === undefined)
 			.filter((key) => (screen ? key.screenId === screen._id : true))
 			.filter((key) => (tag ? key.tagIds.includes(tag._id) : true))
 			.map((key) => {
 				const target = valuesByKey.get(key._id);
+				const rowScreen = key.screenId ? screenById.get(key.screenId) : null;
 				return {
 					key: key.key,
-					screen: screen?.slug ?? null,
-					tags: tag ? [tag.slug] : [],
+					screen:
+						rowScreen && rowScreen.archivedAt === undefined
+							? rowScreen.slug
+							: null,
+					tags: key.tagIds
+						.map((tagId) => tagById.get(tagId))
+						.filter(
+							(tag): tag is NonNullable<typeof tag> =>
+								tag !== undefined && tag.archivedAt === undefined,
+						)
+						.map((tag) => tag.slug),
 					source: sourceByKey.get(key._id)?.value ?? "",
 					target: target?.value ?? "",
 					locale: locale?.code ?? null,
