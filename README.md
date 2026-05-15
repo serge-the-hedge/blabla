@@ -39,8 +39,53 @@ Then, run the development server:
 bun run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173) in your browser to see the web application.
+Open [http://localhost:3001](http://localhost:3001) in your browser to see the web application.
 Your app will connect to the Convex cloud backend automatically.
+
+## Development Authentication
+
+This project uses Better Auth through the Convex HTTP site URL. In development,
+use the normal email/password sign-up flow instead of adding an anonymous login
+button. Anonymous auth is useful for real guest-mode product requirements, but it
+adds a Better Auth plugin, schema changes, and account-linking behavior. For this
+app, project ownership and audit data should be tied to a real user account even
+in local development.
+
+To sign in locally:
+
+1. Start the backend and web app with `bun run dev`.
+2. Open [http://localhost:3001](http://localhost:3001).
+3. Use the sign-up form once with any valid dev email and an 8+ character
+   password, for example `dev@example.test` and `password123`.
+4. Use the sign-in form with the same credentials on later runs.
+
+The dev auth origin must match the Vite dev server origin exactly:
+
+- `apps/web/vite.config.ts` runs Vite on `http://localhost:3001`.
+- `packages/backend/convex/auth.ts` trusts `process.env.SITE_URL`.
+- The Convex deployment env must therefore contain `SITE_URL=http://localhost:3001`.
+
+Local files such as `packages/backend/.env.local` document the values, but Convex
+functions read runtime environment variables from the Convex deployment. After
+creating or switching a dev deployment, set the auth env on that deployment:
+
+```bash
+cd packages/backend
+bunx convex env set SITE_URL http://localhost:3001
+bunx convex env set BETTER_AUTH_SECRET "$(openssl rand -base64 32)"
+```
+
+Keep `apps/web/.env` pointed at the same Convex deployment:
+
+```bash
+VITE_CONVEX_URL=https://<deployment>.convex.cloud
+VITE_CONVEX_SITE_URL=https://<deployment>.convex.site
+```
+
+If login fails after setup, first verify that the browser origin is
+`http://localhost:3001`, `VITE_CONVEX_SITE_URL` points to the active deployment's
+`.convex.site` URL, and the Convex deployment env contains `SITE_URL` with the
+same local origin.
 
 ## UI Customization
 
