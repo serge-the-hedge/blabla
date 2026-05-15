@@ -4,7 +4,7 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import { hashToken } from "./apiTokens";
 import { summarizeItems } from "./diffs";
 import { buildExportContent } from "./exports";
-import { buildReviewUrl } from "./lib";
+import { buildReviewUrl, slugify } from "./lib";
 
 const scopeValidator = v.union(
 	v.literal("read"),
@@ -340,6 +340,135 @@ export const createChangeSetFromKeys = internalMutation({
 			updatedAt: Date.now(),
 		});
 		return { changeSetId, conflicts };
+	},
+});
+
+async function resolveSelectionKeys(
+	ctx: any,
+	projectId: any,
+	selection: {
+		type: "all" | "keys" | "tag" | "screen";
+		keys?: string[];
+		tag?: string;
+		screen?: string;
+	},
+) {
+	const allKeys = await ctx.db
+		.query("translationKeys")
+		.withIndex("by_project", (q: any) => q.eq("projectId", projectId))
+		.collect();
+	const activeKeys = allKeys.filter((key: any) => key.archivedAt === undefined);
+	if (selection.type === "keys") {
+		const wanted = new Set(selection.keys ?? []);
+		return activeKeys.filter((key: any) => wanted.has(key.key));
+	}
+	if (selection.type === "tag" && selection.tag) {
+		const tag = await ctx.db
+			.query("tags")
+			.withIndex("by_project_slug", (q: any) =>
+				q.eq("projectId", projectId).eq("slug", slugify(selection.tag!)),
+			)
+			.unique();
+		return tag
+			? activeKeys.filter((key: any) => key.tagIds.includes(tag._id))
+			: [];
+	}
+	if (selection.type === "screen" && selection.screen) {
+		const screen = await ctx.db
+			.query("screens")
+			.withIndex("by_project_slug", (q: any) =>
+				q.eq("projectId", projectId).eq("slug", slugify(selection.screen!)),
+			)
+			.unique();
+		return screen
+			? activeKeys.filter((key: any) => key.screenId === screen._id)
+			: [];
+	}
+	return activeKeys;
+}
+
+export const proposeTagBatch = internalMutation({
+	args: {
+		token: v.string(),
+		title: v.optional(v.string()),
+		description: v.optional(v.string()),
+		selection: v.object({
+			type: v.union(
+				v.literal("all"),
+				v.literal("keys"),
+				v.literal("tag"),
+				v.literal("screen"),
+			),
+			keys: v.optional(v.array(v.string())),
+			tag: v.optional(v.string()),
+			screen: v.optional(v.string()),
+		}),
+		tagSlugs: v.array(v.string()),
+	},
+	handler: async (ctx, args) => {
+		const token = await authenticate(ctx, args.token, "propose");
+		const tagSlugs = Array.from(
+			new Set(args.tagSlugs.map(slugify).filter(Boolean)),
+		);
+		if (tagSlugs.length === 0) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Provide at least one tag slug.",
+			});
+		}
+		const keys = await resolveSelectionKeys(
+			ctx,
+			token.projectId,
+			args.selection,
+		);
+		const changeSetId = await ctx.db.insert("changeSets", {
+			projectId: token.projectId,
+			title: args.title ?? `Tag ${keys.length} strings`,
+			description: args.description,
+			author: { kind: "agent", id: token._id },
+			authorKind: "agent",
+			authorId: token._id,
+			status: "open",
+			baseSnapshotVersion: Date.now(),
+			createdAt: Date.now(),
+			updatedAt: Date.now(),
+			openedAt: Date.now(),
+			summary: {
+				filesChanged: 0,
+				fieldsChanged: 0,
+				additions: 0,
+				deletions: 0,
+			},
+		});
+		for (const key of keys) {
+			const currentTags = await Promise.all(
+				key.tagIds.map((tagId: any) => ctx.db.get(tagId)),
+			);
+			await ctx.db.insert("changeSetItems", {
+				projectId: token.projectId,
+				changeSetId,
+				kind: "key_metadata",
+				keyId: key._id,
+				fieldPath: `keys/${key.key}.tags.json`,
+				previousValue: JSON.stringify({
+					tagSlugs: currentTags
+						.filter((tag: any) => tag && tag.archivedAt === undefined)
+						.map((tag: any) => tag.slug),
+				}),
+				nextValue: JSON.stringify({ tagSlugs }),
+				status: "pending",
+				createdAt: Date.now(),
+			});
+		}
+		const items = await ctx.db
+			.query("changeSetItems")
+			.withIndex("by_changeSet", (q: any) => q.eq("changeSetId", changeSetId))
+			.collect();
+		await ctx.db.patch(changeSetId, {
+			summary: summarizeItems(items),
+			updatedAt: Date.now(),
+		});
+		return { changeSetId, proposed: keys.length };
 	},
 });
 

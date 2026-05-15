@@ -160,8 +160,27 @@ async function importMessages(
 				searchText: makeSearchText({
 					key: messageKey,
 					description: meta?.description,
+					tags: await Promise.all(
+						tagIds.map((tagId) => ctx.db.get(tagId)),
+					).then((tags) =>
+						tags.filter((tag): tag is NonNullable<typeof tag> => tag !== null),
+					),
 				}),
 			}));
+		if (existing && tagIds.length > 0) {
+			const nextTagIds = Array.from(new Set([...existing.tagIds, ...tagIds]));
+			await ctx.db.patch(existing._id, {
+				tagIds: nextTagIds,
+				updatedAt: now(),
+				searchText: makeSearchText({
+					key: existing.key,
+					description: existing.description,
+					tags: await Promise.all(
+						nextTagIds.map((tagId) => ctx.db.get(tagId)),
+					).then((tags) => tags.filter(Boolean)),
+				}),
+			});
+		}
 		if (existing && args.mode === "create_missing") {
 			const liveValue = await ctx.db
 				.query("translationValues")

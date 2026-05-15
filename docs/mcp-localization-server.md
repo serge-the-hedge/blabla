@@ -46,6 +46,20 @@ Maps to `POST /api/agent/v1/change-sets`.
 
 Creates a human-reviewable change set. This tool must not apply changes.
 
+### `localization_tag_strings`
+
+Maps to `POST /api/agent/v1/strings/tags`.
+
+Inputs:
+
+- `selection`: `all`, `keys`, `tag`, or `screen`
+- `tagSlugs`: new or existing tag slugs to add
+- `title`
+- `description`
+
+Creates a human-reviewable metadata change set for batch tag assignment. This
+tool must not apply changes.
+
 ### `localization_get_change_set`
 
 Maps to `GET /api/agent/v1/change-sets/:id`.
@@ -63,5 +77,5 @@ Exports JSON or Flutter ARB for `all`, `keys`, `tag`, or `screen` selection.
 - `read`: `localization_project`, `localization_get_context`,
   `localization_get_change_set`
 - `search`: `localization_search_strings`
-- `propose`: `localization_create_change_set`
+- `propose`: `localization_create_change_set`, `localization_tag_strings`
 - `export`: `localization_export`

@@ -4,7 +4,7 @@ import type { Id } from "./_generated/dataModel";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { requireUser } from "./auth";
 import { buildUnifiedPatch, summarizeItems } from "./diffs";
-import { buildReviewUrl, now } from "./lib";
+import { buildReviewUrl, makeSearchText, now, slugify } from "./lib";
 import { requireEditor, requireViewer } from "./permissions";
 import { upsertTranslationValue } from "./values";
 
@@ -50,6 +50,64 @@ async function refreshSummary(ctx: any, changeSetId: Id<"changeSets">) {
 	await ctx.db.patch(changeSetId, {
 		summary: summarizeItems(items),
 		updatedAt: now(),
+	});
+}
+
+async function findOrCreateTags(
+	ctx: any,
+	projectId: Id<"projects">,
+	tagSlugs: string[],
+) {
+	const tagIds: Id<"tags">[] = [];
+	for (const rawSlug of tagSlugs) {
+		const slug = slugify(rawSlug);
+		if (!slug) continue;
+		const existing = await ctx.db
+			.query("tags")
+			.withIndex("by_project_slug", (q: any) =>
+				q.eq("projectId", projectId).eq("slug", slug),
+			)
+			.unique();
+		if (existing) {
+			if (existing.archivedAt !== undefined) {
+				await ctx.db.patch(existing._id, { archivedAt: undefined });
+			}
+			tagIds.push(existing._id);
+			continue;
+		}
+		tagIds.push(
+			await ctx.db.insert("tags", {
+				projectId,
+				name: rawSlug,
+				slug,
+				createdAt: now(),
+			}),
+		);
+	}
+	return Array.from(new Set(tagIds));
+}
+
+async function applyTagMetadataChange(ctx: any, item: any) {
+	if (!item.keyId || item.nextValue === null) return;
+	const key = await ctx.db.get(item.keyId);
+	if (!key || key.archivedAt !== undefined) return;
+	const payload = JSON.parse(item.nextValue) as { tagSlugs?: string[] };
+	const tagIdsToAdd = await findOrCreateTags(
+		ctx,
+		key.projectId,
+		payload.tagSlugs ?? [],
+	);
+	const tagIds = Array.from(new Set([...key.tagIds, ...tagIdsToAdd]));
+	const tags = await Promise.all(tagIds.map((tagId) => ctx.db.get(tagId)));
+	await ctx.db.patch(item.keyId, {
+		tagIds,
+		updatedAt: now(),
+		searchText: makeSearchText({
+			key: key.key,
+			description: key.description,
+			screen: key.screenId ? await ctx.db.get(key.screenId) : null,
+			tags: tags.filter((tag): tag is NonNullable<typeof tag> => tag !== null),
+		}),
 	});
 }
 
@@ -318,6 +376,10 @@ export const apply = mutation({
 					actor: changeSet.author,
 					changeSetId: args.changeSetId,
 				});
+				await ctx.db.patch(item._id, { status: "accepted" });
+			}
+			if (item.kind === "key_metadata") {
+				await applyTagMetadataChange(ctx, item);
 				await ctx.db.patch(item._id, { status: "accepted" });
 			}
 		}

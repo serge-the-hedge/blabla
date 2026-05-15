@@ -25,6 +25,7 @@ function ImportRoute() {
 	const [format, setFormat] = useState<"json" | "arb">("json");
 	const [localeCode, setLocaleCode] = useState("");
 	const [screenSlug, setScreenSlug] = useState("");
+	const [tagSlugs, setTagSlugs] = useState("");
 	const [content, setContent] = useState(
 		'{\n  "checkout.payButton": "Pay now"\n}',
 	);
@@ -36,6 +37,10 @@ function ImportRoute() {
 			localeCode,
 			content,
 			screenSlug: screenSlug || undefined,
+			tagSlugs: tagSlugs
+				.split(",")
+				.map((tag) => tag.trim())
+				.filter(Boolean),
 		};
 		const jobId =
 			format === "json" ? await importJson(args) : await importArb(args);
@@ -49,7 +54,7 @@ function ImportRoute() {
 				description="Bootstrap or update strings from JSON and Flutter ARB."
 			/>
 			<form onSubmit={submit} className="flex max-w-3xl flex-col gap-3">
-				<div className="grid grid-cols-3 gap-3">
+				<div className="grid grid-cols-4 gap-3">
 					<div className="flex flex-col gap-1">
 						<Label>Format</Label>
 						<select
@@ -83,6 +88,14 @@ function ImportRoute() {
 						<Input
 							value={screenSlug}
 							onChange={(event) => setScreenSlug(event.target.value)}
+						/>
+					</div>
+					<div className="flex flex-col gap-1">
+						<Label>Tags</Label>
+						<Input
+							value={tagSlugs}
+							onChange={(event) => setTagSlugs(event.target.value)}
+							placeholder="checkout, legal"
 						/>
 					</div>
 				</div>

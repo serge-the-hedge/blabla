@@ -72,6 +72,28 @@ Body:
 
 Creates an open review. Humans approve and apply changes in the web app.
 
+### `POST /strings/tags`
+
+Creates an open review that adds one or more tags to a selected batch of
+strings. Tags may already exist or be new. The agent does not mutate live string
+metadata directly.
+
+Body:
+
+```json
+{
+  "title": "Tag checkout strings",
+  "description": "Group checkout strings for review",
+  "selection": {
+    "type": "keys",
+    "keys": ["checkout.payButton", "checkout.cancelButton"]
+  },
+  "tagSlugs": ["checkout", "button"]
+}
+```
+
+Selections: `all`, `keys`, `tag`, `screen`.
+
 ### `GET /change-sets/:id`
 
 Returns compact review state and item statuses.

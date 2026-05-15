@@ -3,7 +3,7 @@ import { ConvexError, v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { requireUser } from "./auth";
-import { makeSearchText, now } from "./lib";
+import { makeSearchText, now, slugify } from "./lib";
 import { requireEditor, requireViewer } from "./permissions";
 import { upsertTranslationValue } from "./values";
 
@@ -29,6 +29,55 @@ async function buildSearchText(
 		description: args.description,
 		screen,
 		tags: tags.filter((tag): tag is NonNullable<typeof tag> => tag !== null),
+	});
+}
+
+async function findOrCreateTags(
+	ctx: any,
+	projectId: Id<"projects">,
+	tagSlugs: string[],
+) {
+	const tagIds: Id<"tags">[] = [];
+	for (const rawSlug of tagSlugs) {
+		const slug = slugify(rawSlug);
+		if (!slug) continue;
+		const existing = await ctx.db
+			.query("tags")
+			.withIndex("by_project_slug", (q: any) =>
+				q.eq("projectId", projectId).eq("slug", slug),
+			)
+			.unique();
+		if (existing && existing.archivedAt === undefined) {
+			tagIds.push(existing._id);
+			continue;
+		}
+		const tagId = existing
+			? existing._id
+			: await ctx.db.insert("tags", {
+					projectId,
+					name: rawSlug,
+					slug,
+					createdAt: now(),
+				});
+		if (existing?.archivedAt !== undefined) {
+			await ctx.db.patch(existing._id, { archivedAt: undefined });
+		}
+		tagIds.push(tagId);
+	}
+	return Array.from(new Set(tagIds));
+}
+
+async function patchKeyTags(ctx: any, key: any, tagIdsToAdd: Id<"tags">[]) {
+	const tagIds = Array.from(new Set([...key.tagIds, ...tagIdsToAdd]));
+	await ctx.db.patch(key._id, {
+		tagIds,
+		updatedAt: now(),
+		searchText: await buildSearchText(ctx, {
+			key: key.key,
+			description: key.description,
+			screenId: key.screenId,
+			tagIds,
+		}),
 	});
 }
 
@@ -77,14 +126,18 @@ export const list = query({
 						)
 						.collect();
 		const valuesByKey = new Map(values.map((value) => [value.keyId, value]));
-		return filteredKeys
-			.map((key) => ({
+		const rows = await Promise.all(
+			filteredKeys.map(async (key) => ({
 				...key,
+				tags: (
+					await Promise.all(key.tagIds.map((tagId) => ctx.db.get(tagId)))
+				).filter((tag): tag is NonNullable<typeof tag> => tag !== null),
 				selectedValue: valuesByKey.get(key._id) ?? null,
-			}))
-			.filter((item) =>
-				args.status ? item.selectedValue?.status === args.status : true,
-			);
+			})),
+		);
+		return rows.filter((item) =>
+			args.status ? item.selectedValue?.status === args.status : true,
+		);
 	},
 });
 
@@ -234,6 +287,56 @@ export const updateMetadata = mutation({
 			}),
 		});
 		return null;
+	},
+});
+
+export const addTagsBatch = mutation({
+	args: {
+		projectId: v.id("projects"),
+		keyIds: v.array(v.id("translationKeys")),
+		tagIds: v.optional(v.array(v.id("tags"))),
+		tagSlugs: v.optional(v.array(v.string())),
+	},
+	handler: async (ctx, args) => {
+		await requireEditor(ctx, args.projectId);
+		const existingTagIds = args.tagIds ?? [];
+		for (const tagId of existingTagIds) {
+			const tag = await ctx.db.get(tagId);
+			if (!tag || tag.projectId !== args.projectId) {
+				throw new ConvexError({
+					code: "VALIDATION",
+					message: "Tag does not belong to this project.",
+				});
+			}
+		}
+		const createdTagIds = await findOrCreateTags(
+			ctx,
+			args.projectId,
+			args.tagSlugs ?? [],
+		);
+		const tagIdsToAdd = Array.from(
+			new Set([...existingTagIds, ...createdTagIds]),
+		);
+		if (tagIdsToAdd.length === 0) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Select or enter at least one tag.",
+			});
+		}
+		let updated = 0;
+		for (const keyId of args.keyIds) {
+			const key = await ctx.db.get(keyId);
+			if (
+				!key ||
+				key.projectId !== args.projectId ||
+				key.archivedAt !== undefined
+			) {
+				continue;
+			}
+			await patchKeyTags(ctx, key, tagIdsToAdd);
+			updated += 1;
+		}
+		return { updated, tagIds: tagIdsToAdd };
 	},
 });
 

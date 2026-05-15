@@ -187,6 +187,39 @@ http.route({
 });
 
 http.route({
+	path: "/api/agent/v1/strings/tags",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const body = await request.json();
+			const result = await withAgent(
+				ctx,
+				request,
+				"propose",
+				"agentCreateChangeSet",
+				async (token) =>
+					await ctx.runMutation(internalApi.agentApi.proposeTagBatch, {
+						token,
+						title: body.title,
+						description: body.description,
+						selection: body.selection ?? { type: "keys", keys: [] },
+						tagSlugs: body.tagSlugs ?? [],
+					}),
+			);
+			return json({
+				changeSetId: result.changeSetId,
+				status: "open",
+				itemsAccepted: result.proposed,
+				itemsConflicted: 0,
+				reviewUrl: `/projects/current/reviews/${result.changeSetId}`,
+			});
+		} catch (error) {
+			return routeError(error);
+		}
+	}),
+});
+
+http.route({
 	pathPrefix: "/api/agent/v1/change-sets/",
 	method: "GET",
 	handler: httpAction(async (ctx, request) => {
