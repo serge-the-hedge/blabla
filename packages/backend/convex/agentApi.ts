@@ -303,9 +303,14 @@ export const createChangeSetFromKeys = internalMutation({
 			});
 		}
 		const invalidItems = [];
+		const emptyItems = [];
 		const resolvedItems: ResolvedTranslationProposal[] = [];
 		let rejectedNoops = 0;
 		for (const item of args.items) {
+			if (item.nextValue.trim().length === 0) {
+				emptyItems.push(`${item.locale}:${item.key}`);
+				continue;
+			}
 			const key = await ctx.db
 				.query("translationKeys")
 				.withIndex("by_project_key", (q) =>
@@ -365,6 +370,15 @@ export const createChangeSetFromKeys = internalMutation({
 				message: `Unknown or archived key/locale pairs: ${sample}${more}.`,
 			});
 		}
+		if (emptyItems.length > 0) {
+			const sample = emptyItems.slice(0, 5).join(", ");
+			const more =
+				emptyItems.length > 5 ? ` and ${emptyItems.length - 5} more` : "";
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: `Translation proposals cannot be empty: ${sample}${more}.`,
+			});
+		}
 		if (resolvedItems.length === 0) {
 			throw new ConvexError({
 				code: "VALIDATION",
@@ -406,6 +420,7 @@ export const createChangeSetFromKeys = internalMutation({
 				fieldPath: item.fieldPath,
 				previousValue: item.liveValue?.value ?? null,
 				nextValue: item.nextValue,
+				originalNextValue: item.nextValue,
 				baseVersion: item.baseVersion,
 				status: item.status,
 				createdAt: Date.now(),

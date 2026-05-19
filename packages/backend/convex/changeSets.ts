@@ -9,7 +9,7 @@ import {
 	query,
 } from "./_generated/server";
 import { requireUser } from "./auth";
-import { buildUnifiedPatch, summarizeItems } from "./diffs";
+import { summarizeItems } from "./diffs";
 import { buildReviewUrl, makeSearchText, now, slugify, toArbKey } from "./lib";
 import { requireEditor, requireViewer } from "./permissions";
 import { upsertTranslationValue } from "./values";
@@ -32,6 +32,11 @@ const changeSetStatus = v.union(
 	v.literal("applied"),
 );
 type ReviewCtx = QueryCtx | MutationCtx;
+type SourceMissingReason =
+	| "no_key"
+	| "no_project_source_locale"
+	| "source_locale_missing"
+	| "source_value_missing";
 
 function isApplicableItem(item: { status: string }) {
 	return item.status === "pending" || item.status === "accepted";
@@ -78,11 +83,25 @@ async function getLiveValue(
 		.unique();
 }
 
-async function getSourceValue(ctx: ReviewCtx, key: Doc<"translationKeys">) {
+async function getSourceContext(ctx: ReviewCtx, key: Doc<"translationKeys">) {
 	const project = await ctx.db.get(key.projectId);
 	const sourceLocaleId = project?.sourceLocaleId;
-	if (!sourceLocaleId) return null;
-	return await ctx.db
+	if (!sourceLocaleId) {
+		return {
+			sourceLocale: null,
+			sourceValue: null,
+			sourceMissingReason: "no_project_source_locale" as const,
+		};
+	}
+	const sourceLocale = await ctx.db.get(sourceLocaleId);
+	if (!sourceLocale || sourceLocale.archivedAt !== undefined) {
+		return {
+			sourceLocale: null,
+			sourceValue: null,
+			sourceMissingReason: "source_locale_missing" as const,
+		};
+	}
+	const sourceValue = await ctx.db
 		.query("translationValues")
 		.withIndex("by_project_key_locale", (q) =>
 			q
@@ -91,16 +110,26 @@ async function getSourceValue(ctx: ReviewCtx, key: Doc<"translationKeys">) {
 				.eq("localeId", sourceLocaleId),
 		)
 		.unique();
+	return {
+		sourceLocale,
+		sourceValue,
+		sourceMissingReason:
+			!sourceValue || sourceValue.status === "missing"
+				? ("source_value_missing" as const)
+				: null,
+	};
 }
 
 async function hydrateReviewItem(ctx: ReviewCtx, item: Doc<"changeSetItems">) {
 	const key = item.keyId ? await ctx.db.get(item.keyId) : null;
 	const locale = item.localeId ? await ctx.db.get(item.localeId) : null;
-	const sourceValue = key ? await getSourceValue(ctx, key) : null;
-	const project = key ? await ctx.db.get(key.projectId) : null;
-	const sourceLocale = project?.sourceLocaleId
-		? await ctx.db.get(project.sourceLocaleId)
-		: null;
+	const sourceContext = key
+		? await getSourceContext(ctx, key)
+		: {
+				sourceLocale: null,
+				sourceValue: null,
+				sourceMissingReason: "no_key" as SourceMissingReason,
+			};
 	return {
 		...item,
 		key: key
@@ -114,14 +143,15 @@ async function hydrateReviewItem(ctx: ReviewCtx, item: Doc<"changeSetItems">) {
 		locale: locale
 			? { id: locale._id, code: locale.code, label: locale.label }
 			: null,
-		sourceLocale: sourceLocale
+		sourceLocale: sourceContext.sourceLocale
 			? {
-					id: sourceLocale._id,
-					code: sourceLocale.code,
-					label: sourceLocale.label,
+					id: sourceContext.sourceLocale._id,
+					code: sourceContext.sourceLocale.code,
+					label: sourceContext.sourceLocale.label,
 				}
 			: null,
-		sourceValue: sourceValue?.value ?? null,
+		sourceValue: sourceContext.sourceValue?.value ?? null,
+		sourceMissingReason: sourceContext.sourceMissingReason,
 	};
 }
 
@@ -239,8 +269,6 @@ export const get = query({
 		return {
 			...changeSet,
 			items: hydratedItems,
-			patch: buildUnifiedPatch(items),
-			applicablePatch: buildUnifiedPatch(items.filter(isApplicableItem)),
 			reviewUrl: buildReviewUrl(changeSet.projectId, args.changeSetId),
 		};
 	},
@@ -325,6 +353,10 @@ export const addItem = mutation({
 			fieldPath: args.fieldPath,
 			previousValue: liveValue?.value ?? null,
 			nextValue: args.nextValue,
+			originalNextValue:
+				args.kind === "translation_value" && args.nextValue !== null
+					? args.nextValue
+					: undefined,
 			baseVersion: args.baseVersion,
 			status: conflicted ? "conflicted" : "pending",
 			createdAt: now(),
@@ -819,6 +851,7 @@ export const createAgentChangeSet = internalMutation({
 				fieldPath: item.fieldPath,
 				previousValue: liveValue?.value ?? null,
 				nextValue: item.nextValue,
+				originalNextValue: item.nextValue,
 				baseVersion: item.baseVersion,
 				status,
 				createdAt: now(),
@@ -826,5 +859,136 @@ export const createAgentChangeSet = internalMutation({
 		}
 		await refreshSummary(ctx, changeSetId);
 		return { changeSetId, conflicts };
+	},
+});
+
+export const updateItem = mutation({
+	args: {
+		itemId: v.id("changeSetItems"),
+		nextValue: v.string(),
+	},
+	handler: async (ctx, args) => {
+		const item = await ctx.db.get(args.itemId);
+		if (!item)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Change item not found.",
+			});
+		await requireEditor(ctx, item.projectId);
+		const changeSet = await ctx.db.get(item.changeSetId);
+		if (!changeSet)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Change set not found.",
+			});
+		assertCanReview(changeSet);
+		if (item.kind !== "translation_value") {
+			throw new ConvexError({
+				code: "BAD_STATE",
+				message: "Only translation values are editable in review.",
+			});
+		}
+		if (args.nextValue.trim().length === 0) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Translation cannot be empty.",
+			});
+		}
+		const nextStatus = item.status === "rejected" ? "pending" : item.status;
+		await ctx.db.patch(args.itemId, {
+			nextValue: args.nextValue,
+			originalNextValue:
+				item.originalNextValue ?? item.nextValue ?? args.nextValue,
+			status: nextStatus,
+		});
+		await refreshSummary(ctx, item.changeSetId);
+		return null;
+	},
+});
+
+export const revertItem = mutation({
+	args: { itemId: v.id("changeSetItems") },
+	handler: async (ctx, args) => {
+		const item = await ctx.db.get(args.itemId);
+		if (!item)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Change item not found.",
+			});
+		await requireEditor(ctx, item.projectId);
+		const changeSet = await ctx.db.get(item.changeSetId);
+		if (!changeSet)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Change set not found.",
+			});
+		assertCanReview(changeSet);
+		if (item.originalNextValue === undefined) {
+			return null;
+		}
+		await ctx.db.patch(args.itemId, {
+			nextValue: item.originalNextValue,
+		});
+		await refreshSummary(ctx, item.changeSetId);
+		return null;
+	},
+});
+
+export const acceptItemsInGroup = mutation({
+	args: {
+		changeSetId: v.id("changeSets"),
+		keyId: v.id("translationKeys"),
+	},
+	handler: async (ctx, args) => {
+		const changeSet = await ctx.db.get(args.changeSetId);
+		if (!changeSet)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Change set not found.",
+			});
+		await requireEditor(ctx, changeSet.projectId);
+		assertCanReview(changeSet);
+		const items = await ctx.db
+			.query("changeSetItems")
+			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
+			.collect();
+		const targets = items.filter(
+			(item) =>
+				item.keyId === args.keyId &&
+				item.status !== "accepted" &&
+				item.status !== "conflicted",
+		);
+		await Promise.all(
+			targets.map((item) => ctx.db.patch(item._id, { status: "accepted" })),
+		);
+		return { updated: targets.length };
+	},
+});
+
+export const rejectItemsInGroup = mutation({
+	args: {
+		changeSetId: v.id("changeSets"),
+		keyId: v.id("translationKeys"),
+	},
+	handler: async (ctx, args) => {
+		const changeSet = await ctx.db.get(args.changeSetId);
+		if (!changeSet)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Change set not found.",
+			});
+		await requireEditor(ctx, changeSet.projectId);
+		assertCanReview(changeSet);
+		const items = await ctx.db
+			.query("changeSetItems")
+			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
+			.collect();
+		const targets = items.filter(
+			(item) => item.keyId === args.keyId && item.status !== "rejected",
+		);
+		await Promise.all(
+			targets.map((item) => ctx.db.patch(item._id, { status: "rejected" })),
+		);
+		return { updated: targets.length };
 	},
 });

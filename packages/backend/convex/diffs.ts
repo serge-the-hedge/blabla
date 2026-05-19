@@ -1,19 +1,5 @@
 import type { Doc } from "./_generated/dataModel";
 
-type PatchItem = Pick<
-	Doc<"changeSetItems">,
-	"fieldPath" | "previousValue" | "nextValue"
->;
-
-function escapePatchLine(line: string): string {
-	return line.length === 0 ? "" : line;
-}
-
-function lineBlock(prefix: "+" | "-" | " ", value: string): string[] {
-	const lines = value.split("\n");
-	return lines.map((line) => `${prefix}${escapePatchLine(line)}`);
-}
-
 export function diffStat(
 	previousValue: string | null,
 	nextValue: string | null,
@@ -28,37 +14,6 @@ export function diffStat(
 		additions: nextLines.length,
 		deletions: previousLines.length,
 	};
-}
-
-export function buildItemVirtualPath(
-	item: Pick<Doc<"changeSetItems">, "fieldPath">,
-): string {
-	const safePath = item.fieldPath
-		.replace(/[^a-zA-Z0-9._/-]+/g, "-")
-		.replace(/^-+|-+$/g, "");
-	return safePath.includes("/")
-		? safePath
-		: `locales/${safePath || "change"}.json`;
-}
-
-export function buildUnifiedPatch(items: PatchItem[]): string {
-	return items
-		.map((item) => {
-			const path = buildItemVirtualPath(item);
-			const previousValue = item.previousValue ?? "";
-			const nextValue = item.nextValue ?? "";
-			const previousLines = previousValue.split("\n").length || 1;
-			const nextLines = nextValue.split("\n").length || 1;
-			return [
-				`diff --git a/${path} b/${path}`,
-				`--- a/${path}`,
-				`+++ b/${path}`,
-				`@@ -1,${previousLines} +1,${nextLines} @@`,
-				...lineBlock("-", previousValue),
-				...lineBlock("+", nextValue),
-			].join("\n");
-		})
-		.join("\n");
 }
 
 export function summarizeItems(

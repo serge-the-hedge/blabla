@@ -39,9 +39,7 @@ function PrivateDashboardContent() {
 				<Card size="sm">
 					<CardHeader>
 						<CardTitle>Profile</CardTitle>
-						<CardDescription>
-							Signed in via Better Auth.
-						</CardDescription>
+						<CardDescription>Signed in via Better Auth.</CardDescription>
 					</CardHeader>
 					<CardContent>
 						{user === undefined ? (
@@ -59,9 +57,7 @@ function PrivateDashboardContent() {
 				<Card size="sm">
 					<CardHeader>
 						<CardTitle>Private data</CardTitle>
-						<CardDescription>
-							A simple ping from the backend.
-						</CardDescription>
+						<CardDescription>A simple ping from the backend.</CardDescription>
 					</CardHeader>
 					<CardContent>
 						{privateData === undefined ? (

@@ -12,6 +12,12 @@ import {
 import { Field, FieldGroup, FieldLabel } from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
 import {
+	InputGroup,
+	InputGroupAddon,
+	InputGroupButton,
+	InputGroupInput,
+} from "@blabla/ui/components/input-group";
+import {
 	Select,
 	SelectContent,
 	SelectGroup,
@@ -23,7 +29,12 @@ import { Separator } from "@blabla/ui/components/separator";
 import { Skeleton } from "@blabla/ui/components/skeleton";
 import { Textarea } from "@blabla/ui/components/textarea";
 import { cn } from "@blabla/ui/lib/utils";
-import { createFileRoute, useParams } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	useNavigate,
+	useParams,
+	useSearch,
+} from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
 	Download,
@@ -32,6 +43,7 @@ import {
 	Search,
 	Sparkles,
 	Tag as TagIcon,
+	X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -48,6 +60,9 @@ import {
 } from "@/lib/export-download";
 
 export const Route = createFileRoute("/projects/$projectId/strings")({
+	validateSearch: (search: Record<string, unknown>) => ({
+		tag: typeof search.tag === "string" ? search.tag : undefined,
+	}),
 	component: StringsRoute,
 });
 
@@ -83,7 +98,9 @@ type TranslationValue = {
 
 type Tag = {
 	_id: string;
+	name: string;
 	slug: string;
+	color?: string;
 };
 
 type Screen = {
@@ -93,6 +110,7 @@ type Screen = {
 
 type TranslationKey = {
 	_id: string;
+	projectId: string;
 	key: string;
 	description?: string;
 	tags?: Tag[];
@@ -190,13 +208,17 @@ function LocaleEditor({
 function KeyRow({
 	item,
 	locales,
+	allTags,
 	selected,
 	onSelectedChange,
+	onFilterTag,
 }: {
 	item: TranslationKey;
 	locales: Locale[];
+	allTags: Tag[];
 	selected: boolean;
 	onSelectedChange: (checked: boolean) => void;
+	onFilterTag: (tag: Tag) => void;
 }) {
 	const values = useQuery(apiAny.values.listForKey, { keyId: item._id });
 	const valuesByLocale = new Map(
@@ -228,18 +250,13 @@ function KeyRow({
 							</div>
 						) : null}
 						{item.tags?.length ? (
-							<div className="flex flex-wrap gap-1">
-								{item.tags.map((tag) => (
-									<Badge
-										key={tag._id}
-										variant="outline"
-										className="font-normal"
-									>
-										{tag.slug}
-									</Badge>
-								))}
-							</div>
+							<KeyTagList
+								item={item}
+								allTags={allTags}
+								onFilterTag={onFilterTag}
+							/>
 						) : null}
+						<KeyTagComposer item={item} allTags={allTags} />
 					</div>
 				</div>
 				<div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
@@ -261,6 +278,178 @@ function KeyRow({
 	);
 }
 
+function KeyTagList({
+	item,
+	allTags,
+	onFilterTag,
+}: {
+	item: TranslationKey;
+	allTags: Tag[];
+	onFilterTag: (tag: Tag) => void;
+}) {
+	const updateMetadata = useMutation(apiAny.keys.updateMetadata);
+	const [removingTagId, setRemovingTagId] = useState<string | null>(null);
+	const itemTags = item.tags ?? [];
+
+	async function removeTag(tag: Tag) {
+		setRemovingTagId(tag._id);
+		try {
+			await updateMetadata({
+				keyId: item._id,
+				tagIds: itemTags
+					.filter((currentTag) => currentTag._id !== tag._id)
+					.map((currentTag) => currentTag._id),
+			});
+			toast.success(`Removed ${tag.slug}`);
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Could not remove tag",
+			);
+		} finally {
+			setRemovingTagId(null);
+		}
+	}
+
+	return (
+		<div className="flex flex-wrap gap-1">
+			{itemTags.map((tag) => {
+				const canonicalTag =
+					allTags.find((option) => option._id === tag._id) ?? tag;
+				return (
+					<Badge
+						key={tag._id}
+						variant="outline"
+						className="gap-1 px-1.5 font-normal"
+					>
+						<button
+							type="button"
+							className="font-mono hover:underline"
+							onClick={() => onFilterTag(canonicalTag)}
+							title={`Filter by ${tag.slug}`}
+						>
+							{tag.slug}
+						</button>
+						<button
+							type="button"
+							className="text-muted-foreground hover:text-foreground disabled:opacity-50"
+							onClick={() => removeTag(canonicalTag)}
+							disabled={removingTagId === tag._id}
+							aria-label={`Remove ${tag.slug} from ${item.key}`}
+						>
+							<X data-icon="inline-end" />
+						</button>
+					</Badge>
+				);
+			})}
+		</div>
+	);
+}
+
+function KeyTagComposer({
+	item,
+	allTags,
+}: {
+	item: TranslationKey;
+	allTags: Tag[];
+}) {
+	const updateMetadata = useMutation(apiAny.keys.updateMetadata);
+	const upsertTag = useMutation(apiAny.tags.upsert);
+	const [tagInput, setTagInput] = useState("");
+	const [saving, setSaving] = useState(false);
+	const itemTags = item.tags ?? [];
+	const currentTagIds = new Set(itemTags.map((tag) => tag._id));
+	const normalizedInput = tagInput.trim().toLowerCase();
+	const suggestions = allTags
+		.filter((tag) => !currentTagIds.has(tag._id))
+		.filter((tag) =>
+			normalizedInput
+				? tag.slug.toLowerCase().includes(normalizedInput) ||
+					tag.name.toLowerCase().includes(normalizedInput)
+				: true,
+		)
+		.slice(0, 4);
+
+	async function addTag(rawValue = tagInput) {
+		const value = rawValue.trim();
+		if (!value) return;
+		setSaving(true);
+		try {
+			const existing = allTags.find(
+				(tag) =>
+					tag.slug.toLowerCase() === value.toLowerCase() ||
+					tag.name.toLowerCase() === value.toLowerCase(),
+			);
+			const tagId =
+				existing?._id ??
+				(await upsertTag({
+					projectId: item.projectId,
+					name: value,
+				}));
+			if (currentTagIds.has(tagId)) {
+				setTagInput("");
+				return;
+			}
+			await updateMetadata({
+				keyId: item._id,
+				tagIds: [...itemTags.map((tag) => tag._id), tagId],
+			});
+			setTagInput("");
+			toast.success(`Added ${existing?.slug ?? value}`);
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : "Could not add tag");
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<div className="flex flex-col gap-1.5">
+			<InputGroup className="max-w-md">
+				<InputGroupAddon>
+					<TagIcon />
+				</InputGroupAddon>
+				<InputGroupInput
+					value={tagInput}
+					onChange={(event) => setTagInput(event.target.value)}
+					onKeyDown={(event) => {
+						if (event.key === "Enter") {
+							event.preventDefault();
+							addTag();
+						}
+					}}
+					placeholder="Add or find tag"
+					disabled={saving}
+				/>
+				<InputGroupAddon align="inline-end">
+					<InputGroupButton
+						type="button"
+						onClick={() => addTag()}
+						disabled={!tagInput.trim() || saving}
+					>
+						<Plus data-icon="inline-start" />
+						Add
+					</InputGroupButton>
+				</InputGroupAddon>
+			</InputGroup>
+			{suggestions.length > 0 ? (
+				<div className="flex flex-wrap gap-1">
+					{suggestions.map((tag) => (
+						<Button
+							key={tag._id}
+							type="button"
+							size="xs"
+							variant="ghost"
+							onClick={() => addTag(tag.slug)}
+						>
+							{tag.slug}
+						</Button>
+					))}
+				</div>
+			) : null}
+		</div>
+	);
+}
+
 function StringsSkeleton() {
 	return (
 		<div className="flex flex-col gap-2">
@@ -273,6 +462,8 @@ function StringsSkeleton() {
 
 function StringsRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/strings" });
+	const search = useSearch({ from: "/projects/$projectId/strings" });
+	const navigate = useNavigate({ from: "/projects/$projectId/strings" });
 	const project = useQuery(apiAny.projects.get, { projectId });
 	const locales = useQuery(apiAny.locales.list, { projectId });
 	const screens = useQuery(apiAny.screens.list, { projectId });
@@ -307,6 +498,15 @@ function StringsRoute() {
 	const [selectedExportFormat, setSelectedExportFormat] =
 		useState<ExportFormat>("json");
 	const [selectedExportLocale, setSelectedExportLocale] = useState("");
+	const tagOptions = (tags ?? []) as Tag[];
+
+	useEffect(() => {
+		if (tags === undefined) return;
+		const nextTag = search.tag
+			? tagOptions.find((tag) => tag.slug === search.tag)
+			: undefined;
+		setTagId(nextTag?._id);
+	}, [search.tag, tags, tagOptions]);
 
 	async function addKey(event: React.FormEvent) {
 		event.preventDefault();
@@ -408,7 +608,17 @@ function StringsRoute() {
 	}
 
 	const screenOptions = (screens ?? []) as Screen[];
-	const tagOptions = (tags ?? []) as Tag[];
+
+	function filterByTag(tag: Tag | undefined) {
+		setTagId(tag?._id);
+		navigate({
+			search: (current) => ({
+				...current,
+				tag: tag?.slug,
+			}),
+			replace: true,
+		});
+	}
 
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
@@ -497,7 +707,11 @@ function StringsRoute() {
 						<Select
 							value={tagId ?? "__all__"}
 							onValueChange={(next) =>
-								setTagId(next === "__all__" || next == null ? undefined : next)
+								filterByTag(
+									next === "__all__" || next == null
+										? undefined
+										: tagOptions.find((tag) => tag._id === next),
+								)
 							}
 						>
 							<SelectTrigger id="strings-tag" className="w-full">
@@ -642,7 +856,9 @@ function StringsRoute() {
 								key={item._id}
 								item={item}
 								locales={orderedLocales}
+								allTags={tagOptions}
 								selected={selectedKeyIds.has(item._id)}
+								onFilterTag={filterByTag}
 								onSelectedChange={(checked) =>
 									setSelectedKeyIds((current) => {
 										const next = new Set(current);

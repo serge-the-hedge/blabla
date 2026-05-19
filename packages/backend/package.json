@@ -6,7 +6,9 @@
 	"author": "",
 	"scripts": {
 		"dev": "convex dev",
-		"dev:setup": "convex dev --configure --until-success"
+		"dev:setup": "convex dev --configure --until-success",
+		"test": "bun test convex",
+		"check-types:test": "tsc -p tsconfig.test.json --noEmit"
 	},
 	"dependencies": {
 		"@convex-dev/aggregate": "^0.2.1",
@@ -21,6 +23,7 @@
 	},
 	"devDependencies": {
 		"@blabla/config": "workspace:*",
+		"@types/bun": "^1.3.14",
 		"@types/node": "^24.3.0",
 		"typescript": "catalog:"
 	}

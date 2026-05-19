@@ -38,7 +38,9 @@ export default function UserMenu() {
 				>
 					{initials}
 				</span>
-				<span className="max-w-[10rem] truncate">{user?.name ?? "Account"}</span>
+				<span className="max-w-[10rem] truncate">
+					{user?.name ?? "Account"}
+				</span>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="min-w-56">
 				<DropdownMenuGroup>

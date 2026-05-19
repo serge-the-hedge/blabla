@@ -123,10 +123,7 @@ export function ProjectShell({
 								{group.label}
 							</div>
 							{group.items.map((item) => {
-								const resolvedHref = item.to.replace(
-									"$projectId",
-									projectId,
-								);
+								const resolvedHref = item.to.replace("$projectId", projectId);
 								const active = pathname.startsWith(resolvedHref);
 								return (
 									<Link
@@ -198,9 +195,7 @@ export function PageSection({
 		<section className={cn("flex flex-col gap-3", className)}>
 			{title || description ? (
 				<div className="flex flex-col gap-0.5">
-					{title ? (
-						<h3 className="font-medium text-sm">{title}</h3>
-					) : null}
+					{title ? <h3 className="font-medium text-sm">{title}</h3> : null}
 					{description ? (
 						<p className="text-muted-foreground text-xs">{description}</p>
 					) : null}

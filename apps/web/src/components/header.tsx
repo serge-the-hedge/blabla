@@ -1,10 +1,9 @@
+import { cn } from "@blabla/ui/lib/utils";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { Authenticated, Unauthenticated } from "convex/react";
-
 import { BrandWordmark } from "@/components/brand";
 import { ModeToggle } from "@/components/mode-toggle";
 import UserMenu from "@/components/user-menu";
-import { cn } from "@blabla/ui/lib/utils";
 
 const links = [
 	{ to: "/", label: "Home" },

@@ -212,6 +212,7 @@ export default defineSchema({
 		fieldPath: v.string(),
 		previousValue: v.union(v.string(), v.null()),
 		nextValue: v.union(v.string(), v.null()),
+		originalNextValue: v.optional(v.string()),
 		baseVersion: v.optional(v.number()),
 		status: v.union(
 			v.literal("pending"),

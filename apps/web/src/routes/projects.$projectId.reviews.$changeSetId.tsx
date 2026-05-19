@@ -1,5 +1,13 @@
 import { Badge } from "@blabla/ui/components/badge";
 import { Button } from "@blabla/ui/components/button";
+import { Card, CardContent } from "@blabla/ui/components/card";
+import {
+	Empty,
+	EmptyDescription,
+	EmptyHeader,
+	EmptyMedia,
+	EmptyTitle,
+} from "@blabla/ui/components/empty";
 import {
 	Select,
 	SelectContent,
@@ -9,14 +17,20 @@ import {
 	SelectValue,
 } from "@blabla/ui/components/select";
 import { Skeleton } from "@blabla/ui/components/skeleton";
+import { Textarea } from "@blabla/ui/components/textarea";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "@blabla/ui/components/tooltip";
 import { cn } from "@blabla/ui/lib/utils";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { Check, Download, X } from "lucide-react";
-import { useState } from "react";
+import { Check, Download, Inbox, Sparkles, Undo2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { DiffPanel } from "@/components/diff/DiffPanel";
 import { PageHeader } from "@/components/localization/project-shell";
 import { apiAny } from "@/lib/convex-api";
 import {
@@ -32,26 +46,54 @@ export const Route = createFileRoute(
 });
 
 type ReviewItemStatus = "pending" | "accepted" | "rejected" | "conflicted";
+type SourceMissingReason =
+	| "no_key"
+	| "no_project_source_locale"
+	| "source_locale_missing"
+	| "source_value_missing";
 
 type ReviewItem = {
 	_id: string;
 	fieldPath: string;
+	kind: string;
 	status: ReviewItemStatus;
-	key?: { key: string; description?: string } | null;
-	locale?: { code: string; label: string } | null;
-	sourceLocale?: { code: string; label: string } | null;
+	previousValue: string | null;
+	nextValue: string | null;
+	originalNextValue?: string;
+	key?: {
+		id: string;
+		key: string;
+		description?: string;
+		placeholders?: Array<{ name: string; type?: string; example?: string }>;
+	} | null;
+	locale?: { id: string; code: string; label: string } | null;
+	sourceLocale?: { id: string; code: string; label: string } | null;
 	sourceValue?: string | null;
-	nextValue?: string | null;
+	sourceMissingReason?: SourceMissingReason | null;
 };
 
 type ReviewChangeSet = {
+	_id: string;
 	title: string;
 	description?: string;
 	status: string;
 	items: ReviewItem[];
-	patch?: string;
-	applicablePatch?: string;
 };
+
+type StatusFilter = "all" | ReviewItemStatus;
+
+type PendingAction =
+	| { kind: "idle" }
+	| { kind: "applying" }
+	| { kind: "rejecting" }
+	| { kind: "bulk-marking"; action: "accept" | "reject" }
+	| { kind: "exporting" }
+	| { kind: "group-bulk"; keyId: string; action: "accept" | "reject" }
+	| {
+			kind: "item";
+			itemId: string;
+			action: "accept" | "reject" | "save" | "revert";
+	  };
 
 const ITEM_STATUS_VARIANT: Record<
 	ReviewItemStatus,
@@ -63,6 +105,28 @@ const ITEM_STATUS_VARIANT: Record<
 	rejected: "destructive",
 };
 
+const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
+	{ value: "all", label: "All" },
+	{ value: "pending", label: "Pending" },
+	{ value: "accepted", label: "Accepted" },
+	{ value: "rejected", label: "Rejected" },
+	{ value: "conflicted", label: "Conflicted" },
+];
+
+type ReviewGroup = {
+	groupKey: string;
+	keyId: string | null;
+	label: string;
+	description?: string;
+	placeholders?: Array<{ name: string; type?: string; example?: string }>;
+	sourceLocaleId: string | null;
+	sourceLocaleCode: string;
+	sourceLocaleLabel: string;
+	sourceValue: string | null;
+	sourceMissingReason: SourceMissingReason | null;
+	items: ReviewItem[];
+};
+
 function ReviewDetailRoute() {
 	const { changeSetId } = useParams({
 		from: "/projects/$projectId/reviews/$changeSetId",
@@ -72,50 +136,68 @@ function ReviewDetailRoute() {
 		| undefined;
 	const acceptItem = useMutation(apiAny.changeSets.acceptItem);
 	const rejectItem = useMutation(apiAny.changeSets.rejectItem);
+	const updateItem = useMutation(apiAny.changeSets.updateItem);
+	const revertItem = useMutation(apiAny.changeSets.revertItem);
 	const acceptUnmarkedItems = useMutation(
 		apiAny.changeSets.acceptUnmarkedItems,
 	);
 	const rejectUnmarkedItems = useMutation(
 		apiAny.changeSets.rejectUnmarkedItems,
 	);
+	const acceptItemsInGroup = useMutation(apiAny.changeSets.acceptItemsInGroup);
+	const rejectItemsInGroup = useMutation(apiAny.changeSets.rejectItemsInGroup);
 	const exportAcceptedByLocale = useMutation(
 		apiAny.changeSets.exportAcceptedByLocale,
 	);
 	const reviewAndApply = useMutation(apiAny.changeSets.reviewAndApply);
 	const reject = useMutation(apiAny.changeSets.reject);
-	const [isApplying, setIsApplying] = useState(false);
-	const [isRejecting, setIsRejecting] = useState(false);
-	const [isBulkMarking, setIsBulkMarking] = useState(false);
-	const [isExporting, setIsExporting] = useState(false);
-	const [showAllChanges, setShowAllChanges] = useState(false);
+
+	const [pendingAction, setPendingAction] = useState<PendingAction>({
+		kind: "idle",
+	});
+	const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 	const [acceptedExportFormat, setAcceptedExportFormat] =
 		useState<ExportFormat>("json");
 
-	const counts = { accepted: 0, conflicted: 0, pending: 0, rejected: 0 };
-	for (const item of changeSet?.items ?? []) {
-		counts[item.status] += 1;
-	}
+	const items = changeSet?.items ?? [];
+
+	const counts = useMemo(() => {
+		const tally: Record<ReviewItemStatus, number> = {
+			pending: 0,
+			accepted: 0,
+			rejected: 0,
+			conflicted: 0,
+		};
+		for (const item of items) tally[item.status] += 1;
+		return tally;
+	}, [items]);
+
+	const groupedItems = useMemo(() => groupReviewItemsByKey(items), [items]);
+
+	const visibleGroups = useMemo(() => {
+		if (statusFilter === "all") return groupedItems;
+		return groupedItems
+			.map((group) => ({
+				...group,
+				items: group.items.filter((item) => item.status === statusFilter),
+			}))
+			.filter((group) => group.items.length > 0);
+	}, [groupedItems, statusFilter]);
 
 	const canReview =
 		changeSet?.status === "open" || changeSet?.status === "draft";
 	const applicableCount = counts.accepted + counts.pending;
-	const allItemsRejected =
-		Boolean(changeSet?.items.length) &&
-		counts.rejected === changeSet?.items.length;
+	const allItemsRejected = items.length > 0 && counts.rejected === items.length;
+	const busy = pendingAction.kind !== "idle";
 	const canApply =
 		canReview &&
 		applicableCount > 0 &&
 		!allItemsRejected &&
 		counts.conflicted === 0;
-	const canUseReviewControls =
-		canReview && !isApplying && !isRejecting && !isBulkMarking && !isExporting;
-	const patch = showAllChanges
-		? (changeSet?.patch ?? "")
-		: (changeSet?.applicablePatch ?? "");
-	const groupedItems = groupReviewItemsByKey(changeSet?.items ?? []);
+	const canUseReviewControls = canReview && !busy;
 
 	async function applyReview() {
-		setIsApplying(true);
+		setPendingAction({ kind: "applying" });
 		try {
 			const result = await reviewAndApply({ changeSetId });
 			if (result.status === "applied") {
@@ -130,12 +212,12 @@ function ReviewDetailRoute() {
 				error instanceof Error ? error.message : "Could not apply review",
 			);
 		} finally {
-			setIsApplying(false);
+			setPendingAction({ kind: "idle" });
 		}
 	}
 
 	async function rejectChangeSet() {
-		setIsRejecting(true);
+		setPendingAction({ kind: "rejecting" });
 		try {
 			await reject({ changeSetId });
 			toast.success("Review rejected");
@@ -144,36 +226,19 @@ function ReviewDetailRoute() {
 				error instanceof Error ? error.message : "Could not reject review",
 			);
 		} finally {
-			setIsRejecting(false);
+			setPendingAction({ kind: "idle" });
 		}
 	}
 
-	async function setItemStatus(
-		item: ReviewItem,
-		status: "accepted" | "rejected",
-	) {
-		try {
-			if (status === "accepted") {
-				await acceptItem({ itemId: item._id });
-			} else {
-				await rejectItem({ itemId: item._id });
-			}
-		} catch (error) {
-			toast.error(
-				error instanceof Error ? error.message : "Could not update item",
-			);
-		}
-	}
-
-	async function markPending(status: "accepted" | "rejected") {
-		setIsBulkMarking(true);
+	async function markPending(action: "accept" | "reject") {
+		setPendingAction({ kind: "bulk-marking", action });
 		try {
 			const result =
-				status === "accepted"
+				action === "accept"
 					? await acceptUnmarkedItems({ changeSetId })
 					: await rejectUnmarkedItems({ changeSetId });
 			toast.success(
-				status === "accepted"
+				action === "accept"
 					? `Accepted ${result.updated} unmarked items`
 					: `Rejected ${result.updated} unmarked items`,
 			);
@@ -182,12 +247,78 @@ function ReviewDetailRoute() {
 				error instanceof Error ? error.message : "Could not update items",
 			);
 		} finally {
-			setIsBulkMarking(false);
+			setPendingAction({ kind: "idle" });
+		}
+	}
+
+	async function handleItemAction(
+		item: ReviewItem,
+		action: "accept" | "reject",
+	) {
+		setPendingAction({ kind: "item", itemId: item._id, action });
+		try {
+			if (action === "accept") await acceptItem({ itemId: item._id });
+			else await rejectItem({ itemId: item._id });
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Could not update item",
+			);
+		} finally {
+			setPendingAction({ kind: "idle" });
+		}
+	}
+
+	async function handleItemSave(item: ReviewItem, value: string) {
+		setPendingAction({ kind: "item", itemId: item._id, action: "save" });
+		try {
+			await updateItem({ itemId: item._id, nextValue: value });
+			toast.success(`${item.locale?.code ?? "Item"} updated`);
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Could not save edit",
+			);
+		} finally {
+			setPendingAction({ kind: "idle" });
+		}
+	}
+
+	async function handleItemRevert(item: ReviewItem) {
+		setPendingAction({ kind: "item", itemId: item._id, action: "revert" });
+		try {
+			await revertItem({ itemId: item._id });
+			toast.success("Restored original proposal");
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Could not revert item",
+			);
+		} finally {
+			setPendingAction({ kind: "idle" });
+		}
+	}
+
+	async function handleGroupBulk(keyId: string, action: "accept" | "reject") {
+		setPendingAction({ kind: "group-bulk", keyId, action });
+		try {
+			const result =
+				action === "accept"
+					? await acceptItemsInGroup({ changeSetId, keyId })
+					: await rejectItemsInGroup({ changeSetId, keyId });
+			toast.success(
+				action === "accept"
+					? `Accepted ${result.updated} items in this key`
+					: `Rejected ${result.updated} items in this key`,
+			);
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Could not update group",
+			);
+		} finally {
+			setPendingAction({ kind: "idle" });
 		}
 	}
 
 	async function downloadAcceptedChanges() {
-		setIsExporting(true);
+		setPendingAction({ kind: "exporting" });
 		try {
 			const result = await exportAcceptedByLocale({
 				changeSetId,
@@ -212,12 +343,12 @@ function ReviewDetailRoute() {
 				error instanceof Error ? error.message : "Could not export changes",
 			);
 		} finally {
-			setIsExporting(false);
+			setPendingAction({ kind: "idle" });
 		}
 	}
 
 	return (
-		<>
+		<TooltipProvider>
 			<PageHeader
 				title={changeSet?.title ?? "Review"}
 				description={
@@ -232,220 +363,641 @@ function ReviewDetailRoute() {
 								disabled={!canUseReviewControls}
 							>
 								<X data-icon="inline-start" />
-								{isRejecting ? "Rejecting..." : "Reject"}
+								{pendingAction.kind === "rejecting" ? "Rejecting…" : "Reject"}
 							</Button>
 							<Button
 								onClick={applyReview}
 								disabled={!canApply || !canUseReviewControls}
 							>
 								<Check data-icon="inline-start" />
-								{isApplying ? "Applying..." : "Apply review"}
+								{pendingAction.kind === "applying"
+									? "Applying…"
+									: "Apply review"}
 							</Button>
 						</>
 					) : null
 				}
 			/>
-			{changeSet ? (
-				<div className="grid grid-cols-[320px_1fr] gap-4">
-					<aside className="flex min-h-0 min-h-[520px] flex-col overflow-hidden rounded-md border bg-card">
-						<div className="border-b px-3 py-2">
-							<div className="font-medium text-sm">
-								Items ({changeSet.items.length})
-							</div>
-							<div className="mt-2 grid grid-cols-2 gap-1 text-xs">
-								<ReviewCount label="Pending" value={counts.pending} />
-								<ReviewCount label="Accepted" value={counts.accepted} />
-								<ReviewCount label="Rejected" value={counts.rejected} />
-								<ReviewCount label="Conflicted" value={counts.conflicted} />
-							</div>
-							<div className="mt-3 flex flex-wrap gap-1.5">
-								<Button
-									size="xs"
-									type="button"
-									onClick={() => markPending("accepted")}
-									disabled={!canUseReviewControls || counts.pending === 0}
-								>
-									<Check data-icon="inline-start" />
-									Accept unmarked
-								</Button>
-								<Button
-									size="xs"
-									type="button"
-									variant="outline"
-									onClick={() => markPending("rejected")}
-									disabled={!canUseReviewControls || counts.pending === 0}
-								>
-									<X data-icon="inline-start" />
-									Reject unmarked
-								</Button>
-							</div>
-						</div>
-						<div className="min-h-0 flex-1 divide-y overflow-auto">
-							{groupedItems.map((group) => (
-								<div key={group.key} className="flex flex-col gap-2 p-3">
-									<div className="flex flex-col gap-1">
-										<div className="break-all font-mono text-xs">
-											{group.label}
-										</div>
-										<div className="text-[11px] text-muted-foreground">
-											Source {group.sourceLocaleCode}:{" "}
-											<span className="text-foreground">
-												{group.sourceValue ?? "—"}
-											</span>
-										</div>
-									</div>
-									<div className="flex flex-col gap-2">
-										{group.items.map((item) => {
-											const itemControlsDisabled = !canUseReviewControls;
-											return (
-												<div
-													key={item._id}
-													className={cn(
-														"flex flex-col gap-2 rounded-md border bg-background p-2 text-xs",
-														item.status === "rejected" && "opacity-60",
-													)}
-												>
-													<div className="flex items-start justify-between gap-2">
-														<div className="min-w-0">
-															<div className="font-mono text-[11px]">
-																{item.locale?.code ?? "unknown locale"}
-															</div>
-															<div className="break-all text-[11px] text-muted-foreground">
-																{item.fieldPath}
-															</div>
-														</div>
-														<Badge
-															variant={
-																ITEM_STATUS_VARIANT[item.status] ?? "outline"
-															}
-															className="capitalize"
-														>
-															{item.status}
-														</Badge>
-													</div>
-													{item.nextValue !== undefined ? (
-														<div className="rounded-sm bg-muted px-2 py-1 text-[11px]">
-															{item.nextValue ?? "—"}
-														</div>
-													) : null}
-													{item.status === "conflicted" ? (
-														<div className="text-muted-foreground">
-															Resolve conflict by rejecting or resubmitting.
-														</div>
-													) : null}
-													<div className="flex gap-1">
-														<Button
-															size="xs"
-															onClick={() => setItemStatus(item, "accepted")}
-															disabled={
-																itemControlsDisabled ||
-																item.status === "conflicted" ||
-																item.status === "accepted"
-															}
-														>
-															<Check data-icon="inline-start" />
-															Accept
-														</Button>
-														<Button
-															size="xs"
-															variant="outline"
-															onClick={() => setItemStatus(item, "rejected")}
-															disabled={
-																itemControlsDisabled ||
-																item.status === "rejected"
-															}
-														>
-															<X data-icon="inline-start" />
-															Reject
-														</Button>
-													</div>
-												</div>
-											);
-										})}
-									</div>
-								</div>
+			{changeSet === undefined ? (
+				<ReviewSkeleton />
+			) : (
+				<div className="flex flex-col gap-4">
+					<ReviewToolbar
+						counts={counts}
+						totalCount={items.length}
+						statusFilter={statusFilter}
+						onStatusFilterChange={setStatusFilter}
+						canReview={canReview}
+						pendingAction={pendingAction}
+						onMarkPending={markPending}
+						onDownloadAccepted={downloadAcceptedChanges}
+						acceptedExportFormat={acceptedExportFormat}
+						onExportFormatChange={setAcceptedExportFormat}
+					/>
+					{visibleGroups.length === 0 ? (
+						<Empty className="border">
+							<EmptyHeader>
+								<EmptyMedia variant="icon">
+									<Inbox />
+								</EmptyMedia>
+								<EmptyTitle>
+									{groupedItems.length === 0
+										? "No items in this review"
+										: "No items match this filter"}
+								</EmptyTitle>
+								<EmptyDescription>
+									{groupedItems.length === 0
+										? "This change set is empty."
+										: "Try selecting another status above."}
+								</EmptyDescription>
+							</EmptyHeader>
+						</Empty>
+					) : (
+						<div className="flex flex-col gap-3">
+							{visibleGroups.map((group) => (
+								<KeyGroupCard
+									key={group.groupKey}
+									group={group}
+									canReview={canReview}
+									pendingAction={pendingAction}
+									onAcceptItem={(item) => handleItemAction(item, "accept")}
+									onRejectItem={(item) => handleItemAction(item, "reject")}
+									onSaveItem={handleItemSave}
+									onRevertItem={handleItemRevert}
+									onAcceptGroup={(keyId) => handleGroupBulk(keyId, "accept")}
+									onRejectGroup={(keyId) => handleGroupBulk(keyId, "reject")}
+								/>
 							))}
 						</div>
-					</aside>
-					<div className="flex min-w-0 flex-col gap-2">
-						<div className="flex flex-wrap justify-end gap-2">
-							<Select
-								value={acceptedExportFormat}
-								onValueChange={(value) =>
-									setAcceptedExportFormat(value as ExportFormat)
-								}
-							>
-								<SelectTrigger size="sm" className="w-28">
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectGroup>
-										<SelectItem value="json">JSON</SelectItem>
-										<SelectItem value="arb">ARB</SelectItem>
-									</SelectGroup>
-								</SelectContent>
-							</Select>
-							<Button
-								size="sm"
-								variant="outline"
-								onClick={downloadAcceptedChanges}
-								disabled={counts.accepted === 0 || isExporting}
-							>
-								<Download data-icon="inline-start" />
-								Download approved
-							</Button>
-							<Button
-								size="sm"
-								variant="outline"
-								onClick={() => setShowAllChanges((value) => !value)}
-							>
-								{showAllChanges ? "Apply preview" : "All proposed changes"}
-							</Button>
-						</div>
-						<DiffPanel patch={patch} />
-					</div>
-				</div>
-			) : (
-				<div className="grid grid-cols-[320px_1fr] gap-4">
-					<Skeleton className="h-[520px] w-full" />
-					<Skeleton className="h-[520px] w-full" />
+					)}
 				</div>
 			)}
-		</>
+		</TooltipProvider>
 	);
 }
 
-function groupReviewItemsByKey(items: ReviewItem[]) {
-	const groups = new Map<
-		string,
-		{
-			key: string;
-			label: string;
-			sourceLocaleCode: string;
-			sourceValue: string | null;
-			items: ReviewItem[];
-		}
-	>();
+function ReviewToolbar({
+	counts,
+	totalCount,
+	statusFilter,
+	onStatusFilterChange,
+	canReview,
+	pendingAction,
+	onMarkPending,
+	onDownloadAccepted,
+	acceptedExportFormat,
+	onExportFormatChange,
+}: {
+	counts: Record<ReviewItemStatus, number>;
+	totalCount: number;
+	statusFilter: StatusFilter;
+	onStatusFilterChange: (next: StatusFilter) => void;
+	canReview: boolean;
+	pendingAction: PendingAction;
+	onMarkPending: (action: "accept" | "reject") => void;
+	onDownloadAccepted: () => void;
+	acceptedExportFormat: ExportFormat;
+	onExportFormatChange: (format: ExportFormat) => void;
+}) {
+	const busy = pendingAction.kind !== "idle";
+	const isBulkAccepting =
+		pendingAction.kind === "bulk-marking" && pendingAction.action === "accept";
+	const isBulkRejecting =
+		pendingAction.kind === "bulk-marking" && pendingAction.action === "reject";
+	const isExporting = pendingAction.kind === "exporting";
+
+	return (
+		<div className="sticky top-0 z-10 -mx-6 flex flex-col gap-2 border-b bg-background/95 px-6 py-3 backdrop-blur">
+			<div className="flex flex-wrap items-center gap-2">
+				<span className="font-medium text-xs">
+					{totalCount} {totalCount === 1 ? "item" : "items"}
+				</span>
+				<div className="flex flex-wrap gap-1">
+					{STATUS_FILTERS.map((filter) => {
+						const value =
+							filter.value === "all" ? totalCount : counts[filter.value];
+						const active = statusFilter === filter.value;
+						return (
+							<Button
+								key={filter.value}
+								size="xs"
+								type="button"
+								variant={active ? "default" : "outline"}
+								onClick={() => onStatusFilterChange(filter.value)}
+							>
+								{filter.label}
+								<span
+									className={cn(
+										"ml-1 rounded-sm px-1 font-mono text-[10px]",
+										active
+											? "bg-primary-foreground/15 text-primary-foreground"
+											: "bg-muted text-muted-foreground",
+									)}
+								>
+									{value}
+								</span>
+							</Button>
+						);
+					})}
+				</div>
+			</div>
+			<div className="flex flex-wrap items-center justify-between gap-2">
+				<div className="flex flex-wrap gap-1.5">
+					<Button
+						size="xs"
+						type="button"
+						onClick={() => onMarkPending("accept")}
+						disabled={!canReview || busy || counts.pending === 0}
+					>
+						<Check data-icon="inline-start" />
+						{isBulkAccepting ? "Accepting…" : "Accept unmarked"}
+					</Button>
+					<Button
+						size="xs"
+						type="button"
+						variant="outline"
+						onClick={() => onMarkPending("reject")}
+						disabled={!canReview || busy || counts.pending === 0}
+					>
+						<X data-icon="inline-start" />
+						{isBulkRejecting ? "Rejecting…" : "Reject unmarked"}
+					</Button>
+				</div>
+				<div className="flex flex-wrap items-center gap-2">
+					<Select
+						value={acceptedExportFormat}
+						onValueChange={(value) =>
+							onExportFormatChange(value as ExportFormat)
+						}
+					>
+						<SelectTrigger size="sm" className="w-24">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectGroup>
+								<SelectItem value="json">JSON</SelectItem>
+								<SelectItem value="arb">ARB</SelectItem>
+							</SelectGroup>
+						</SelectContent>
+					</Select>
+					<Button
+						size="sm"
+						variant="outline"
+						onClick={onDownloadAccepted}
+						disabled={counts.accepted === 0 || busy}
+					>
+						<Download data-icon="inline-start" />
+						{isExporting ? "Exporting…" : "Download approved"}
+					</Button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function KeyGroupCard({
+	group,
+	canReview,
+	pendingAction,
+	onAcceptItem,
+	onRejectItem,
+	onSaveItem,
+	onRevertItem,
+	onAcceptGroup,
+	onRejectGroup,
+}: {
+	group: ReviewGroup;
+	canReview: boolean;
+	pendingAction: PendingAction;
+	onAcceptItem: (item: ReviewItem) => void;
+	onRejectItem: (item: ReviewItem) => void;
+	onSaveItem: (item: ReviewItem, value: string) => Promise<void>;
+	onRevertItem: (item: ReviewItem) => void;
+	onAcceptGroup: (keyId: string) => void;
+	onRejectGroup: (keyId: string) => void;
+}) {
+	const sourceInItems = group.items.some(
+		(item) => item.locale?.id === group.sourceLocaleId,
+	);
+	const busy = pendingAction.kind !== "idle";
+	const groupBusy =
+		pendingAction.kind === "group-bulk" &&
+		group.keyId !== null &&
+		pendingAction.keyId === group.keyId;
+	const isAcceptingGroup = groupBusy && pendingAction.action === "accept";
+	const isRejectingGroup = groupBusy && pendingAction.action === "reject";
+
+	const canAcceptGroup = group.items.some(
+		(item) => item.status !== "accepted" && item.status !== "conflicted",
+	);
+	const canRejectGroup = group.items.some((item) => item.status !== "rejected");
+
+	const placeholderText =
+		group.placeholders && group.placeholders.length > 0
+			? group.placeholders
+					.map((p) =>
+						p.type && p.type !== "string" ? `${p.name} (${p.type})` : p.name,
+					)
+					.join(", ")
+			: null;
+
+	return (
+		<Card>
+			<div className="flex flex-col gap-1 px-4">
+				<div className="flex flex-wrap items-baseline justify-between gap-2">
+					<code className="break-all font-mono text-sm">{group.label}</code>
+					<span className="text-[11px] text-muted-foreground">
+						{group.items.length}{" "}
+						{group.items.length === 1 ? "locale" : "locales"}
+					</span>
+				</div>
+				{group.description ? (
+					<p className="text-muted-foreground text-xs">{group.description}</p>
+				) : null}
+				{placeholderText ? (
+					<p className="text-[11px] text-muted-foreground">
+						<span className="font-medium">ICU placeholders:</span>{" "}
+						<span className="font-mono">{placeholderText}</span>
+					</p>
+				) : null}
+			</div>
+			<CardContent>
+				<div className="-mx-1 flex items-stretch gap-2 overflow-x-auto px-1 pb-1">
+					{!sourceInItems ? (
+						<SourceLocaleColumn
+							sourceLocaleCode={group.sourceLocaleCode}
+							sourceLocaleLabel={group.sourceLocaleLabel}
+							sourceValue={group.sourceValue}
+							sourceMissingReason={group.sourceMissingReason}
+						/>
+					) : null}
+					{group.items.map((item) => (
+						<ReviewItemEditor
+							key={item._id}
+							item={item}
+							isSource={item.locale?.id === group.sourceLocaleId}
+							canReview={canReview}
+							pendingAction={pendingAction}
+							onAccept={onAcceptItem}
+							onReject={onRejectItem}
+							onSave={onSaveItem}
+							onRevert={onRevertItem}
+						/>
+					))}
+				</div>
+			</CardContent>
+			{group.keyId ? (
+				<div className="flex flex-wrap justify-end gap-1.5 border-t px-4 pt-3">
+					<Button
+						size="xs"
+						type="button"
+						onClick={() => group.keyId && onAcceptGroup(group.keyId)}
+						disabled={!canReview || busy || !canAcceptGroup}
+					>
+						<Check data-icon="inline-start" />
+						{isAcceptingGroup ? "Accepting…" : "Accept all in key"}
+					</Button>
+					<Button
+						size="xs"
+						type="button"
+						variant="outline"
+						onClick={() => group.keyId && onRejectGroup(group.keyId)}
+						disabled={!canReview || busy || !canRejectGroup}
+					>
+						<X data-icon="inline-start" />
+						{isRejectingGroup ? "Rejecting…" : "Reject all in key"}
+					</Button>
+				</div>
+			) : null}
+		</Card>
+	);
+}
+
+function ReviewItemEditor({
+	item,
+	isSource,
+	canReview,
+	pendingAction,
+	onAccept,
+	onReject,
+	onSave,
+	onRevert,
+}: {
+	item: ReviewItem;
+	isSource: boolean;
+	canReview: boolean;
+	pendingAction: PendingAction;
+	onAccept: (item: ReviewItem) => void;
+	onReject: (item: ReviewItem) => void;
+	onSave: (item: ReviewItem, value: string) => Promise<void>;
+	onRevert: (item: ReviewItem) => void;
+}) {
+	const initialValue = item.nextValue ?? "";
+	const [draft, setDraft] = useState(initialValue);
+
+	useEffect(() => {
+		setDraft(initialValue);
+	}, [initialValue]);
+
+	const dirty = draft !== initialValue;
+	const hasOriginal = item.originalNextValue !== undefined;
+	const hasBeenEdited =
+		hasOriginal && item.nextValue !== item.originalNextValue;
+	const showUndo = hasBeenEdited && !dirty;
+
+	const isThisItemBusy =
+		pendingAction.kind === "item" && pendingAction.itemId === item._id;
+	const isSaving =
+		isThisItemBusy &&
+		pendingAction.kind === "item" &&
+		pendingAction.action === "save";
+	const isReverting =
+		isThisItemBusy &&
+		pendingAction.kind === "item" &&
+		pendingAction.action === "revert";
+	const isAccepting =
+		isThisItemBusy &&
+		pendingAction.kind === "item" &&
+		pendingAction.action === "accept";
+	const isRejecting =
+		isThisItemBusy &&
+		pendingAction.kind === "item" &&
+		pendingAction.action === "reject";
+
+	const trimmedEmpty = draft.trim().length === 0;
+	const saveDisabled = !canReview || isThisItemBusy || trimmedEmpty;
+	const editorDisabled = !canReview || isThisItemBusy;
+	const acceptDisabled =
+		!canReview ||
+		isThisItemBusy ||
+		dirty ||
+		item.status === "conflicted" ||
+		item.status === "accepted";
+	const rejectDisabled =
+		!canReview || isThisItemBusy || dirty || item.status === "rejected";
+
+	const hasPrevious = item.previousValue !== null;
+	const previousDiffers = hasPrevious && item.previousValue !== item.nextValue;
+
+	return (
+		<div
+			className={cn(
+				"flex w-80 shrink-0 flex-col gap-1.5 rounded-md border bg-background p-2 transition-colors",
+				item.status === "rejected" && "opacity-60",
+				dirty && "border-ring/50 ring-1 ring-ring/20",
+				item.status === "conflicted" &&
+					"border-destructive/40 bg-destructive/5",
+				isSource && "border-brand/30 bg-brand/5",
+			)}
+		>
+			<div className="flex items-center justify-between gap-2">
+				<div className="flex min-w-0 items-center gap-1.5">
+					{isSource ? (
+						<Sparkles
+							aria-label="Source locale"
+							className="size-3 shrink-0 text-brand"
+						/>
+					) : null}
+					<span className="font-medium font-mono text-[11px]">
+						{item.locale?.code ?? "?"}
+					</span>
+					<span className="truncate text-[10px] text-muted-foreground">
+						{item.locale?.label ?? item.fieldPath}
+					</span>
+				</div>
+				<Badge
+					variant={ITEM_STATUS_VARIANT[item.status] ?? "outline"}
+					className="shrink-0 capitalize"
+				>
+					{item.status}
+				</Badge>
+			</div>
+
+			<div className="flex flex-col gap-0.5">
+				<span className="text-[9px] text-muted-foreground uppercase tracking-wider">
+					Before
+				</span>
+				<div
+					className={cn(
+						"min-h-7 rounded-sm border-l-2 px-2 py-1 text-[11px]",
+						previousDiffers
+							? "border-destructive/30 bg-destructive/5 text-muted-foreground line-through"
+							: "border-muted bg-muted/30 text-muted-foreground",
+					)}
+					dir="auto"
+				>
+					{hasPrevious ? (
+						item.previousValue
+					) : (
+						<span className="italic">(no previous value)</span>
+					)}
+				</div>
+			</div>
+
+			<div className="flex flex-col gap-0.5">
+				<span className="text-[9px] text-muted-foreground uppercase tracking-wider">
+					After
+				</span>
+				<Textarea
+					className="min-h-16 text-xs leading-relaxed"
+					value={draft}
+					onChange={(event) => setDraft(event.target.value)}
+					placeholder="—"
+					dir="auto"
+					disabled={editorDisabled}
+				/>
+			</div>
+
+			{item.status === "conflicted" ? (
+				<div className="text-[10px] text-destructive">
+					Live value changed since this proposal. Reject or resubmit.
+				</div>
+			) : null}
+
+			<div className="flex flex-wrap items-center justify-between gap-1.5">
+				<div className="flex flex-wrap gap-1">
+					{dirty ? (
+						<>
+							<Button
+								size="xs"
+								variant="ghost"
+								type="button"
+								onClick={() => setDraft(initialValue)}
+								disabled={isThisItemBusy}
+							>
+								Reset
+							</Button>
+							<Button
+								size="xs"
+								type="button"
+								onClick={() => onSave(item, draft)}
+								disabled={saveDisabled}
+							>
+								{isSaving ? "Saving…" : "Save"}
+							</Button>
+						</>
+					) : showUndo ? (
+						<Tooltip>
+							<TooltipTrigger
+								render={
+									<Button
+										size="xs"
+										variant="outline"
+										type="button"
+										onClick={() => onRevert(item)}
+										disabled={!canReview || isThisItemBusy}
+									>
+										<Undo2 data-icon="inline-start" />
+										{isReverting ? "Reverting…" : "Edited"}
+									</Button>
+								}
+							/>
+							<TooltipContent>
+								Restore agent proposal:{" "}
+								<em className="not-italic">{item.originalNextValue}</em>
+							</TooltipContent>
+						</Tooltip>
+					) : null}
+				</div>
+				<div className="flex items-center gap-1">
+					<Button
+						size="xs"
+						type="button"
+						onClick={() => onAccept(item)}
+						disabled={acceptDisabled}
+						aria-label={`Accept ${item.locale?.code ?? "item"}`}
+						title={dirty ? "Save your edit first" : undefined}
+					>
+						<Check data-icon="inline-start" />
+						{isAccepting ? "…" : "Accept"}
+					</Button>
+					<Button
+						size="xs"
+						type="button"
+						variant="outline"
+						onClick={() => onReject(item)}
+						disabled={rejectDisabled}
+						aria-label={`Reject ${item.locale?.code ?? "item"}`}
+						title={dirty ? "Save your edit first" : undefined}
+					>
+						<X data-icon="inline-start" />
+						{isRejecting ? "…" : "Reject"}
+					</Button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function SourceLocaleColumn({
+	sourceLocaleCode,
+	sourceLocaleLabel,
+	sourceValue,
+	sourceMissingReason,
+}: {
+	sourceLocaleCode: string;
+	sourceLocaleLabel: string;
+	sourceValue: string | null;
+	sourceMissingReason: SourceMissingReason | null;
+}) {
+	const missingLabel = sourceMissingReason
+		? sourceMissingReasonLabel(sourceMissingReason)
+		: null;
+	return (
+		<div className="sticky left-0 z-[1] flex w-72 shrink-0 flex-col gap-1.5 rounded-md border border-brand/30 bg-brand/5 p-2 shadow-sm">
+			<div className="flex items-center gap-1.5">
+				<Sparkles aria-label="Source locale" className="size-3 text-brand" />
+				<span className="font-medium font-mono text-[11px]">
+					{sourceLocaleCode}
+				</span>
+				<span className="truncate text-[10px] text-muted-foreground">
+					{sourceLocaleLabel}
+				</span>
+				<span className="ml-auto shrink-0 text-[9px] text-muted-foreground uppercase tracking-wider">
+					Source · reference
+				</span>
+			</div>
+			<div
+				className="min-h-16 whitespace-pre-wrap rounded-sm bg-background/60 px-2 py-1.5 text-xs leading-relaxed"
+				dir="auto"
+			>
+				{sourceValue && sourceValue.trim().length > 0 ? (
+					sourceValue
+				) : (
+					<span className="text-muted-foreground">
+						{missingLabel ?? "No source value"}
+					</span>
+				)}
+			</div>
+		</div>
+	);
+}
+
+function sourceMissingReasonLabel(reason: SourceMissingReason) {
+	switch (reason) {
+		case "no_key":
+			return "No string key";
+		case "no_project_source_locale":
+			return "No project source locale";
+		case "source_locale_missing":
+			return "Source locale unavailable";
+		case "source_value_missing":
+			return "No source value";
+	}
+}
+
+function ReviewSkeleton() {
+	return (
+		<div className="flex flex-col gap-3">
+			<Skeleton className="h-16 w-full" />
+			<Skeleton className="h-48 w-full" />
+			<Skeleton className="h-48 w-full" />
+		</div>
+	);
+}
+
+function groupReviewItemsByKey(items: ReviewItem[]): ReviewGroup[] {
+	const groups = new Map<string, ReviewGroup>();
 	for (const item of items) {
-		const key = item.key?.key ?? item.fieldPath;
-		const group = groups.get(key) ?? {
-			key,
-			label: item.key?.key ?? item.fieldPath,
+		const normalizedFieldPath = normalizeReviewFieldPath(item.fieldPath);
+		const groupKey = item.key?.key ?? normalizedFieldPath;
+		const existing = groups.get(groupKey);
+		if (existing) {
+			existing.items.push(item);
+			continue;
+		}
+		groups.set(groupKey, {
+			groupKey,
+			keyId: item.key?.id ?? null,
+			label: item.key?.key ?? normalizedFieldPath,
+			description: item.key?.description,
+			placeholders: item.key?.placeholders,
+			sourceLocaleId: item.sourceLocale?.id ?? null,
 			sourceLocaleCode: item.sourceLocale?.code ?? "source",
+			sourceLocaleLabel: item.sourceLocale?.label ?? "Source",
 			sourceValue: item.sourceValue ?? null,
-			items: [],
-		};
-		group.items.push(item);
-		groups.set(key, group);
+			sourceMissingReason: item.sourceMissingReason ?? null,
+			items: [item],
+		});
+	}
+	for (const group of groups.values()) {
+		group.items.sort((a, b) => {
+			const aIsSource = a.locale?.id === group.sourceLocaleId;
+			const bIsSource = b.locale?.id === group.sourceLocaleId;
+			if (aIsSource && !bIsSource) return -1;
+			if (bIsSource && !aIsSource) return 1;
+			const codeA = a.locale?.code ?? "";
+			const codeB = b.locale?.code ?? "";
+			return codeA.localeCompare(codeB);
+		});
 	}
 	return Array.from(groups.values());
 }
 
-function ReviewCount({ label, value }: { label: string; value: number }) {
-	return (
-		<div className="rounded-md bg-muted px-2 py-1">
-			<div className="text-muted-foreground">{label}</div>
-			<div className="font-medium text-foreground">{value}</div>
-		</div>
-	);
+function normalizeReviewFieldPath(fieldPath: string) {
+	const localeMatch = fieldPath.match(/^locales\/[^/]+\/(.+)\.json$/);
+	if (localeMatch?.[1]) return localeMatch[1];
+	const metadataMatch = fieldPath.match(/^keys\/(.+)\.tags\.json$/);
+	if (metadataMatch?.[1]) return metadataMatch[1];
+	return fieldPath;
 }

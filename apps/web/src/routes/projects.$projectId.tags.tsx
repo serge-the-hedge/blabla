@@ -10,7 +10,11 @@ import {
 import { Field, FieldGroup, FieldLabel } from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
 import { Skeleton } from "@blabla/ui/components/skeleton";
-import { createFileRoute, useParams } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	useNavigate,
+	useParams,
+} from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { Plus, Tags as TagsIcon } from "lucide-react";
 import { useState } from "react";
@@ -26,10 +30,20 @@ export const Route = createFileRoute("/projects/$projectId/tags")({
 	component: TagsRoute,
 });
 
+type TagRow = {
+	_id: string;
+	name: string;
+	slug: string;
+	color?: string;
+};
+
 function TagsRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/tags" });
+	const navigate = useNavigate({ from: "/projects/$projectId/tags" });
 	const project = useQuery(apiAny.projects.get, { projectId });
-	const tags = useQuery(apiAny.tags.list, { projectId });
+	const tags = useQuery(apiAny.tags.list, { projectId }) as
+		| TagRow[]
+		| undefined;
 	const upsert = useMutation(apiAny.tags.upsert);
 	const archive = useMutation(apiAny.tags.archive);
 	const [name, setName] = useState("");
@@ -40,6 +54,14 @@ function TagsRoute() {
 		await upsert({ projectId, name, color });
 		setName("");
 		toast.success("Tag saved");
+	}
+
+	function openStringsForTag(tag: { slug: string }) {
+		navigate({
+			to: "/projects/$projectId/strings",
+			params: { projectId },
+			search: { tag: tag.slug },
+		});
 	}
 
 	return (
@@ -100,7 +122,7 @@ function TagsRoute() {
 				) : (
 					<Card size="sm">
 						<CardContent className="divide-y">
-							{tags.map((tag: any) => (
+							{tags.map((tag) => (
 								<div
 									key={tag._id}
 									className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
@@ -111,12 +133,16 @@ function TagsRoute() {
 											style={{ backgroundColor: tag.color }}
 											aria-hidden
 										/>
-										<div className="flex flex-col">
+										<button
+											type="button"
+											className="flex min-w-0 flex-col text-left"
+											onClick={() => openStringsForTag(tag)}
+										>
 											<span className="font-medium text-sm">{tag.name}</span>
-											<span className="font-mono text-muted-foreground text-xs">
+											<span className="font-mono text-muted-foreground text-xs hover:underline">
 												{tag.slug}
 											</span>
-										</div>
+										</button>
 									</div>
 									<Button
 										size="sm"

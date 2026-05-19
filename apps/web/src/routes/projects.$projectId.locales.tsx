@@ -73,10 +73,7 @@ function LocalesRoute() {
 										placeholder="Armenian"
 									/>
 								</Field>
-								<Button
-									type="submit"
-									disabled={!code.trim() || !label.trim()}
-								>
+								<Button type="submit" disabled={!code.trim() || !label.trim()}>
 									<Plus data-icon="inline-start" />
 									Add locale
 								</Button>
@@ -109,9 +106,14 @@ function LocalesRoute() {
 								>
 									<div className="flex min-w-0 flex-col">
 										<div className="flex items-center gap-2">
-											<span className="font-medium text-sm">{locale.label}</span>
+											<span className="font-medium text-sm">
+												{locale.label}
+											</span>
 											{locale.isSource ? (
-												<Badge variant="outline" className="border-brand/40 text-brand">
+												<Badge
+													variant="outline"
+													className="border-brand/40 text-brand"
+												>
 													Source
 												</Badge>
 											) : null}

@@ -37,6 +37,13 @@ export const Route = createFileRoute("/projects")({
 	component: ProjectsRoute,
 });
 
+type ProjectListRow = {
+	_id: string;
+	name: string;
+	slug: string;
+	role: string;
+};
+
 function ProjectsHeader() {
 	return (
 		<div className="flex items-end justify-between gap-3">
@@ -67,7 +74,9 @@ function ProjectsGridSkeleton() {
 }
 
 function ProjectsContent() {
-	const projects = useQuery(apiAny.projects.listMine);
+	const projects = useQuery(apiAny.projects.listMine) as
+		| ProjectListRow[]
+		| undefined;
 
 	return (
 		<div className="mx-auto flex h-full max-w-5xl flex-col gap-6 overflow-auto px-6 py-8">
@@ -96,11 +105,12 @@ function ProjectsContent() {
 				</Empty>
 			) : (
 				<div className="grid gap-3 md:grid-cols-2">
-					{projects.map((project: any) => (
+					{projects.map((project) => (
 						<Link
 							key={project._id}
 							to="/projects/$projectId/strings"
 							params={{ projectId: project._id }}
+							search={{ tag: undefined }}
 							className="group outline-none focus-visible:ring-2 focus-visible:ring-ring"
 						>
 							<Card className="h-full transition-colors group-hover:bg-muted/40">

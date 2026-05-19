@@ -16,7 +16,6 @@
 		"@blabla/ui": "workspace:*",
 		"@convex-dev/better-auth": "catalog:",
 		"@hookform/resolvers": "^5.2.2",
-		"@pierre/diffs": "^1.1.22",
 		"@tailwindcss/vite": "^4.2.2",
 		"@tanstack/react-form": "^1.28.0",
 		"@tanstack/react-router": "^1.168.22",

@@ -23,6 +23,7 @@ function ProjectIndexRoute() {
 			navigate({
 				to: "/projects/$projectId/strings",
 				params: { projectId },
+				search: { tag: undefined },
 				replace: true,
 			});
 		}

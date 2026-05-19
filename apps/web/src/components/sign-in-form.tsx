@@ -78,7 +78,9 @@ export default function SignInForm({
 			<Card>
 				<CardHeader className="sr-only">
 					<CardTitle>Sign in</CardTitle>
-					<CardDescription>Sign in with your email and password</CardDescription>
+					<CardDescription>
+						Sign in with your email and password
+					</CardDescription>
 				</CardHeader>
 				<CardContent>
 					<form
@@ -142,7 +144,10 @@ export default function SignInForm({
 										disabled={!canSubmit || isSubmitting}
 									>
 										{isSubmitting ? (
-											<Loader2 data-icon="inline-start" className="animate-spin" />
+											<Loader2
+												data-icon="inline-start"
+												className="animate-spin"
+											/>
 										) : null}
 										{isSubmitting ? "Signing in…" : "Sign in"}
 									</Button>

@@ -164,7 +164,10 @@ export default function SignUpForm({
 										disabled={!canSubmit || isSubmitting}
 									>
 										{isSubmitting ? (
-											<Loader2 data-icon="inline-start" className="animate-spin" />
+											<Loader2
+												data-icon="inline-start"
+												className="animate-spin"
+											/>
 										) : null}
 										{isSubmitting ? "Creating account…" : "Create account"}
 									</Button>

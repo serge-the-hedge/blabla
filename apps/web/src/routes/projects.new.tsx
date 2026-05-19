@@ -59,6 +59,7 @@ function NewProjectRoute() {
 		await navigate({
 			to: "/projects/$projectId/strings",
 			params: { projectId },
+			search: { tag: undefined },
 		});
 	}
 
