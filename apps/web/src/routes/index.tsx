@@ -20,7 +20,7 @@ import {
 	Tags,
 } from "lucide-react";
 
-import { apiAny } from "@/lib/convex-api";
+import { api } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/")({
 	component: HomeComponent,
@@ -87,7 +87,7 @@ function StatusPill({ status }: { status: "ok" | "loading" | "error" }) {
 }
 
 function HomeComponent() {
-	const healthCheck = useQuery(apiAny.healthCheck.get);
+	const healthCheck = useQuery(api.healthCheck.get);
 	const status: "ok" | "loading" | "error" =
 		healthCheck === "OK"
 			? "ok"

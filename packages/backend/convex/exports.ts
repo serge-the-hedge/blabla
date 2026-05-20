@@ -44,11 +44,13 @@ async function selectedKeys(
 		(key: Doc<"translationKeys">) => key.archivedAt === undefined,
 	);
 	if (selection.type === "keys" && selection.keys) {
+		if (selection.keys.length === 0) return [];
 		const selected = new Set(selection.keys);
 		return activeKeys.filter((key: Doc<"translationKeys">) =>
 			selected.has(key.key),
 		);
 	}
+	if (selection.type === "keys") return [];
 	if (selection.type === "tag" && selection.tag) {
 		const tag = await ctx.db
 			.query("tags")
@@ -62,6 +64,7 @@ async function selectedKeys(
 				)
 			: [];
 	}
+	if (selection.type === "tag") return [];
 	if (selection.type === "screen" && selection.screen) {
 		const screen = await ctx.db
 			.query("screens")
@@ -75,6 +78,7 @@ async function selectedKeys(
 				)
 			: [];
 	}
+	if (selection.type === "screen") return [];
 	return activeKeys;
 }
 

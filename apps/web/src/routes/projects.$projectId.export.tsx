@@ -19,6 +19,7 @@ import { Textarea } from "@blabla/ui/components/textarea";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { Copy, Download } from "lucide-react";
+import type { FormEvent } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -26,7 +27,7 @@ import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
-import { apiAny } from "@/lib/convex-api";
+import { api, convexId } from "@/lib/convex-api";
 import {
 	buildExportFileName,
 	downloadExportFile,
@@ -45,10 +46,11 @@ type LocaleOption = {
 
 function ExportRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/export" });
-	const project = useQuery(apiAny.projects.get, { projectId });
-	const locales = useQuery(apiAny.locales.list, { projectId });
-	const exportJson = useMutation(apiAny.exports.startJsonExport);
-	const exportArb = useMutation(apiAny.exports.startArbExport);
+	const convexProjectId = convexId<"projects">(projectId);
+	const project = useQuery(api.projects.get, { projectId: convexProjectId });
+	const locales = useQuery(api.locales.list, { projectId: convexProjectId });
+	const exportJson = useMutation(api.exports.startJsonExport);
+	const exportArb = useMutation(api.exports.startArbExport);
 	const [format, setFormat] = useState<ExportFormat>("json");
 	const [localeCode, setLocaleCode] = useState("");
 	const [selectionType, setSelectionType] = useState<SelectionType>("all");
@@ -56,7 +58,7 @@ function ExportRoute() {
 	const [content, setContent] = useState("");
 	const [generatedFileName, setGeneratedFileName] = useState("");
 
-	async function submit(event: React.FormEvent) {
+	async function submit(event: FormEvent) {
 		event.preventDefault();
 		const selection =
 			selectionType === "keys"
@@ -74,8 +76,16 @@ function ExportRoute() {
 						: { type: "all" as const };
 		const result =
 			format === "json"
-				? await exportJson({ projectId, localeCode, selection })
-				: await exportArb({ projectId, localeCode, selection });
+				? await exportJson({
+						projectId: convexProjectId,
+						localeCode,
+						selection,
+					})
+				: await exportArb({
+						projectId: convexProjectId,
+						localeCode,
+						selection,
+					});
 		setContent(result.content ?? "");
 		setGeneratedFileName(
 			buildExportFileName({

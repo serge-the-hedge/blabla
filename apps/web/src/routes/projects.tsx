@@ -31,7 +31,7 @@ import {
 import { ArrowUpRight, FolderKanban, Plus } from "lucide-react";
 
 import SignInForm from "@/components/sign-in-form";
-import { apiAny } from "@/lib/convex-api";
+import { api } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects")({
 	component: ProjectsRoute,
@@ -74,7 +74,7 @@ function ProjectsGridSkeleton() {
 }
 
 function ProjectsContent() {
-	const projects = useQuery(apiAny.projects.listMine) as
+	const projects = useQuery(api.projects.listMine) as
 		| ProjectListRow[]
 		| undefined;
 

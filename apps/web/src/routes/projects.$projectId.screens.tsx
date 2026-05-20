@@ -13,6 +13,7 @@ import { Skeleton } from "@blabla/ui/components/skeleton";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { Plus, ScrollText } from "lucide-react";
+import type { FormEvent } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -20,7 +21,7 @@ import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
-import { apiAny } from "@/lib/convex-api";
+import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects/$projectId/screens")({
 	component: ScreensRoute,
@@ -28,15 +29,16 @@ export const Route = createFileRoute("/projects/$projectId/screens")({
 
 function ScreensRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/screens" });
-	const project = useQuery(apiAny.projects.get, { projectId });
-	const screens = useQuery(apiAny.screens.list, { projectId });
-	const upsert = useMutation(apiAny.screens.upsert);
-	const archive = useMutation(apiAny.screens.archive);
+	const convexProjectId = convexId<"projects">(projectId);
+	const project = useQuery(api.projects.get, { projectId: convexProjectId });
+	const screens = useQuery(api.screens.list, { projectId: convexProjectId });
+	const upsert = useMutation(api.screens.upsert);
+	const archive = useMutation(api.screens.archive);
 	const [name, setName] = useState("");
 
-	async function submit(event: React.FormEvent) {
+	async function submit(event: FormEvent) {
 		event.preventDefault();
-		await upsert({ projectId, name });
+		await upsert({ projectId: convexProjectId, name });
 		setName("");
 		toast.success("Screen saved");
 	}

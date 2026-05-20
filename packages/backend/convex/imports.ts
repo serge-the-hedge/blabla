@@ -3,7 +3,7 @@ import { ConvexError, v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { requireUser } from "./auth";
-import { makeSearchText, now, slugify } from "./lib";
+import { makeSearchText, normalizeLocaleCode, now, slugify } from "./lib";
 import { requireEditor, requireViewer } from "./permissions";
 import { upsertTranslationValue } from "./values";
 
@@ -64,6 +64,12 @@ async function findOrCreateScreen(
 ) {
 	if (!screenSlug) return undefined;
 	const slug = slugify(screenSlug);
+	if (!slug) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Screen slug is required.",
+		});
+	}
 	const existing = await ctx.db
 		.query("screens")
 		.withIndex("by_project_slug", (q: any) =>
@@ -123,7 +129,8 @@ async function importMessages(
 		actorId: string;
 	},
 ) {
-	const locale = await findLocale(ctx, args.projectId, args.localeCode);
+	const localeCode = normalizeLocaleCode(args.localeCode);
+	const locale = await findLocale(ctx, args.projectId, localeCode);
 	const screenId = await findOrCreateScreen(
 		ctx,
 		args.projectId,

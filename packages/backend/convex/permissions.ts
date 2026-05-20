@@ -30,6 +30,7 @@ export async function requireProjectRole(
 	minimumRole: Role,
 ): Promise<{ userId: string; member: Doc<"projectMembers"> }> {
 	const user = await requireUser(ctx);
+	await assertProjectExists(ctx, projectId);
 	const member = await getMembership(ctx, projectId, user.id);
 	if (!member || roleRank[member.role] < roleRank[minimumRole]) {
 		throw new ConvexError({

@@ -339,6 +339,41 @@ export const addItem = mutation({
 				message: "Change set not found.",
 			});
 		await requireEditor(ctx, changeSet.projectId);
+		assertCanReview(changeSet);
+		if (!args.fieldPath.trim()) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Change item field path is required.",
+			});
+		}
+		if (args.kind === "translation_value") {
+			if (
+				args.keyId === undefined ||
+				args.localeId === undefined ||
+				args.nextValue === null
+			) {
+				throw new ConvexError({
+					code: "VALIDATION",
+					message:
+						"Translation value items require keyId, localeId, and nextValue.",
+				});
+			}
+			const [key, locale] = await Promise.all([
+				ctx.db.get(args.keyId),
+				ctx.db.get(args.localeId),
+			]);
+			if (
+				!key ||
+				key.projectId !== changeSet.projectId ||
+				!locale ||
+				locale.projectId !== changeSet.projectId
+			) {
+				throw new ConvexError({
+					code: "VALIDATION",
+					message: "Change item references must belong to this project.",
+				});
+			}
+		}
 		const liveValue = await getLiveValue(ctx, args.keyId, args.localeId);
 		const conflicted =
 			args.baseVersion !== undefined &&

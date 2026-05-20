@@ -25,6 +25,31 @@ const changeSetAuthor = v.object({
 	kind: v.union(v.literal("user"), v.literal("agent")),
 	id: v.string(),
 });
+const importJobInput = v.object({
+	localeCode: v.string(),
+	screenSlug: v.optional(v.string()),
+	tagSlugs: v.optional(v.array(v.string())),
+});
+const importJobResult = v.union(
+	v.object({ imported: v.number() }),
+	v.object({ error: v.string() }),
+);
+const exportSelection = v.object({
+	type: v.union(
+		v.literal("all"),
+		v.literal("keys"),
+		v.literal("tag"),
+		v.literal("screen"),
+	),
+	keys: v.optional(v.array(v.string())),
+	tag: v.optional(v.string()),
+	screen: v.optional(v.string()),
+});
+const exportJobInput = v.object({
+	localeCode: v.string(),
+	selection: exportSelection,
+});
+const exportJobResult = v.object({ content: v.string() });
 
 export default defineSchema({
 	projects: defineTable({
@@ -120,6 +145,7 @@ export default defineSchema({
 		.index("by_project", ["projectId"])
 		.index("by_key", ["keyId"])
 		.index("by_locale", ["localeId"])
+		.index("by_project_locale", ["projectId", "localeId"])
 		.index("by_project_locale_status", ["projectId", "localeId", "status"])
 		.index("by_project_key_locale", ["projectId", "keyId", "localeId"]),
 
@@ -237,8 +263,8 @@ export default defineSchema({
 			v.literal("completed"),
 			v.literal("failed"),
 		),
-		input: v.any(),
-		result: v.optional(v.any()),
+		input: importJobInput,
+		result: v.optional(importJobResult),
 		createdBy: actor,
 		createdAt: v.number(),
 		updatedAt: v.number(),
@@ -256,8 +282,8 @@ export default defineSchema({
 			v.literal("completed"),
 			v.literal("failed"),
 		),
-		input: v.any(),
-		result: v.optional(v.any()),
+		input: exportJobInput,
+		result: v.optional(exportJobResult),
 		createdBy: actor,
 		createdAt: v.number(),
 		updatedAt: v.number(),

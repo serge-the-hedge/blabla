@@ -45,6 +45,7 @@ import {
 	Tag as TagIcon,
 	X,
 } from "lucide-react";
+import type { FormEvent } from "react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -52,7 +53,7 @@ import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
-import { apiAny } from "@/lib/convex-api";
+import { api, convexId } from "@/lib/convex-api";
 import {
 	buildExportFileName,
 	downloadExportFile,
@@ -127,7 +128,7 @@ function LocaleEditor({
 	initialValue: string;
 	status: string;
 }) {
-	const updateValue = useMutation(apiAny.values.updateManual);
+	const updateValue = useMutation(api.values.updateManual);
 	const [value, setValue] = useState(initialValue);
 	const [saving, setSaving] = useState(false);
 
@@ -140,8 +141,18 @@ function LocaleEditor({
 	async function save() {
 		setSaving(true);
 		try {
-			await updateValue({ keyId, localeId: locale._id, value });
+			await updateValue({
+				keyId: convexId<"translationKeys">(keyId),
+				localeId: convexId<"locales">(locale._id),
+				value,
+			});
 			toast.success(`${locale.code} saved`);
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? `Could not save ${locale.code}: ${error.message}`
+					: `Could not save ${locale.code}`,
+			);
 		} finally {
 			setSaving(false);
 		}
@@ -209,6 +220,7 @@ function KeyRow({
 	item,
 	locales,
 	allTags,
+	valuesByLocale,
 	selected,
 	onSelectedChange,
 	onFilterTag,
@@ -216,18 +228,11 @@ function KeyRow({
 	item: TranslationKey;
 	locales: Locale[];
 	allTags: Tag[];
+	valuesByLocale: Map<string, TranslationValue>;
 	selected: boolean;
 	onSelectedChange: (checked: boolean) => void;
 	onFilterTag: (tag: Tag) => void;
 }) {
-	const values = useQuery(apiAny.values.listForKey, { keyId: item._id });
-	const valuesByLocale = new Map(
-		((values ?? []) as TranslationValue[]).map((value) => [
-			value.localeId,
-			value,
-		]),
-	);
-
 	return (
 		<Card
 			size="sm"
@@ -287,7 +292,7 @@ function KeyTagList({
 	allTags: Tag[];
 	onFilterTag: (tag: Tag) => void;
 }) {
-	const updateMetadata = useMutation(apiAny.keys.updateMetadata);
+	const updateMetadata = useMutation(api.keys.updateMetadata);
 	const [removingTagId, setRemovingTagId] = useState<string | null>(null);
 	const itemTags = item.tags ?? [];
 
@@ -295,10 +300,10 @@ function KeyTagList({
 		setRemovingTagId(tag._id);
 		try {
 			await updateMetadata({
-				keyId: item._id,
+				keyId: convexId<"translationKeys">(item._id),
 				tagIds: itemTags
 					.filter((currentTag) => currentTag._id !== tag._id)
-					.map((currentTag) => currentTag._id),
+					.map((currentTag) => convexId<"tags">(currentTag._id)),
 			});
 			toast.success(`Removed ${tag.slug}`);
 		} catch (error) {
@@ -352,8 +357,8 @@ function KeyTagComposer({
 	item: TranslationKey;
 	allTags: Tag[];
 }) {
-	const updateMetadata = useMutation(apiAny.keys.updateMetadata);
-	const upsertTag = useMutation(apiAny.tags.upsert);
+	const updateMetadata = useMutation(api.keys.updateMetadata);
+	const upsertTag = useMutation(api.tags.upsert);
 	const [tagInput, setTagInput] = useState("");
 	const [saving, setSaving] = useState(false);
 	const itemTags = item.tags ?? [];
@@ -380,9 +385,9 @@ function KeyTagComposer({
 					tag.name.toLowerCase() === value.toLowerCase(),
 			);
 			const tagId =
-				existing?._id ??
+				(existing?._id ? convexId<"tags">(existing._id) : undefined) ??
 				(await upsertTag({
-					projectId: item.projectId,
+					projectId: convexId<"projects">(item.projectId),
 					name: value,
 				}));
 			if (currentTagIds.has(tagId)) {
@@ -390,8 +395,11 @@ function KeyTagComposer({
 				return;
 			}
 			await updateMetadata({
-				keyId: item._id,
-				tagIds: [...itemTags.map((tag) => tag._id), tagId],
+				keyId: convexId<"translationKeys">(item._id),
+				tagIds: [
+					...itemTags.map((tag) => convexId<"tags">(tag._id)),
+					convexId<"tags">(tagId),
+				],
 			});
 			setTagInput("");
 			toast.success(`Added ${existing?.slug ?? value}`);
@@ -462,12 +470,13 @@ function StringsSkeleton() {
 
 function StringsRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/strings" });
+	const convexProjectId = convexId<"projects">(projectId);
 	const search = useSearch({ from: "/projects/$projectId/strings" });
 	const navigate = useNavigate({ from: "/projects/$projectId/strings" });
-	const project = useQuery(apiAny.projects.get, { projectId });
-	const locales = useQuery(apiAny.locales.list, { projectId });
-	const screens = useQuery(apiAny.screens.list, { projectId });
-	const tags = useQuery(apiAny.tags.list, { projectId });
+	const project = useQuery(api.projects.get, { projectId: convexProjectId });
+	const locales = useQuery(api.locales.list, { projectId: convexProjectId });
+	const screens = useQuery(api.screens.list, { projectId: convexProjectId });
+	const tags = useQuery(api.tags.list, { projectId: convexProjectId });
 	const [screenId, setScreenId] = useState<string | undefined>(undefined);
 	const [tagId, setTagId] = useState<string | undefined>(undefined);
 	const [query, setQuery] = useState("");
@@ -475,11 +484,30 @@ function StringsRoute() {
 	const [batchTagId, setBatchTagId] = useState("");
 	const [batchNewTags, setBatchNewTags] = useState("");
 
-	const keys = useQuery(apiAny.keys.list, {
-		projectId,
-		screenId,
-		tagId,
+	const keys = useQuery(api.keys.list, {
+		projectId: convexProjectId,
+		screenId: screenId ? convexId<"screens">(screenId) : undefined,
+		tagId: tagId ? convexId<"tags">(tagId) : undefined,
 	});
+	const keyRows = (keys ?? []) as TranslationKey[];
+	const values = useQuery(
+		api.values.listForKeys,
+		keys === undefined
+			? "skip"
+			: {
+					keyIds: keyRows.map((item) => convexId<"translationKeys">(item._id)),
+				},
+	);
+	const valuesByKeyAndLocale = new Map<string, Map<string, TranslationValue>>();
+	for (const value of (values ?? []) as (TranslationValue & {
+		keyId: string;
+	})[]) {
+		const byLocale =
+			valuesByKeyAndLocale.get(value.keyId) ??
+			new Map<string, TranslationValue>();
+		byLocale.set(value.localeId, value);
+		valuesByKeyAndLocale.set(value.keyId, byLocale);
+	}
 
 	const orderedLocales: Locale[] = ((locales ?? []) as Locale[])
 		.slice()
@@ -489,10 +517,10 @@ function StringsRoute() {
 			return a.code.localeCompare(b.code);
 		});
 
-	const createKey = useMutation(apiAny.keys.create);
-	const addTagsBatch = useMutation(apiAny.keys.addTagsBatch);
-	const exportJson = useMutation(apiAny.exports.startJsonExport);
-	const exportArb = useMutation(apiAny.exports.startArbExport);
+	const createKey = useMutation(api.keys.create);
+	const addTagsBatch = useMutation(api.keys.addTagsBatch);
+	const exportJson = useMutation(api.exports.startJsonExport);
+	const exportArb = useMutation(api.exports.startArbExport);
 	const [newKey, setNewKey] = useState("");
 	const [newValue, setNewValue] = useState("");
 	const [selectedExportFormat, setSelectedExportFormat] =
@@ -508,20 +536,25 @@ function StringsRoute() {
 		setTagId(nextTag?._id);
 	}, [search.tag, tags, tagOptions]);
 
-	async function addKey(event: React.FormEvent) {
+	async function addKey(event: FormEvent) {
 		event.preventDefault();
 		if (!project?.sourceLocale?._id || !newKey.trim()) return;
 		await createKey({
-			projectId,
+			projectId: convexProjectId,
 			key: newKey,
-			initialValues: [{ localeId: project.sourceLocale._id, value: newValue }],
+			initialValues: [
+				{
+					localeId: convexId<"locales">(project.sourceLocale._id),
+					value: newValue,
+				},
+			],
 		});
 		setNewKey("");
 		setNewValue("");
 		toast.success("String created");
 	}
 
-	const filteredKeys = ((keys ?? []) as TranslationKey[]).filter((item) =>
+	const filteredKeys = keyRows.filter((item) =>
 		query.trim() ? item.key.toLowerCase().includes(query.toLowerCase()) : true,
 	);
 	const selectedVisibleCount = filteredKeys.filter((item) =>
@@ -542,7 +575,7 @@ function StringsRoute() {
 		});
 	}
 
-	async function applyBatchTags(event: React.FormEvent) {
+	async function applyBatchTags(event: FormEvent) {
 		event.preventDefault();
 		const tagSlugs = batchNewTags
 			.split(",")
@@ -557,16 +590,24 @@ function StringsRoute() {
 			toast.error("Choose or enter a tag");
 			return;
 		}
-		const result = await addTagsBatch({
-			projectId,
-			keyIds,
-			tagIds: batchTagId ? [batchTagId] : [],
-			tagSlugs,
-		});
-		setSelectedKeyIds(new Set());
-		setBatchTagId("");
-		setBatchNewTags("");
-		toast.success(`Tagged ${result.updated} strings`);
+		try {
+			const result = await addTagsBatch({
+				projectId: convexProjectId,
+				keyIds: keyIds.map((keyId) => convexId<"translationKeys">(keyId)),
+				tagIds: batchTagId ? [convexId<"tags">(batchTagId)] : [],
+				tagSlugs,
+			});
+			setSelectedKeyIds(new Set());
+			setBatchTagId("");
+			setBatchNewTags("");
+			toast.success(`Tagged ${result.updated} strings`);
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? `Could not tag strings: ${error.message}`
+					: "Could not tag strings",
+			);
+		}
 	}
 
 	async function downloadSelectedStrings() {
@@ -582,29 +623,37 @@ function StringsRoute() {
 			return;
 		}
 		const selection = { type: "keys" as const, keys: selectedKeys };
-		const result =
-			selectedExportFormat === "json"
-				? await exportJson({
-						projectId,
-						localeCode: selectedExportLocale,
-						selection,
-					})
-				: await exportArb({
-						projectId,
-						localeCode: selectedExportLocale,
-						selection,
-					});
-		downloadExportFile({
-			content: result.content ?? "",
-			fileName: buildExportFileName({
-				projectSlug: project?.slug ?? project?.name,
-				localeCode: selectedExportLocale,
-				scope: "selected",
+		try {
+			const result =
+				selectedExportFormat === "json"
+					? await exportJson({
+							projectId: convexProjectId,
+							localeCode: selectedExportLocale,
+							selection,
+						})
+					: await exportArb({
+							projectId: convexProjectId,
+							localeCode: selectedExportLocale,
+							selection,
+						});
+			downloadExportFile({
+				content: result.content ?? "",
+				fileName: buildExportFileName({
+					projectSlug: project?.slug ?? project?.name,
+					localeCode: selectedExportLocale,
+					scope: "selected",
+					format: selectedExportFormat,
+				}),
 				format: selectedExportFormat,
-			}),
-			format: selectedExportFormat,
-		});
-		toast.success("Selected strings downloaded");
+			});
+			toast.success("Selected strings downloaded");
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? `Could not download strings: ${error.message}`
+					: "Could not download strings",
+			);
+		}
 	}
 
 	const screenOptions = (screens ?? []) as Screen[];
@@ -857,6 +906,10 @@ function StringsRoute() {
 								item={item}
 								locales={orderedLocales}
 								allTags={tagOptions}
+								valuesByLocale={
+									valuesByKeyAndLocale.get(item._id) ??
+									new Map<string, TranslationValue>()
+								}
 								selected={selectedKeyIds.has(item._id)}
 								onFilterTag={filterByTag}
 								onSelectedChange={(checked) =>

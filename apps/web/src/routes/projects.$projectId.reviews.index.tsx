@@ -18,7 +18,7 @@ import { useQuery } from "convex/react";
 import { Bot, GitPullRequestArrow, User } from "lucide-react";
 
 import { PageHeader } from "@/components/localization/project-shell";
-import { apiAny } from "@/lib/convex-api";
+import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects/$projectId/reviews/")({
 	component: ReviewsIndexRoute,
@@ -51,9 +51,9 @@ const STATUS_VARIANT: Record<
 function ReviewsIndexRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/reviews/" });
 	const navigate = useNavigate({ from: "/projects/$projectId/reviews/" });
-	const changeSets = useQuery(apiAny.changeSets.list, { projectId }) as
-		| ChangeSetListRow[]
-		| undefined;
+	const changeSets = useQuery(api.changeSets.list, {
+		projectId: convexId<"projects">(projectId),
+	}) as ChangeSetListRow[] | undefined;
 
 	return (
 		<>

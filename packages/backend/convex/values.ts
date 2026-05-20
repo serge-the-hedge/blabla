@@ -151,6 +151,35 @@ export const listForKey = query({
 	},
 });
 
+export const listForKeys = query({
+	args: { keyIds: v.array(v.id("translationKeys")) },
+	handler: async (ctx, args) => {
+		if (args.keyIds.length === 0) return [];
+		const keys = await Promise.all(
+			args.keyIds.map((keyId) => ctx.db.get(keyId)),
+		);
+		const projectId = keys.find((key) => key !== null)?.projectId;
+		if (!projectId)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Translation keys not found.",
+			});
+		if (keys.some((key) => !key || key.projectId !== projectId)) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "All translation keys must belong to the same project.",
+			});
+		}
+		await requireViewer(ctx, projectId);
+		const values = await ctx.db
+			.query("translationValues")
+			.withIndex("by_project", (q) => q.eq("projectId", projectId))
+			.collect();
+		const keyIds = new Set(args.keyIds);
+		return values.filter((value) => keyIds.has(value.keyId));
+	},
+});
+
 export const listForLocale = query({
 	args: {
 		projectId: v.id("projects"),
@@ -180,7 +209,9 @@ export const listForLocale = query({
 		}
 		return await ctx.db
 			.query("translationValues")
-			.withIndex("by_locale", (q) => q.eq("localeId", args.localeId))
+			.withIndex("by_project_locale", (q) =>
+				q.eq("projectId", args.projectId).eq("localeId", args.localeId),
+			)
 			.collect();
 	},
 });

@@ -32,7 +32,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/localization/project-shell";
-import { apiAny } from "@/lib/convex-api";
+import { api, convexId } from "@/lib/convex-api";
 import {
 	buildExportFileName,
 	downloadExportFile,
@@ -131,26 +131,23 @@ function ReviewDetailRoute() {
 	const { changeSetId } = useParams({
 		from: "/projects/$projectId/reviews/$changeSetId",
 	});
-	const changeSet = useQuery(apiAny.changeSets.get, { changeSetId }) as
-		| ReviewChangeSet
-		| undefined;
-	const acceptItem = useMutation(apiAny.changeSets.acceptItem);
-	const rejectItem = useMutation(apiAny.changeSets.rejectItem);
-	const updateItem = useMutation(apiAny.changeSets.updateItem);
-	const revertItem = useMutation(apiAny.changeSets.revertItem);
-	const acceptUnmarkedItems = useMutation(
-		apiAny.changeSets.acceptUnmarkedItems,
-	);
-	const rejectUnmarkedItems = useMutation(
-		apiAny.changeSets.rejectUnmarkedItems,
-	);
-	const acceptItemsInGroup = useMutation(apiAny.changeSets.acceptItemsInGroup);
-	const rejectItemsInGroup = useMutation(apiAny.changeSets.rejectItemsInGroup);
+	const convexChangeSetId = convexId<"changeSets">(changeSetId);
+	const changeSet = useQuery(api.changeSets.get, {
+		changeSetId: convexChangeSetId,
+	}) as ReviewChangeSet | undefined;
+	const acceptItem = useMutation(api.changeSets.acceptItem);
+	const rejectItem = useMutation(api.changeSets.rejectItem);
+	const updateItem = useMutation(api.changeSets.updateItem);
+	const revertItem = useMutation(api.changeSets.revertItem);
+	const acceptUnmarkedItems = useMutation(api.changeSets.acceptUnmarkedItems);
+	const rejectUnmarkedItems = useMutation(api.changeSets.rejectUnmarkedItems);
+	const acceptItemsInGroup = useMutation(api.changeSets.acceptItemsInGroup);
+	const rejectItemsInGroup = useMutation(api.changeSets.rejectItemsInGroup);
 	const exportAcceptedByLocale = useMutation(
-		apiAny.changeSets.exportAcceptedByLocale,
+		api.changeSets.exportAcceptedByLocale,
 	);
-	const reviewAndApply = useMutation(apiAny.changeSets.reviewAndApply);
-	const reject = useMutation(apiAny.changeSets.reject);
+	const reviewAndApply = useMutation(api.changeSets.reviewAndApply);
+	const reject = useMutation(api.changeSets.reject);
 
 	const [pendingAction, setPendingAction] = useState<PendingAction>({
 		kind: "idle",
@@ -199,7 +196,7 @@ function ReviewDetailRoute() {
 	async function applyReview() {
 		setPendingAction({ kind: "applying" });
 		try {
-			const result = await reviewAndApply({ changeSetId });
+			const result = await reviewAndApply({ changeSetId: convexChangeSetId });
 			if (result.status === "applied") {
 				toast.success("Review applied");
 			} else if (result.conflicted > 0) {
@@ -219,7 +216,7 @@ function ReviewDetailRoute() {
 	async function rejectChangeSet() {
 		setPendingAction({ kind: "rejecting" });
 		try {
-			await reject({ changeSetId });
+			await reject({ changeSetId: convexChangeSetId });
 			toast.success("Review rejected");
 		} catch (error) {
 			toast.error(
@@ -235,8 +232,8 @@ function ReviewDetailRoute() {
 		try {
 			const result =
 				action === "accept"
-					? await acceptUnmarkedItems({ changeSetId })
-					: await rejectUnmarkedItems({ changeSetId });
+					? await acceptUnmarkedItems({ changeSetId: convexChangeSetId })
+					: await rejectUnmarkedItems({ changeSetId: convexChangeSetId });
 			toast.success(
 				action === "accept"
 					? `Accepted ${result.updated} unmarked items`
@@ -257,8 +254,9 @@ function ReviewDetailRoute() {
 	) {
 		setPendingAction({ kind: "item", itemId: item._id, action });
 		try {
-			if (action === "accept") await acceptItem({ itemId: item._id });
-			else await rejectItem({ itemId: item._id });
+			if (action === "accept")
+				await acceptItem({ itemId: convexId<"changeSetItems">(item._id) });
+			else await rejectItem({ itemId: convexId<"changeSetItems">(item._id) });
 		} catch (error) {
 			toast.error(
 				error instanceof Error ? error.message : "Could not update item",
@@ -271,7 +269,10 @@ function ReviewDetailRoute() {
 	async function handleItemSave(item: ReviewItem, value: string) {
 		setPendingAction({ kind: "item", itemId: item._id, action: "save" });
 		try {
-			await updateItem({ itemId: item._id, nextValue: value });
+			await updateItem({
+				itemId: convexId<"changeSetItems">(item._id),
+				nextValue: value,
+			});
 			toast.success(`${item.locale?.code ?? "Item"} updated`);
 		} catch (error) {
 			toast.error(
@@ -285,7 +286,7 @@ function ReviewDetailRoute() {
 	async function handleItemRevert(item: ReviewItem) {
 		setPendingAction({ kind: "item", itemId: item._id, action: "revert" });
 		try {
-			await revertItem({ itemId: item._id });
+			await revertItem({ itemId: convexId<"changeSetItems">(item._id) });
 			toast.success("Restored original proposal");
 		} catch (error) {
 			toast.error(
@@ -301,8 +302,14 @@ function ReviewDetailRoute() {
 		try {
 			const result =
 				action === "accept"
-					? await acceptItemsInGroup({ changeSetId, keyId })
-					: await rejectItemsInGroup({ changeSetId, keyId });
+					? await acceptItemsInGroup({
+							changeSetId: convexChangeSetId,
+							keyId: convexId<"translationKeys">(keyId),
+						})
+					: await rejectItemsInGroup({
+							changeSetId: convexChangeSetId,
+							keyId: convexId<"translationKeys">(keyId),
+						});
 			toast.success(
 				action === "accept"
 					? `Accepted ${result.updated} items in this key`
@@ -321,7 +328,7 @@ function ReviewDetailRoute() {
 		setPendingAction({ kind: "exporting" });
 		try {
 			const result = await exportAcceptedByLocale({
-				changeSetId,
+				changeSetId: convexChangeSetId,
 				format: acceptedExportFormat,
 			});
 			if (result.count === 0) {

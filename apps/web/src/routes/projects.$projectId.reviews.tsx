@@ -2,7 +2,7 @@ import { createFileRoute, Outlet, useParams } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 
 import { ProjectShell } from "@/components/localization/project-shell";
-import { apiAny } from "@/lib/convex-api";
+import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects/$projectId/reviews")({
 	component: ReviewsLayoutRoute,
@@ -10,7 +10,9 @@ export const Route = createFileRoute("/projects/$projectId/reviews")({
 
 function ReviewsLayoutRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/reviews" });
-	const project = useQuery(apiAny.projects.get, { projectId });
+	const project = useQuery(api.projects.get, {
+		projectId: convexId<"projects">(projectId),
+	});
 
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>

@@ -19,6 +19,7 @@ import { Textarea } from "@blabla/ui/components/textarea";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { Upload } from "lucide-react";
+import type { FormEvent } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -26,7 +27,7 @@ import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
-import { apiAny } from "@/lib/convex-api";
+import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects/$projectId/import")({
 	component: ImportRoute,
@@ -34,10 +35,11 @@ export const Route = createFileRoute("/projects/$projectId/import")({
 
 function ImportRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/import" });
-	const project = useQuery(apiAny.projects.get, { projectId });
-	const locales = useQuery(apiAny.locales.list, { projectId });
-	const importJson = useMutation(apiAny.imports.startJsonImport);
-	const importArb = useMutation(apiAny.imports.startArbImport);
+	const convexProjectId = convexId<"projects">(projectId);
+	const project = useQuery(api.projects.get, { projectId: convexProjectId });
+	const locales = useQuery(api.locales.list, { projectId: convexProjectId });
+	const importJson = useMutation(api.imports.startJsonImport);
+	const importArb = useMutation(api.imports.startArbImport);
 	const [format, setFormat] = useState<"json" | "arb">("json");
 	const [localeCode, setLocaleCode] = useState("");
 	const [screenSlug, setScreenSlug] = useState("");
@@ -45,11 +47,13 @@ function ImportRoute() {
 	const [content, setContent] = useState(
 		'{\n  "checkout.payButton": "Pay now"\n}',
 	);
+	const [isSubmitting, setIsSubmitting] = useState(false);
 
-	async function submit(event: React.FormEvent) {
+	async function submit(event: FormEvent) {
 		event.preventDefault();
+		setIsSubmitting(true);
 		const args = {
-			projectId,
+			projectId: convexProjectId,
 			localeCode,
 			content,
 			screenSlug: screenSlug || undefined,
@@ -58,9 +62,20 @@ function ImportRoute() {
 				.map((tag) => tag.trim())
 				.filter(Boolean),
 		};
-		const jobId =
-			format === "json" ? await importJson(args) : await importArb(args);
-		toast.success(`Import queued: ${jobId}`);
+		try {
+			const jobId =
+				format === "json" ? await importJson(args) : await importArb(args);
+			toast.success(`Import queued: ${jobId}`);
+		} catch (error) {
+			console.error(error);
+			toast.error(
+				error instanceof Error
+					? `Import failed: ${error.message}`
+					: "Import failed",
+			);
+		} finally {
+			setIsSubmitting(false);
+		}
 	}
 
 	return (
@@ -146,9 +161,9 @@ function ImportRoute() {
 									Flutter ARB document.
 								</FieldDescription>
 							</Field>
-							<Button type="submit" disabled={!localeCode}>
+							<Button type="submit" disabled={!localeCode || isSubmitting}>
 								<Upload data-icon="inline-start" />
-								Queue import
+								{isSubmitting ? "Queueing..." : "Queue import"}
 							</Button>
 						</FieldGroup>
 					</form>

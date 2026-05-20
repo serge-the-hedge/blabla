@@ -12,6 +12,7 @@ const placeholderValidator = v.object({
 	type: v.optional(v.string()),
 	example: v.optional(v.string()),
 });
+const MAX_SEARCH_LIMIT = 100;
 
 async function buildSearchText(
 	ctx: any,
@@ -30,6 +31,38 @@ async function buildSearchText(
 		screen,
 		tags: tags.filter((tag): tag is NonNullable<typeof tag> => tag !== null),
 	});
+}
+
+async function validateMetadataRefs(
+	ctx: any,
+	projectId: Id<"projects">,
+	args: {
+		screenId?: Id<"screens">;
+		tagIds?: Id<"tags">[];
+	},
+) {
+	if (args.screenId !== undefined) {
+		const screen = await ctx.db.get(args.screenId);
+		if (
+			!screen ||
+			screen.projectId !== projectId ||
+			screen.archivedAt !== undefined
+		) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Screen does not belong to this project.",
+			});
+		}
+	}
+	for (const tagId of args.tagIds ?? []) {
+		const tag = await ctx.db.get(tagId);
+		if (!tag || tag.projectId !== projectId || tag.archivedAt !== undefined) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Tag does not belong to this project.",
+			});
+		}
+	}
 }
 
 async function findOrCreateTags(
@@ -135,9 +168,10 @@ export const list = query({
 				selectedValue: valuesByKey.get(key._id) ?? null,
 			})),
 		);
-		return rows.filter((item) =>
-			args.status ? item.selectedValue?.status === args.status : true,
-		);
+		return rows.filter((item) => {
+			const status = item.selectedValue?.status ?? "missing";
+			return args.status ? status === args.status : true;
+		});
 	},
 });
 
@@ -149,18 +183,19 @@ export const search = query({
 	},
 	handler: async (ctx, args) => {
 		await requireViewer(ctx, args.projectId);
+		const safeLimit = Math.min(args.limit ?? 25, MAX_SEARCH_LIMIT);
 		if (args.q.trim().length === 0) {
 			return await ctx.db
 				.query("translationKeys")
 				.withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-				.take(args.limit ?? 25);
+				.take(safeLimit);
 		}
 		return await ctx.db
 			.query("translationKeys")
 			.withSearchIndex("searchText", (q) =>
 				q.search("searchText", args.q).eq("projectId", args.projectId),
 			)
-			.take(args.limit ?? 25);
+			.take(safeLimit);
 	},
 });
 
@@ -199,6 +234,10 @@ export const create = mutation({
 			});
 		}
 		const tagIds = args.tagIds ?? [];
+		await validateMetadataRefs(ctx, args.projectId, {
+			screenId: args.screenId,
+			tagIds,
+		});
 		const timestamp = now();
 		const keyId = await ctx.db.insert("translationKeys", {
 			projectId: args.projectId,
@@ -271,6 +310,10 @@ export const updateMetadata = mutation({
 		const screenId =
 			args.screenId === null ? undefined : (args.screenId ?? existing.screenId);
 		const tagIds = args.tagIds ?? existing.tagIds;
+		await validateMetadataRefs(ctx, existing.projectId, {
+			screenId,
+			tagIds,
+		});
 		await ctx.db.patch(args.keyId, {
 			key: nextKey,
 			description: args.description ?? existing.description,

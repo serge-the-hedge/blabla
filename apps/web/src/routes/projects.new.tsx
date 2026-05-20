@@ -16,10 +16,11 @@ import { Input } from "@blabla/ui/components/input";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import { ArrowLeft } from "lucide-react";
+import type { FormEvent } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 
-import { apiAny } from "@/lib/convex-api";
+import { api } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects/new")({
 	component: NewProjectRoute,
@@ -35,7 +36,7 @@ function slugify(value: string) {
 
 function NewProjectRoute() {
 	const navigate = useNavigate();
-	const createProject = useMutation(apiAny.projects.create);
+	const createProject = useMutation(api.projects.create);
 	const [name, setName] = useState("");
 	const [slug, setSlug] = useState("");
 	const [slugTouched, setSlugTouched] = useState(false);
@@ -47,20 +48,28 @@ function NewProjectRoute() {
 		if (!slugTouched) setSlug(slugify(value));
 	}
 
-	async function submit(event: React.FormEvent) {
+	async function submit(event: FormEvent) {
 		event.preventDefault();
-		const projectId = await createProject({
-			name,
-			slug: slug || slugify(name),
-			sourceLocaleCode,
-			sourceLocaleLabel,
-		});
-		toast.success("Project created");
-		await navigate({
-			to: "/projects/$projectId/strings",
-			params: { projectId },
-			search: { tag: undefined },
-		});
+		try {
+			const projectId = await createProject({
+				name,
+				slug: slug || slugify(name),
+				sourceLocaleCode,
+				sourceLocaleLabel,
+			});
+			toast.success("Project created");
+			await navigate({
+				to: "/projects/$projectId/strings",
+				params: { projectId },
+				search: { tag: undefined },
+			});
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? `Could not create project: ${error.message}`
+					: "Could not create project",
+			);
+		}
 	}
 
 	return (

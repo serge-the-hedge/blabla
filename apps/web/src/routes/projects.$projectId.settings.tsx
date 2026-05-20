@@ -18,7 +18,7 @@ import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
-import { apiAny } from "@/lib/convex-api";
+import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects/$projectId/settings")({
 	component: SettingsRoute,
@@ -44,7 +44,9 @@ function SettingsRoute() {
 	const pathname = useRouterState({
 		select: (state) => state.location.pathname,
 	});
-	const project = useQuery(apiAny.projects.get, { projectId });
+	const project = useQuery(api.projects.get, {
+		projectId: convexId<"projects">(projectId),
+	});
 
 	if (pathname !== `/projects/${projectId}/settings`) {
 		return <Outlet />;

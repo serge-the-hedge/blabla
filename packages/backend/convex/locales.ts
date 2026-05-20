@@ -54,17 +54,28 @@ export const create = mutation({
 				message: "Project already has a source locale.",
 			});
 		}
-		const localeId = await ctx.db.insert("locales", {
-			projectId: args.projectId,
-			code,
-			label: args.label?.trim() || code,
-			isSource: Boolean(args.isSource),
-			createdAt: now(),
-		});
+		const timestamp = now();
+		const localeId =
+			existing && existing.archivedAt !== undefined
+				? existing._id
+				: await ctx.db.insert("locales", {
+						projectId: args.projectId,
+						code,
+						label: args.label?.trim() || code,
+						isSource: Boolean(args.isSource),
+						createdAt: timestamp,
+					});
+		if (existing && existing.archivedAt !== undefined) {
+			await ctx.db.patch(existing._id, {
+				label: args.label?.trim() || code,
+				isSource: Boolean(args.isSource),
+				archivedAt: undefined,
+			});
+		}
 		if (args.isSource || project.sourceLocaleId === undefined) {
 			await ctx.db.patch(args.projectId, {
 				sourceLocaleId: localeId,
-				updatedAt: now(),
+				updatedAt: timestamp,
 			});
 		}
 		return localeId;

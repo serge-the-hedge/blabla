@@ -18,8 +18,8 @@ describe("change set diffs", () => {
 		).toEqual({
 			filesChanged: 2,
 			fieldsChanged: 2,
-			additions: 3,
-			deletions: 1,
+			additions: 2,
+			deletions: 0,
 		});
 	});
 });

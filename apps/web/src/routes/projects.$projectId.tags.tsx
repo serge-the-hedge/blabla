@@ -17,6 +17,7 @@ import {
 } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { Plus, Tags as TagsIcon } from "lucide-react";
+import type { FormEvent } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -24,7 +25,7 @@ import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
-import { apiAny } from "@/lib/convex-api";
+import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects/$projectId/tags")({
 	component: TagsRoute,
@@ -39,19 +40,20 @@ type TagRow = {
 
 function TagsRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/tags" });
+	const convexProjectId = convexId<"projects">(projectId);
 	const navigate = useNavigate({ from: "/projects/$projectId/tags" });
-	const project = useQuery(apiAny.projects.get, { projectId });
-	const tags = useQuery(apiAny.tags.list, { projectId }) as
+	const project = useQuery(api.projects.get, { projectId: convexProjectId });
+	const tags = useQuery(api.tags.list, { projectId: convexProjectId }) as
 		| TagRow[]
 		| undefined;
-	const upsert = useMutation(apiAny.tags.upsert);
-	const archive = useMutation(apiAny.tags.archive);
+	const upsert = useMutation(api.tags.upsert);
+	const archive = useMutation(api.tags.archive);
 	const [name, setName] = useState("");
 	const [color, setColor] = useState("#4f46e5");
 
-	async function submit(event: React.FormEvent) {
+	async function submit(event: FormEvent) {
 		event.preventDefault();
-		await upsert({ projectId, name, color });
+		await upsert({ projectId: convexProjectId, name, color });
 		setName("");
 		toast.success("Tag saved");
 	}
@@ -147,7 +149,9 @@ function TagsRoute() {
 									<Button
 										size="sm"
 										variant="outline"
-										onClick={() => archive({ tagId: tag._id })}
+										onClick={() =>
+											archive({ tagId: convexId<"tags">(tag._id) })
+										}
 									>
 										Archive
 									</Button>

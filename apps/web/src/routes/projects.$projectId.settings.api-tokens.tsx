@@ -33,6 +33,7 @@ import { cn } from "@blabla/ui/lib/utils";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { Copy, KeyRound, Plus, ShieldCheck, Terminal, X } from "lucide-react";
+import type { FormEvent } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -40,7 +41,7 @@ import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
-import { apiAny } from "@/lib/convex-api";
+import { api, convexId } from "@/lib/convex-api";
 
 const scopes = ["read", "search", "propose", "export"] as const;
 type TokenScope = (typeof scopes)[number];
@@ -60,10 +61,11 @@ function ApiTokensRoute() {
 	const { projectId } = useParams({
 		from: "/projects/$projectId/settings/api-tokens",
 	});
-	const project = useQuery(apiAny.projects.get, { projectId });
-	const tokens = useQuery(apiAny.apiTokens.list, { projectId });
-	const createToken = useMutation(apiAny.apiTokens.create);
-	const revoke = useMutation(apiAny.apiTokens.revoke);
+	const convexProjectId = convexId<"projects">(projectId);
+	const project = useQuery(api.projects.get, { projectId: convexProjectId });
+	const tokens = useQuery(api.apiTokens.list, { projectId: convexProjectId });
+	const createToken = useMutation(api.apiTokens.create);
+	const revoke = useMutation(api.apiTokens.revoke);
 	const [name, setName] = useState("");
 	const [selectedScopes, setSelectedScopes] = useState<string[]>([
 		"read",
@@ -72,13 +74,13 @@ function ApiTokensRoute() {
 	]);
 	const [rawToken, setRawToken] = useState("");
 
-	async function submit(event: React.FormEvent) {
+	async function submit(event: FormEvent) {
 		event.preventDefault();
 		try {
 			const result = await createToken({
-				projectId,
+				projectId: convexProjectId,
 				name,
-				scopes: selectedScopes,
+				scopes: selectedScopes as TokenScope[],
 			});
 			setRawToken(result.token);
 			setName("");
@@ -292,7 +294,9 @@ function ApiTokensRoute() {
 										variant="outline"
 										onClick={async () => {
 											try {
-												await revoke({ tokenId: token._id });
+												await revoke({
+													tokenId: convexId<"apiTokens">(token._id),
+												});
 												toast.success("Token revoked");
 											} catch (error) {
 												toast.error(

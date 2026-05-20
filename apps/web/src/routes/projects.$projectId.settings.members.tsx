@@ -22,13 +22,14 @@ import { Skeleton } from "@blabla/ui/components/skeleton";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { UserPlus, Users } from "lucide-react";
+import type { FormEvent } from "react";
 import { useState } from "react";
 
 import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
-import { apiAny } from "@/lib/convex-api";
+import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects/$projectId/settings/members")({
 	component: MembersRoute,
@@ -46,17 +47,20 @@ function MembersRoute() {
 	const { projectId } = useParams({
 		from: "/projects/$projectId/settings/members",
 	});
-	const project = useQuery(apiAny.projects.get, { projectId });
-	const members = useQuery(apiAny.projects.listMembers, { projectId });
-	const addMember = useMutation(apiAny.projects.addMember);
-	const updateRole = useMutation(apiAny.projects.updateMemberRole);
-	const removeMember = useMutation(apiAny.projects.removeMember);
+	const convexProjectId = convexId<"projects">(projectId);
+	const project = useQuery(api.projects.get, { projectId: convexProjectId });
+	const members = useQuery(api.projects.listMembers, {
+		projectId: convexProjectId,
+	});
+	const addMember = useMutation(api.projects.addMember);
+	const updateRole = useMutation(api.projects.updateMemberRole);
+	const removeMember = useMutation(api.projects.removeMember);
 	const [userId, setUserId] = useState("");
 	const [role, setRole] = useState<Role>("viewer");
 
-	async function submit(event: React.FormEvent) {
+	async function submit(event: FormEvent) {
 		event.preventDefault();
-		await addMember({ projectId, userId, role });
+		await addMember({ projectId: convexProjectId, userId, role });
 		setUserId("");
 	}
 

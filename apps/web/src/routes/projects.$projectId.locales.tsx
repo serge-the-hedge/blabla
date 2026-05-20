@@ -14,6 +14,7 @@ import { Skeleton } from "@blabla/ui/components/skeleton";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { Languages, Plus } from "lucide-react";
+import type { FormEvent } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -21,7 +22,7 @@ import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
-import { apiAny } from "@/lib/convex-api";
+import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects/$projectId/locales")({
 	component: LocalesRoute,
@@ -29,19 +30,39 @@ export const Route = createFileRoute("/projects/$projectId/locales")({
 
 function LocalesRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/locales" });
-	const project = useQuery(apiAny.projects.get, { projectId });
-	const locales = useQuery(apiAny.locales.list, { projectId });
-	const createLocale = useMutation(apiAny.locales.create);
-	const archiveLocale = useMutation(apiAny.locales.archive);
+	const convexProjectId = convexId<"projects">(projectId);
+	const project = useQuery(api.projects.get, { projectId: convexProjectId });
+	const locales = useQuery(api.locales.list, { projectId: convexProjectId });
+	const createLocale = useMutation(api.locales.create);
+	const archiveLocale = useMutation(api.locales.archive);
 	const [code, setCode] = useState("");
 	const [label, setLabel] = useState("");
 
-	async function submit(event: React.FormEvent) {
+	async function submit(event: FormEvent) {
 		event.preventDefault();
-		await createLocale({ projectId, code, label });
-		setCode("");
-		setLabel("");
-		toast.success("Locale created");
+		try {
+			await createLocale({ projectId: convexProjectId, code, label });
+			setCode("");
+			setLabel("");
+			toast.success("Locale created");
+		} catch (error) {
+			console.error(error);
+			toast.error(
+				error instanceof Error ? error.message : "Could not create locale",
+			);
+		}
+	}
+
+	async function onArchive(localeId: string) {
+		try {
+			await archiveLocale({ localeId: convexId<"locales">(localeId) });
+			toast.success("Locale archived");
+		} catch (error) {
+			console.error(error);
+			toast.error(
+				error instanceof Error ? error.message : "Could not archive locale",
+			);
+		}
 	}
 
 	return (
@@ -126,7 +147,7 @@ function LocalesRoute() {
 										<Button
 											size="sm"
 											variant="outline"
-											onClick={() => archiveLocale({ localeId: locale._id })}
+											onClick={() => onArchive(locale._id)}
 										>
 											Archive
 										</Button>

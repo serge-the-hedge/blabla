@@ -146,6 +146,13 @@ export const searchStrings = internalQuery({
 					)
 					.unique()
 			: null;
+		if (
+			(args.locale && (!locale || locale.archivedAt !== undefined)) ||
+			(args.screen && (!screen || screen.archivedAt !== undefined)) ||
+			(args.tag && (!tag || tag.archivedAt !== undefined))
+		) {
+			return [];
+		}
 		const keys =
 			args.q && args.q.trim().length > 0
 				? await ctx.db

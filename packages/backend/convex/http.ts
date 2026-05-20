@@ -53,10 +53,12 @@ async function withAgent<T>(
 
 function routeError(error: unknown) {
 	const message = error instanceof Error ? error.message : "Request failed.";
-	const status =
-		message.includes("Missing bearer") || message.includes("Invalid")
-			? 401
-			: 400;
+	const isAuthError =
+		/\b(Missing bearer|Invalid\b.*\b(token|bearer|authorization))\b/i.test(
+			message,
+		) ||
+		(error instanceof Error && error.name === "UnauthorizedError");
+	const status = isAuthError ? 401 : 400;
 	return json({ error: message }, status);
 }
 

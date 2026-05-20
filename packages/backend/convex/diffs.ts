@@ -10,9 +10,30 @@ export function diffStat(
 			: previousValue.split("\n");
 	const nextLines =
 		nextValue === null || nextValue.length === 0 ? [] : nextValue.split("\n");
+	const previousCount = previousLines.length;
+	const nextCount = nextLines.length;
+	const lcsLengths = Array.from({ length: previousCount + 1 }, () =>
+		Array(nextCount + 1).fill(0),
+	);
+	for (
+		let previousIndex = previousCount - 1;
+		previousIndex >= 0;
+		previousIndex -= 1
+	) {
+		for (let nextIndex = nextCount - 1; nextIndex >= 0; nextIndex -= 1) {
+			lcsLengths[previousIndex][nextIndex] =
+				previousLines[previousIndex] === nextLines[nextIndex]
+					? lcsLengths[previousIndex + 1][nextIndex + 1] + 1
+					: Math.max(
+							lcsLengths[previousIndex + 1][nextIndex],
+							lcsLengths[previousIndex][nextIndex + 1],
+						);
+		}
+	}
+	const common = lcsLengths[0][0];
 	return {
-		additions: nextLines.length,
-		deletions: previousLines.length,
+		additions: nextLines.length - common,
+		deletions: previousLines.length - common,
 	};
 }
 
