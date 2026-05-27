@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 
 import type { Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
 import { requireUser } from "./auth";
 import { normalizeLocaleCode, now, slugify } from "./lib";
@@ -15,6 +16,7 @@ const roleValidator = v.union(
 	v.literal("editor"),
 	v.literal("viewer"),
 );
+type Role = "owner" | "editor" | "viewer";
 
 async function ensureUniqueProjectSlug(
 	ctx: any,
@@ -29,6 +31,27 @@ async function ensureUniqueProjectSlug(
 		throw new ConvexError({
 			code: "CONFLICT",
 			message: "Project slug already exists.",
+		});
+	}
+}
+
+async function assertCanChangeMemberRole(
+	ctx: QueryCtx | MutationCtx,
+	member: { projectId: Id<"projects">; role: Role },
+	nextRole: Role,
+) {
+	if (member.role !== "owner" || nextRole === "owner") {
+		return;
+	}
+	const owners = await ctx.db
+		.query("projectMembers")
+		.withIndex("by_project", (q) => q.eq("projectId", member.projectId))
+		.filter((q) => q.eq(q.field("role"), "owner"))
+		.collect();
+	if (owners.length <= 1) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "A project needs at least one owner.",
 		});
 	}
 }
@@ -180,6 +203,7 @@ export const addMember = mutation({
 			)
 			.unique();
 		if (existing) {
+			await assertCanChangeMemberRole(ctx, existing, args.role);
 			await ctx.db.patch(existing._id, { role: args.role });
 			return existing._id;
 		}
@@ -202,19 +226,7 @@ export const updateMemberRole = mutation({
 				message: "Member not found.",
 			});
 		await requireOwner(ctx, member.projectId);
-		if (member.role === "owner" && args.role !== "owner") {
-			const owners = await ctx.db
-				.query("projectMembers")
-				.withIndex("by_project", (q) => q.eq("projectId", member.projectId))
-				.filter((q) => q.eq(q.field("role"), "owner"))
-				.collect();
-			if (owners.length <= 1) {
-				throw new ConvexError({
-					code: "VALIDATION",
-					message: "A project needs at least one owner.",
-				});
-			}
-		}
+		await assertCanChangeMemberRole(ctx, member, args.role);
 		await ctx.db.patch(args.memberId, { role: args.role });
 		return null;
 	},

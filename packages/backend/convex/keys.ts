@@ -345,7 +345,11 @@ export const addTagsBatch = mutation({
 		const existingTagIds = args.tagIds ?? [];
 		for (const tagId of existingTagIds) {
 			const tag = await ctx.db.get(tagId);
-			if (!tag || tag.projectId !== args.projectId) {
+			if (
+				!tag ||
+				tag.projectId !== args.projectId ||
+				tag.archivedAt !== undefined
+			) {
 				throw new ConvexError({
 					code: "VALIDATION",
 					message: "Tag does not belong to this project.",

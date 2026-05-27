@@ -43,11 +43,18 @@ export const upsert = mutation({
 			)
 			.unique();
 		if (existing) {
-			await ctx.db.patch(existing._id, {
+			const patch: {
+				name: string;
+				color?: string;
+				archivedAt: undefined;
+			} = {
 				name: args.name.trim(),
-				color: args.color,
 				archivedAt: undefined,
-			});
+			};
+			if (args.color !== undefined) {
+				patch.color = args.color;
+			}
+			await ctx.db.patch(existing._id, patch);
 			return existing._id;
 		}
 		return await ctx.db.insert("tags", {
