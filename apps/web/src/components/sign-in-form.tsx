@@ -1,128 +1,172 @@
 import { Button } from "@blabla/ui/components/button";
+import {
+	Card,
+	CardContent,
+	CardDescription,
+	CardFooter,
+	CardHeader,
+	CardTitle,
+} from "@blabla/ui/components/card";
+import {
+	Field,
+	FieldError,
+	FieldGroup,
+	FieldLabel,
+} from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
-import { Label } from "@blabla/ui/components/label";
 import { useForm } from "@tanstack/react-form";
 import { useNavigate } from "@tanstack/react-router";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import z from "zod";
 
+import { BrandWordmark } from "@/components/brand";
 import { authClient } from "@/lib/auth-client";
 
-export default function SignInForm({ onSwitchToSignUp }: { onSwitchToSignUp: () => void }) {
-  const navigate = useNavigate({
-    from: "/",
-  });
+export default function SignInForm({
+	onSwitchToSignUp,
+}: {
+	onSwitchToSignUp: () => void;
+}) {
+	const navigate = useNavigate({
+		from: "/",
+	});
 
-  const form = useForm({
-    defaultValues: {
-      email: "",
-      password: "",
-    },
-    onSubmit: async ({ value }) => {
-      await authClient.signIn.email(
-        {
-          email: value.email,
-          password: value.password,
-        },
-        {
-          onSuccess: () => {
-            navigate({
-              to: "/dashboard",
-            });
-            toast.success("Sign in successful");
-          },
-          onError: (error) => {
-            toast.error(error.error.message || error.error.statusText);
-          },
-        },
-      );
-    },
-    validators: {
-      onSubmit: z.object({
-        email: z.email("Invalid email address"),
-        password: z.string().min(8, "Password must be at least 8 characters"),
-      }),
-    },
-  });
+	const form = useForm({
+		defaultValues: {
+			email: "",
+			password: "",
+		},
+		onSubmit: async ({ value }) => {
+			await authClient.signIn.email(
+				{
+					email: value.email,
+					password: value.password,
+				},
+				{
+					onSuccess: () => {
+						navigate({
+							to: "/dashboard",
+						});
+						toast.success("Signed in");
+					},
+					onError: (error) => {
+						toast.error(error.error.message || error.error.statusText);
+					},
+				},
+			);
+		},
+		validators: {
+			onSubmit: z.object({
+				email: z.email("Invalid email address"),
+				password: z.string().min(8, "Password must be at least 8 characters"),
+			}),
+		},
+	});
 
-  return (
-    <div className="mx-auto w-full mt-10 max-w-md p-6">
-      <h1 className="mb-6 text-center text-3xl font-bold">Welcome Back</h1>
-
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          form.handleSubmit();
-        }}
-        className="space-y-4"
-      >
-        <div>
-          <form.Field name="email">
-            {(field) => (
-              <div className="space-y-2">
-                <Label htmlFor={field.name}>Email</Label>
-                <Input
-                  id={field.name}
-                  name={field.name}
-                  type="email"
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(e) => field.handleChange(e.target.value)}
-                />
-                {field.state.meta.errors.map((error, index) => (
-                  <p key={`${field.name}-error-${index}`} className="text-red-500">
-                    {error?.message}
-                  </p>
-                ))}
-              </div>
-            )}
-          </form.Field>
-        </div>
-
-        <div>
-          <form.Field name="password">
-            {(field) => (
-              <div className="space-y-2">
-                <Label htmlFor={field.name}>Password</Label>
-                <Input
-                  id={field.name}
-                  name={field.name}
-                  type="password"
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(e) => field.handleChange(e.target.value)}
-                />
-                {field.state.meta.errors.map((error, index) => (
-                  <p key={`${field.name}-error-${index}`} className="text-red-500">
-                    {error?.message}
-                  </p>
-                ))}
-              </div>
-            )}
-          </form.Field>
-        </div>
-
-        <form.Subscribe
-          selector={(state) => ({ canSubmit: state.canSubmit, isSubmitting: state.isSubmitting })}
-        >
-          {({ canSubmit, isSubmitting }) => (
-            <Button type="submit" className="w-full" disabled={!canSubmit || isSubmitting}>
-              {isSubmitting ? "Submitting..." : "Sign In"}
-            </Button>
-          )}
-        </form.Subscribe>
-      </form>
-
-      <div className="mt-4 text-center">
-        <Button
-          variant="link"
-          onClick={onSwitchToSignUp}
-          className="text-indigo-600 hover:text-indigo-800"
-        >
-          Need an account? Sign Up
-        </Button>
-      </div>
-    </div>
-  );
+	return (
+		<div className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-12">
+			<div className="flex flex-col items-center gap-3">
+				<BrandWordmark />
+				<h1 className="text-center font-semibold text-xl tracking-tight">
+					Welcome back
+				</h1>
+				<p className="text-center text-muted-foreground text-sm">
+					Sign in to continue to your workspace.
+				</p>
+			</div>
+			<Card>
+				<CardHeader className="sr-only">
+					<CardTitle>Sign in</CardTitle>
+					<CardDescription>
+						Sign in with your email and password
+					</CardDescription>
+				</CardHeader>
+				<CardContent>
+					<form
+						onSubmit={(event) => {
+							event.preventDefault();
+							event.stopPropagation();
+							form.handleSubmit();
+						}}
+					>
+						<FieldGroup>
+							<form.Field name="email">
+								{(field) => (
+									<Field data-invalid={field.state.meta.errors.length > 0}>
+										<FieldLabel htmlFor={field.name}>Email</FieldLabel>
+										<Input
+											id={field.name}
+											name={field.name}
+											type="email"
+											autoComplete="email"
+											aria-invalid={field.state.meta.errors.length > 0}
+											value={field.state.value}
+											onBlur={field.handleBlur}
+											onChange={(event) =>
+												field.handleChange(event.target.value)
+											}
+										/>
+										<FieldError errors={field.state.meta.errors} />
+									</Field>
+								)}
+							</form.Field>
+							<form.Field name="password">
+								{(field) => (
+									<Field data-invalid={field.state.meta.errors.length > 0}>
+										<FieldLabel htmlFor={field.name}>Password</FieldLabel>
+										<Input
+											id={field.name}
+											name={field.name}
+											type="password"
+											autoComplete="current-password"
+											aria-invalid={field.state.meta.errors.length > 0}
+											value={field.state.value}
+											onBlur={field.handleBlur}
+											onChange={(event) =>
+												field.handleChange(event.target.value)
+											}
+										/>
+										<FieldError errors={field.state.meta.errors} />
+									</Field>
+								)}
+							</form.Field>
+							<form.Subscribe
+								selector={(state) => ({
+									canSubmit: state.canSubmit,
+									isSubmitting: state.isSubmitting,
+								})}
+							>
+								{({ canSubmit, isSubmitting }) => (
+									<Button
+										type="submit"
+										className="w-full"
+										disabled={!canSubmit || isSubmitting}
+									>
+										{isSubmitting ? (
+											<Loader2
+												data-icon="inline-start"
+												className="animate-spin"
+											/>
+										) : null}
+										{isSubmitting ? "Signing in…" : "Sign in"}
+									</Button>
+								)}
+							</form.Subscribe>
+						</FieldGroup>
+					</form>
+				</CardContent>
+				<CardFooter className="justify-center">
+					<Button
+						variant="link"
+						type="button"
+						onClick={onSwitchToSignUp}
+						size="sm"
+					>
+						Need an account? Sign up
+					</Button>
+				</CardFooter>
+			</Card>
+		</div>
+	);
 }
