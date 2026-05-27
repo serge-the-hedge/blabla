@@ -29,6 +29,17 @@ function normalizeEmail(email: string) {
 	return emailLower;
 }
 
+function normalizeEmail(email: string) {
+	const emailLower = email.trim().toLowerCase();
+	if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailLower)) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Enter a valid email address.",
+		});
+	}
+	return emailLower;
+}
+
 async function ensureUniqueProjectSlug(
 	ctx: QueryCtx | MutationCtx,
 	slug: string,
@@ -301,6 +312,8 @@ export const inviteMemberByEmail = mutation({
 			await ctx.db.patch(existingInvite._id, {
 				role: args.role,
 				invitedByUserId: inviter.id,
+				acceptedAt: undefined,
+				acceptedByUserId: undefined,
 				revokedAt: undefined,
 			});
 			return { status: "pending" as const, inviteId: existingInvite._id };
