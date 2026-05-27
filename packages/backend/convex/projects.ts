@@ -338,6 +338,10 @@ export const acceptPendingInvites = mutation({
 			if (invite.revokedAt !== undefined || invite.acceptedAt !== undefined) {
 				continue;
 			}
+			const project = await ctx.db.get(invite.projectId);
+			if (!project || project.archivedAt !== undefined) {
+				continue;
+			}
 			await upsertProjectMember(ctx, invite.projectId, user.id, invite.role);
 			await ctx.db.patch(invite._id, {
 				acceptedAt: timestamp,
