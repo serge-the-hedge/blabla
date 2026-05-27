@@ -300,6 +300,8 @@ export const inviteMemberByEmail = mutation({
 			await ctx.db.patch(existingInvite._id, {
 				role: args.role,
 				invitedByUserId: inviter.id,
+				acceptedAt: undefined,
+				acceptedByUserId: undefined,
 				revokedAt: undefined,
 			});
 			return { status: "pending" as const, inviteId: existingInvite._id };
