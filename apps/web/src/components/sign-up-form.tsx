@@ -16,12 +16,14 @@ import {
 import { Input } from "@blabla/ui/components/input";
 import { useForm } from "@tanstack/react-form";
 import { useNavigate } from "@tanstack/react-router";
+import { useMutation } from "convex/react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import z from "zod";
 
 import { BrandWordmark } from "@/components/brand";
 import { authClient } from "@/lib/auth-client";
+import { api } from "@/lib/convex-api";
 
 export default function SignUpForm({
 	onSwitchToSignIn,
@@ -31,6 +33,15 @@ export default function SignUpForm({
 	const navigate = useNavigate({
 		from: "/",
 	});
+	const acceptPendingInvites = useMutation(api.projects.acceptPendingInvites);
+
+	async function finishSignUp() {
+		const result = await acceptPendingInvites().catch(() => ({ accepted: 0 }));
+		navigate({
+			to: "/projects",
+		});
+		toast.success(result.accepted > 0 ? "Access granted" : "Account created");
+	}
 
 	const form = useForm({
 		defaultValues: {
@@ -47,10 +58,7 @@ export default function SignUpForm({
 				},
 				{
 					onSuccess: () => {
-						navigate({
-							to: "/dashboard",
-						});
-						toast.success("Account created");
+						void finishSignUp();
 					},
 					onError: (error) => {
 						toast.error(error.error.message || error.error.statusText);

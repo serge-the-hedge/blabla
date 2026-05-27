@@ -8,15 +8,37 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { query } from "./_generated/server";
 import authConfig from "./auth.config";
 
-const siteUrl = process.env.SITE_URL!;
+function requiredEnv(name: string) {
+	const value = process.env[name]?.trim();
+	if (!value) {
+		throw new Error(`${name} is required for Better Auth.`);
+	}
+	return value;
+}
+
+function parseOrigins(value: string | undefined) {
+	return (value ?? "")
+		.split(",")
+		.map((origin) => origin.trim())
+		.filter(Boolean);
+}
+
+const siteUrl = requiredEnv("SITE_URL");
 const authBaseUrl = process.env.BETTER_AUTH_URL ?? siteUrl;
+const trustedOrigins = Array.from(
+	new Set([siteUrl, ...parseOrigins(process.env.TRUSTED_ORIGINS)]),
+);
 
 export const authComponent = createClient<DataModel>(components.betterAuth);
+
+export function getTrustedOrigins() {
+	return trustedOrigins;
+}
 
 function createAuth(ctx: GenericCtx<DataModel>) {
 	return betterAuth({
 		baseURL: authBaseUrl,
-		trustedOrigins: [siteUrl],
+		trustedOrigins,
 		database: authComponent.adapter(ctx),
 		emailAndPassword: {
 			enabled: true,
@@ -41,37 +63,62 @@ export const getCurrentUser = query({
 	},
 });
 
-export async function requireUser(ctx: QueryCtx | MutationCtx): Promise<{
+type AuthUserLike = {
+	_id?: string;
+	userId?: string | null;
+	id?: string;
+	email?: string;
+	name?: string;
+	user?: { _id?: string; id?: string; email?: string; name?: string };
+};
+
+export function normalizeAuthUser(authUser: unknown): {
 	id: string;
 	email?: string;
 	name?: string;
-}> {
-	const authUser = await authComponent.safeGetAuthUser(ctx);
-	if (!authUser) {
-		throw new ConvexError({
-			code: "UNAUTHENTICATED",
-			message: "Sign in required.",
-		});
+} | null {
+	const user = authUser as AuthUserLike | null;
+	if (!user) {
+		return null;
 	}
-	const user = authUser as {
-		_id?: string;
-		userId?: string;
-		id?: string;
-		email?: string;
-		name?: string;
-		user?: { _id?: string; id?: string; email?: string; name?: string };
-	};
 	const id =
 		user.userId ?? user.id ?? user._id ?? user.user?.id ?? user.user?._id;
 	if (!id) {
-		throw new ConvexError({
-			code: "UNAUTHENTICATED",
-			message: "Auth user id missing.",
-		});
+		return null;
 	}
 	return {
 		id,
 		email: user.email ?? user.user?.email,
 		name: user.name ?? user.user?.name,
 	};
+}
+
+export async function getAnyUserById(ctx: QueryCtx | MutationCtx, id: string) {
+	return normalizeAuthUser(await authComponent.getAnyUserById(ctx, id));
+}
+
+export async function getAnyUserByEmail(
+	ctx: QueryCtx | MutationCtx,
+	emailLower: string,
+) {
+	const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+		model: "user",
+		where: [{ field: "email", value: emailLower }],
+	});
+	return normalizeAuthUser(authUser);
+}
+
+export async function requireUser(ctx: QueryCtx | MutationCtx): Promise<{
+	id: string;
+	email?: string;
+	name?: string;
+}> {
+	const authUser = normalizeAuthUser(await authComponent.safeGetAuthUser(ctx));
+	if (!authUser) {
+		throw new ConvexError({
+			code: "UNAUTHENTICATED",
+			message: "Sign in required.",
+		});
+	}
+	return authUser;
 }

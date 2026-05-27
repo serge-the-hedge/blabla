@@ -75,6 +75,20 @@ export default defineSchema({
 		.index("by_user", ["userId"])
 		.index("by_project_user", ["projectId", "userId"]),
 
+	projectInvites: defineTable({
+		projectId: v.id("projects"),
+		emailLower: v.string(),
+		role,
+		invitedByUserId: v.string(),
+		createdAt: v.number(),
+		acceptedAt: v.optional(v.number()),
+		acceptedByUserId: v.optional(v.string()),
+		revokedAt: v.optional(v.number()),
+	})
+		.index("by_project", ["projectId"])
+		.index("by_project_email", ["projectId", "emailLower"])
+		.index("by_email", ["emailLower"]),
+
 	locales: defineTable({
 		projectId: v.id("projects"),
 		code: v.string(),

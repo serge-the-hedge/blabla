@@ -2,7 +2,6 @@ import { Badge } from "@blabla/ui/components/badge";
 import { Button } from "@blabla/ui/components/button";
 import {
 	Card,
-	CardContent,
 	CardDescription,
 	CardHeader,
 	CardTitle,
@@ -19,7 +18,12 @@ import {
 	MessageSquareText,
 	Tags,
 } from "lucide-react";
-
+import { useEffect, useState } from "react";
+import {
+	type AuthEndpointCheck,
+	checkAuthEndpoint,
+	getConnectionDiagnostics,
+} from "@/lib/connection-diagnostics";
 import { api } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/")({
@@ -88,12 +92,31 @@ function StatusPill({ status }: { status: "ok" | "loading" | "error" }) {
 
 function HomeComponent() {
 	const healthCheck = useQuery(api.healthCheck.get);
+	const [timedOut, setTimedOut] = useState(false);
+	const [authCheck, setAuthCheck] = useState<AuthEndpointCheck | null>(null);
 	const status: "ok" | "loading" | "error" =
 		healthCheck === "OK"
 			? "ok"
-			: healthCheck === undefined
+			: healthCheck === undefined && !timedOut
 				? "loading"
 				: "error";
+	const diagnostics = getConnectionDiagnostics();
+
+	useEffect(() => {
+		if (healthCheck !== undefined) {
+			setTimedOut(false);
+			return;
+		}
+		const timeout = window.setTimeout(() => setTimedOut(true), 5000);
+		return () => window.clearTimeout(timeout);
+	}, [healthCheck]);
+
+	useEffect(() => {
+		if (!timedOut || authCheck) {
+			return;
+		}
+		void checkAuthEndpoint().then(setAuthCheck);
+	}, [timedOut, authCheck]);
 
 	return (
 		<div className="h-full overflow-auto">
@@ -115,6 +138,45 @@ function HomeComponent() {
 							review queue.
 						</p>
 					</div>
+					{status === "error" ? (
+						<div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-destructive text-xs">
+							<div className="font-medium">
+								Backend connection is not ready.
+							</div>
+							{import.meta.env.DEV ? (
+								<dl className="mt-2 grid gap-1 text-muted-foreground">
+									<div className="grid gap-1 sm:grid-cols-[140px_1fr]">
+										<dt>App origin</dt>
+										<dd className="break-all font-mono">
+											{diagnostics.origin}
+										</dd>
+									</div>
+									<div className="grid gap-1 sm:grid-cols-[140px_1fr]">
+										<dt>Convex URL</dt>
+										<dd className="break-all font-mono">
+											{diagnostics.convexUrl}
+										</dd>
+									</div>
+									<div className="grid gap-1 sm:grid-cols-[140px_1fr]">
+										<dt>Auth URL</dt>
+										<dd className="break-all font-mono">
+											{diagnostics.convexSiteUrl}
+										</dd>
+									</div>
+									<div className="grid gap-1 sm:grid-cols-[140px_1fr]">
+										<dt>Auth check</dt>
+										<dd className="break-all font-mono">
+											{authCheck
+												? authCheck.ok
+													? "OK"
+													: (authCheck.message ?? "Failed")
+												: "Checking..."}
+										</dd>
+									</div>
+								</dl>
+							) : null}
+						</div>
+					) : null}
 					<div className="flex flex-wrap gap-2">
 						<Link to="/projects">
 							<Button>
