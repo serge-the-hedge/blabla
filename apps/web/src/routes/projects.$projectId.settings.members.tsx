@@ -21,9 +21,10 @@ import {
 import { Skeleton } from "@blabla/ui/components/skeleton";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { UserPlus, Users } from "lucide-react";
+import { Mail, UserPlus, Users } from "lucide-react";
 import type { FormEvent } from "react";
 import { useState } from "react";
+import { toast } from "sonner";
 
 import {
 	PageHeader,
@@ -43,6 +44,23 @@ const ROLE_VARIANT: Record<string, "default" | "secondary" | "outline"> = {
 
 type Role = "owner" | "editor" | "viewer";
 
+type MemberRow = {
+	_id: string;
+	userId: string;
+	role: Role;
+	user: {
+		email?: string;
+		name?: string;
+	} | null;
+};
+
+type InviteRow = {
+	_id: string;
+	emailLower: string;
+	role: Role;
+	acceptedAt?: number;
+};
+
 function MembersRoute() {
 	const { projectId } = useParams({
 		from: "/projects/$projectId/settings/members",
@@ -51,17 +69,36 @@ function MembersRoute() {
 	const project = useQuery(api.projects.get, { projectId: convexProjectId });
 	const members = useQuery(api.projects.listMembers, {
 		projectId: convexProjectId,
-	});
-	const addMember = useMutation(api.projects.addMember);
+	}) as MemberRow[] | undefined;
+	const invites = useQuery(api.projects.listInvites, {
+		projectId: convexProjectId,
+	}) as InviteRow[] | undefined;
+	const inviteMember = useMutation(api.projects.inviteMemberByEmail);
 	const updateRole = useMutation(api.projects.updateMemberRole);
 	const removeMember = useMutation(api.projects.removeMember);
-	const [userId, setUserId] = useState("");
+	const revokeInvite = useMutation(api.projects.revokeInvite);
+	const [email, setEmail] = useState("");
 	const [role, setRole] = useState<Role>("viewer");
+	const [isSubmitting, setIsSubmitting] = useState(false);
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
-		await addMember({ projectId: convexProjectId, userId, role });
-		setUserId("");
+		setIsSubmitting(true);
+		try {
+			const result = await inviteMember({
+				projectId: convexProjectId,
+				email,
+				role,
+			});
+			setEmail("");
+			toast.success(
+				result.status === "accepted" ? "Member added" : "Invite saved",
+			);
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : "Invite failed");
+		} finally {
+			setIsSubmitting(false);
+		}
 	}
 
 	return (
@@ -74,14 +111,15 @@ function MembersRoute() {
 				<Card size="sm">
 					<CardContent>
 						<form onSubmit={submit}>
-							<FieldGroup className="grid grid-cols-[1fr_160px_auto] items-end gap-3">
+							<FieldGroup className="grid gap-3 md:grid-cols-[1fr_160px_auto] md:items-end">
 								<Field>
-									<FieldLabel htmlFor="member-id">User ID</FieldLabel>
+									<FieldLabel htmlFor="member-email">Email</FieldLabel>
 									<Input
-										id="member-id"
-										value={userId}
-										onChange={(event) => setUserId(event.target.value)}
-										placeholder="Better Auth user id"
+										id="member-email"
+										type="email"
+										value={email}
+										onChange={(event) => setEmail(event.target.value)}
+										placeholder="teammate@example.com"
 									/>
 								</Field>
 								<Field>
@@ -102,9 +140,9 @@ function MembersRoute() {
 										</SelectContent>
 									</Select>
 								</Field>
-								<Button type="submit" disabled={!userId.trim()}>
+								<Button type="submit" disabled={!email.trim() || isSubmitting}>
 									<UserPlus data-icon="inline-start" />
-									Add
+									{isSubmitting ? "Inviting..." : "Invite"}
 								</Button>
 							</FieldGroup>
 						</form>
@@ -121,20 +159,25 @@ function MembersRoute() {
 							</EmptyMedia>
 							<EmptyTitle>No members yet</EmptyTitle>
 							<EmptyDescription>
-								Invite teammates by their Better Auth user id.
+								Invite teammates by email to share this project.
 							</EmptyDescription>
 						</EmptyHeader>
 					</Empty>
 				) : (
 					<Card size="sm">
 						<CardContent className="divide-y">
-							{members.map((member: any) => (
+							{members.map((member) => (
 								<div
 									key={member._id}
-									className="grid grid-cols-[1fr_140px_auto] items-center gap-3 py-3 first:pt-0 last:pb-0"
+									className="grid gap-3 py-3 first:pt-0 last:pb-0 md:grid-cols-[1fr_160px_auto] md:items-center"
 								>
-									<div className="min-w-0 truncate font-mono text-xs">
-										{member.userId}
+									<div className="min-w-0">
+										<div className="truncate font-medium text-sm">
+											{member.user?.name ?? member.user?.email ?? member.userId}
+										</div>
+										<div className="truncate font-mono text-muted-foreground text-xs">
+											{member.user?.email ?? member.userId}
+										</div>
 									</div>
 									<div className="flex items-center gap-2">
 										<Badge
@@ -146,7 +189,16 @@ function MembersRoute() {
 										<Select
 											value={member.role}
 											onValueChange={(value) =>
-												updateRole({ memberId: member._id, role: value })
+												updateRole({
+													memberId: convexId<"projectMembers">(member._id),
+													role: value as Role,
+												}).catch((error) =>
+													toast.error(
+														error instanceof Error
+															? error.message
+															: "Role update failed",
+													),
+												)
 											}
 										>
 											<SelectTrigger size="sm" className="w-full">
@@ -164,7 +216,17 @@ function MembersRoute() {
 									<Button
 										size="sm"
 										variant="outline"
-										onClick={() => removeMember({ memberId: member._id })}
+										onClick={() =>
+											removeMember({
+												memberId: convexId<"projectMembers">(member._id),
+											}).catch((error) =>
+												toast.error(
+													error instanceof Error
+														? error.message
+														: "Remove failed",
+												),
+											)
+										}
 									>
 										Remove
 									</Button>
@@ -173,6 +235,58 @@ function MembersRoute() {
 						</CardContent>
 					</Card>
 				)}
+
+				{invites === undefined ? (
+					<Skeleton className="h-24 w-full" />
+				) : invites.length > 0 ? (
+					<Card size="sm">
+						<CardContent className="divide-y">
+							<div className="flex items-center gap-2 pb-3 font-medium text-sm">
+								<Mail className="size-4 text-muted-foreground" />
+								Invites
+							</div>
+							{invites.map((invite) => (
+								<div
+									key={invite._id}
+									className="grid gap-3 py-3 last:pb-0 md:grid-cols-[1fr_120px_auto] md:items-center"
+								>
+									<div className="min-w-0">
+										<div className="truncate font-mono text-xs">
+											{invite.emailLower}
+										</div>
+										<div className="text-muted-foreground text-xs">
+											{invite.acceptedAt === undefined ? "Pending" : "Accepted"}
+										</div>
+									</div>
+									<Badge
+										variant={ROLE_VARIANT[invite.role] ?? "outline"}
+										className="w-fit capitalize"
+									>
+										{invite.role}
+									</Badge>
+									<Button
+										size="sm"
+										variant="outline"
+										disabled={invite.acceptedAt !== undefined}
+										onClick={() =>
+											revokeInvite({
+												inviteId: convexId<"projectInvites">(invite._id),
+											}).catch((error) =>
+												toast.error(
+													error instanceof Error
+														? error.message
+														: "Revoke failed",
+												),
+											)
+										}
+									>
+										Revoke
+									</Button>
+								</div>
+							))}
+						</CardContent>
+					</Card>
+				) : null}
 			</div>
 		</ProjectShell>
 	);

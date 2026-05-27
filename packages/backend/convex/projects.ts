@@ -3,7 +3,7 @@ import { ConvexError, v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
-import { requireUser } from "./auth";
+import { getAnyUserByEmail, getAnyUserById, requireUser } from "./auth";
 import { normalizeLocaleCode, now, slugify } from "./lib";
 import {
 	assertProjectExists,
@@ -18,14 +18,25 @@ const roleValidator = v.union(
 );
 type Role = "owner" | "editor" | "viewer";
 
+function normalizeEmail(email: string) {
+	const emailLower = email.trim().toLowerCase();
+	if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailLower)) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Enter a valid email address.",
+		});
+	}
+	return emailLower;
+}
+
 async function ensureUniqueProjectSlug(
-	ctx: any,
+	ctx: QueryCtx | MutationCtx,
 	slug: string,
 	exceptId?: Id<"projects">,
 ) {
 	const existing = await ctx.db
 		.query("projects")
-		.withIndex("by_slug", (q: any) => q.eq("slug", slug))
+		.withIndex("by_slug", (q) => q.eq("slug", slug))
 		.unique();
 	if (existing && existing._id !== exceptId) {
 		throw new ConvexError({
@@ -35,25 +46,41 @@ async function ensureUniqueProjectSlug(
 	}
 }
 
-async function assertCanChangeMemberRole(
-	ctx: QueryCtx | MutationCtx,
-	member: { projectId: Id<"projects">; role: Role },
-	nextRole: Role,
+async function upsertProjectMember(
+	ctx: MutationCtx,
+	projectId: Id<"projects">,
+	userId: string,
+	role: "owner" | "editor" | "viewer",
 ) {
-	if (member.role !== "owner" || nextRole === "owner") {
-		return;
-	}
-	const owners = await ctx.db
+	const existing = await ctx.db
 		.query("projectMembers")
-		.withIndex("by_project", (q) => q.eq("projectId", member.projectId))
-		.filter((q) => q.eq(q.field("role"), "owner"))
-		.collect();
-	if (owners.length <= 1) {
-		throw new ConvexError({
-			code: "VALIDATION",
-			message: "A project needs at least one owner.",
-		});
+		.withIndex("by_project_user", (q) =>
+			q.eq("projectId", projectId).eq("userId", userId),
+		)
+		.unique();
+	if (existing) {
+		await ctx.db.patch(existing._id, { role });
+		return existing._id;
 	}
+	return await ctx.db.insert("projectMembers", {
+		projectId,
+		userId,
+		role,
+		createdAt: now(),
+	});
+}
+
+async function findProjectInviteByEmail(
+	ctx: QueryCtx | MutationCtx,
+	projectId: Id<"projects">,
+	emailLower: string,
+) {
+	return await ctx.db
+		.query("projectInvites")
+		.withIndex("by_project_email", (q) =>
+			q.eq("projectId", projectId).eq("emailLower", emailLower),
+		)
+		.first();
 }
 
 export const listMine = query({
@@ -93,10 +120,28 @@ export const listMembers = query({
 	args: { projectId: v.id("projects") },
 	handler: async (ctx, args) => {
 		await requireViewer(ctx, args.projectId);
-		return await ctx.db
+		const members = await ctx.db
 			.query("projectMembers")
 			.withIndex("by_project", (q) => q.eq("projectId", args.projectId))
 			.collect();
+		return await Promise.all(
+			members.map(async (member) => ({
+				...member,
+				user: await getAnyUserById(ctx, member.userId),
+			})),
+		);
+	},
+});
+
+export const listInvites = query({
+	args: { projectId: v.id("projects") },
+	handler: async (ctx, args) => {
+		await requireOwner(ctx, args.projectId);
+		const invites = await ctx.db
+			.query("projectInvites")
+			.withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+			.collect();
+		return invites.filter((invite) => invite.revokedAt === undefined);
 	},
 });
 
@@ -196,23 +241,133 @@ export const addMember = mutation({
 	handler: async (ctx, args) => {
 		await requireOwner(ctx, args.projectId);
 		await assertProjectExists(ctx, args.projectId);
-		const existing = await ctx.db
-			.query("projectMembers")
-			.withIndex("by_project_user", (q) =>
-				q.eq("projectId", args.projectId).eq("userId", args.userId),
-			)
-			.unique();
-		if (existing) {
-			await assertCanChangeMemberRole(ctx, existing, args.role);
-			await ctx.db.patch(existing._id, { role: args.role });
-			return existing._id;
+		return await upsertProjectMember(
+			ctx,
+			args.projectId,
+			args.userId.trim(),
+			args.role,
+		);
+	},
+});
+
+export const inviteMemberByEmail = mutation({
+	args: {
+		projectId: v.id("projects"),
+		email: v.string(),
+		role: roleValidator,
+	},
+	handler: async (ctx, args) => {
+		const inviter = await requireUser(ctx);
+		await requireOwner(ctx, args.projectId);
+		await assertProjectExists(ctx, args.projectId);
+		const emailLower = normalizeEmail(args.email);
+		const timestamp = now();
+		const existingInvite = await findProjectInviteByEmail(
+			ctx,
+			args.projectId,
+			emailLower,
+		);
+		const authUser = await getAnyUserByEmail(ctx, emailLower);
+
+		if (authUser) {
+			const memberId = await upsertProjectMember(
+				ctx,
+				args.projectId,
+				authUser.id,
+				args.role,
+			);
+			if (existingInvite) {
+				await ctx.db.patch(existingInvite._id, {
+					role: args.role,
+					acceptedAt: existingInvite.acceptedAt ?? timestamp,
+					acceptedByUserId: existingInvite.acceptedByUserId ?? authUser.id,
+					revokedAt: undefined,
+				});
+			} else {
+				await ctx.db.insert("projectInvites", {
+					projectId: args.projectId,
+					emailLower,
+					role: args.role,
+					invitedByUserId: inviter.id,
+					createdAt: timestamp,
+					acceptedAt: timestamp,
+					acceptedByUserId: authUser.id,
+				});
+			}
+			return { status: "accepted" as const, memberId };
 		}
-		return await ctx.db.insert("projectMembers", {
+
+		if (existingInvite) {
+			await ctx.db.patch(existingInvite._id, {
+				role: args.role,
+				invitedByUserId: inviter.id,
+				revokedAt: undefined,
+			});
+			return { status: "pending" as const, inviteId: existingInvite._id };
+		}
+
+		const inviteId = await ctx.db.insert("projectInvites", {
 			projectId: args.projectId,
-			userId: args.userId,
+			emailLower,
 			role: args.role,
-			createdAt: now(),
+			invitedByUserId: inviter.id,
+			createdAt: timestamp,
 		});
+		return { status: "pending" as const, inviteId };
+	},
+});
+
+export const acceptPendingInvites = mutation({
+	args: {},
+	handler: async (ctx) => {
+		const user = await requireUser(ctx);
+		if (!user.email) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Your account does not have an email address.",
+			});
+		}
+		const emailLower = normalizeEmail(user.email);
+		const invites = await ctx.db
+			.query("projectInvites")
+			.withIndex("by_email", (q) => q.eq("emailLower", emailLower))
+			.collect();
+		const timestamp = now();
+		let accepted = 0;
+
+		for (const invite of invites) {
+			if (invite.revokedAt !== undefined || invite.acceptedAt !== undefined) {
+				continue;
+			}
+			const project = await ctx.db.get(invite.projectId);
+			if (!project || project.archivedAt !== undefined) {
+				continue;
+			}
+			await upsertProjectMember(ctx, invite.projectId, user.id, invite.role);
+			await ctx.db.patch(invite._id, {
+				acceptedAt: timestamp,
+				acceptedByUserId: user.id,
+			});
+			accepted += 1;
+		}
+
+		return { accepted };
+	},
+});
+
+export const revokeInvite = mutation({
+	args: { inviteId: v.id("projectInvites") },
+	handler: async (ctx, args) => {
+		const invite = await ctx.db.get(args.inviteId);
+		if (!invite) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Invite not found.",
+			});
+		}
+		await requireOwner(ctx, invite.projectId);
+		await ctx.db.patch(args.inviteId, { revokedAt: now() });
+		return null;
 	},
 });
 

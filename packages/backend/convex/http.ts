@@ -2,7 +2,7 @@ import { httpRouter } from "convex/server";
 
 import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
-import { authComponent, createAuth } from "./auth";
+import { authComponent, createAuth, getTrustedOrigins } from "./auth";
 
 const http = httpRouter();
 const internalApi = internal as any;
@@ -64,7 +64,7 @@ function routeError(error: unknown) {
 
 authComponent.registerRoutesLazy(http, createAuth, {
 	cors: true,
-	trustedOrigins: [process.env.SITE_URL!],
+	trustedOrigins: getTrustedOrigins(),
 });
 
 http.route({
