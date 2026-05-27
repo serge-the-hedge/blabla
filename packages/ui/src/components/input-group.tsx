@@ -49,17 +49,25 @@ function InputGroupAddon({
 }: React.ComponentProps<"div"> & VariantProps<typeof inputGroupAddonVariants>) {
 	return (
 		<div
+			{...props}
 			role="group"
 			data-slot="input-group-addon"
 			data-align={align}
 			className={cn(inputGroupAddonVariants({ align }), className)}
 			onClick={(e) => {
+				props.onClick?.(e);
+				if (e.defaultPrevented) {
+					return;
+				}
 				if ((e.target as HTMLElement).closest("button")) {
 					return;
 				}
-				e.currentTarget.parentElement?.querySelector("input")?.focus();
+				const control =
+					e.currentTarget.parentElement?.querySelector<HTMLElement>(
+						"input, textarea",
+					);
+				control?.focus();
 			}}
-			{...props}
 		/>
 	);
 }

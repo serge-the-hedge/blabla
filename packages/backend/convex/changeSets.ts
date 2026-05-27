@@ -807,11 +807,12 @@ export const reviewAndApply = mutation({
 					actor: changeSet.author,
 					changeSetId: args.changeSetId,
 				});
+				await ctx.db.patch(item._id, { status: "accepted" });
 			}
 			if (item.kind === "key_metadata") {
 				await applyTagMetadataChange(ctx, item);
+				await ctx.db.patch(item._id, { status: "accepted" });
 			}
-			await ctx.db.patch(item._id, { status: "accepted" });
 		}
 
 		const timestamp = now();

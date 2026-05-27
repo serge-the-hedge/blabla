@@ -46,7 +46,7 @@ import {
 	X,
 } from "lucide-react";
 import type { FormEvent } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -131,14 +131,19 @@ function LocaleEditor({
 	const updateValue = useMutation(api.values.updateManual);
 	const [value, setValue] = useState(initialValue);
 	const [saving, setSaving] = useState(false);
+	const editedDuringSaveRef = useRef(false);
 
 	useEffect(() => {
+		if (saving || editedDuringSaveRef.current) {
+			return;
+		}
 		setValue(initialValue);
-	}, [initialValue]);
+	}, [initialValue, saving]);
 
 	const dirty = value !== initialValue;
 
 	async function save() {
+		editedDuringSaveRef.current = false;
 		setSaving(true);
 		try {
 			await updateValue({
@@ -186,7 +191,12 @@ function LocaleEditor({
 			<Textarea
 				className="min-h-16 text-xs leading-relaxed"
 				value={value}
-				onChange={(event) => setValue(event.target.value)}
+				onChange={(event) => {
+					if (saving) {
+						editedDuringSaveRef.current = true;
+					}
+					setValue(event.target.value);
+				}}
 				placeholder="—"
 				spellCheck={!locale.isSource}
 				dir="auto"
