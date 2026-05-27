@@ -54,6 +54,8 @@ export const create = mutation({
 				message: "Project already has a source locale.",
 			});
 		}
+		const isSource =
+			args.isSource === true || project.sourceLocaleId === undefined;
 		const timestamp = now();
 		const localeId =
 			existing && existing.archivedAt !== undefined
@@ -62,17 +64,17 @@ export const create = mutation({
 						projectId: args.projectId,
 						code,
 						label: args.label?.trim() || code,
-						isSource: Boolean(args.isSource),
+						isSource,
 						createdAt: timestamp,
 					});
 		if (existing && existing.archivedAt !== undefined) {
 			await ctx.db.patch(existing._id, {
 				label: args.label?.trim() || code,
-				isSource: Boolean(args.isSource),
+				isSource,
 				archivedAt: undefined,
 			});
 		}
-		if (args.isSource || project.sourceLocaleId === undefined) {
+		if (isSource) {
 			await ctx.db.patch(args.projectId, {
 				sourceLocaleId: localeId,
 				updatedAt: timestamp,

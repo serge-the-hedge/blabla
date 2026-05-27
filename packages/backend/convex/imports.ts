@@ -10,7 +10,15 @@ import { upsertTranslationValue } from "./values";
 type FlatMessages = Record<string, string>;
 
 function flattenJson(value: unknown, prefix = ""): FlatMessages {
-	if (typeof value === "string") return { [prefix]: value };
+	if (typeof value === "string") {
+		if (!prefix) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "JSON import must be an object with message keys.",
+			});
+		}
+		return { [prefix]: value };
+	}
 	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
 	return Object.entries(value as Record<string, unknown>).reduce<FlatMessages>(
 		(acc, [key, child]) => {
@@ -136,6 +144,7 @@ async function importMessages(
 		args.projectId,
 		args.screenSlug,
 	);
+	const screen = screenId ? await ctx.db.get(screenId) : null;
 	const tagIds = await findOrCreateTags(ctx, args.projectId, args.tagSlugs);
 	let imported = 0;
 	for (const [messageKey, value] of Object.entries(args.messages)) {
@@ -167,6 +176,7 @@ async function importMessages(
 				searchText: makeSearchText({
 					key: messageKey,
 					description: meta?.description,
+					screen,
 					tags: await Promise.all(
 						tagIds.map((tagId) => ctx.db.get(tagId)),
 					).then((tags) =>
@@ -182,6 +192,9 @@ async function importMessages(
 				searchText: makeSearchText({
 					key: existing.key,
 					description: existing.description,
+					screen: existing.screenId
+						? await ctx.db.get(existing.screenId)
+						: null,
 					tags: await Promise.all(
 						nextTagIds.map((tagId) => ctx.db.get(tagId)),
 					).then((tags) => tags.filter(Boolean)),

@@ -16,6 +16,18 @@ const roleValidator = v.union(
 	v.literal("editor"),
 	v.literal("viewer"),
 );
+type Role = "owner" | "editor" | "viewer";
+
+function normalizeEmail(email: string) {
+	const emailLower = email.trim().toLowerCase();
+	if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailLower)) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Enter a valid email address.",
+		});
+	}
+	return emailLower;
+}
 
 function normalizeEmail(email: string) {
 	const emailLower = email.trim().toLowerCase();
@@ -382,19 +394,7 @@ export const updateMemberRole = mutation({
 				message: "Member not found.",
 			});
 		await requireOwner(ctx, member.projectId);
-		if (member.role === "owner" && args.role !== "owner") {
-			const owners = await ctx.db
-				.query("projectMembers")
-				.withIndex("by_project", (q) => q.eq("projectId", member.projectId))
-				.filter((q) => q.eq(q.field("role"), "owner"))
-				.collect();
-			if (owners.length <= 1) {
-				throw new ConvexError({
-					code: "VALIDATION",
-					message: "A project needs at least one owner.",
-				});
-			}
-		}
+		await assertCanChangeMemberRole(ctx, member, args.role);
 		await ctx.db.patch(args.memberId, { role: args.role });
 		return null;
 	},

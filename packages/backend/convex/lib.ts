@@ -49,14 +49,15 @@ export function statusForValue(value: string): TranslationStatus {
 }
 
 export function toArbKey(key: string): string {
-	const parts = key.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+	const parts = key
+		.split(/[^a-zA-Z0-9]+/)
+		.map((part) => part.replace(/^[0-9]+/, ""))
+		.filter(Boolean);
 	if (parts.length === 0) return "message";
 	return parts
 		.map((part, index) => {
-			const safe = part.replace(/^[0-9]+/, "");
-			if (safe.length === 0) return "";
-			if (index === 0) return safe.charAt(0).toLowerCase() + safe.slice(1);
-			return safe.charAt(0).toUpperCase() + safe.slice(1);
+			if (index === 0) return part.charAt(0).toLowerCase() + part.slice(1);
+			return part.charAt(0).toUpperCase() + part.slice(1);
 		})
 		.join("");
 }
@@ -67,7 +68,7 @@ export function normalizeSelection(input?: {
 	tag?: string;
 	screen?: string;
 }) {
-	return input ?? { type: "all" };
+	return { type: "all", ...(input ?? {}) };
 }
 
 export function buildReviewUrl(
