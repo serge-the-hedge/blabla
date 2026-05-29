@@ -62,8 +62,10 @@ To sign in locally:
 The dev auth origin must match the Vite dev server origin exactly:
 
 - `apps/web/vite.config.ts` runs Vite on `http://localhost:3001`.
-- `packages/backend/convex/auth.ts` trusts `process.env.SITE_URL`.
-- The Convex deployment env must therefore contain `SITE_URL=http://localhost:3001`.
+- `packages/backend/convex/auth.ts` uses `SITE_URL` as the canonical app URL and
+  `TRUSTED_ORIGINS` for extra browser origins.
+- Local development must be included in `TRUSTED_ORIGINS` when `SITE_URL` points
+  at the hosted preview.
 
 Local files such as `packages/backend/.env.local` document the values, but Convex
 functions read runtime environment variables from the Convex deployment. After
@@ -71,7 +73,8 @@ creating or switching a dev deployment, set the auth env on that deployment:
 
 ```bash
 cd packages/backend
-bunx convex env set SITE_URL http://localhost:3001
+bunx convex env set SITE_URL https://blabla.seryozha.world
+bunx convex env set TRUSTED_ORIGINS "https://blabla.seryozha.world,http://localhost:3001"
 BUILT_CONVEX_SITE_URL="$(grep '^CONVEX_SITE_URL=' .env.local | cut -d= -f2-)"
 bunx convex env set BETTER_AUTH_URL "$BUILT_CONVEX_SITE_URL"
 bunx convex env set BETTER_AUTH_SECRET "$(openssl rand -base64 32)"
@@ -85,9 +88,34 @@ VITE_CONVEX_SITE_URL=https://<deployment>.convex.site
 ```
 
 If login fails after setup, first verify that the browser origin is
-`http://localhost:3001`, `VITE_CONVEX_SITE_URL` points to the active deployment's
-`.convex.site` URL, and the Convex deployment env contains `SITE_URL` with the
-same local origin.
+listed in `TRUSTED_ORIGINS`, `VITE_CONVEX_SITE_URL` points to the active
+deployment's `.convex.site` URL, and the Convex deployment env contains
+`BETTER_AUTH_URL` with the same Convex site URL.
+
+## Hosted Preview
+
+The shareable preview is planned for
+[`https://blabla.seryozha.world`](https://blabla.seryozha.world), deployed on
+Vercel with DNS managed in Gandi. The repo includes `vercel.json` for the Vite
+SPA build.
+
+Vercel environment variables:
+
+```bash
+VITE_CONVEX_URL=https://pleasant-cow-99.convex.cloud
+VITE_CONVEX_SITE_URL=https://pleasant-cow-99.convex.site
+```
+
+See [docs/hosted-auth-setup.md](docs/hosted-auth-setup.md) for the Vercel,
+Gandi, and Convex runtime steps.
+
+To share a project with a colleague:
+
+1. Sign in as the project owner.
+2. Open Settings -> Members.
+3. Invite the colleague by email and assign a role.
+4. Ask them to sign up with the same email at the hosted preview.
+5. Pending invites are accepted automatically after sign-in.
 
 ## UI Customization
 

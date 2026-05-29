@@ -911,7 +911,7 @@ function SourceLocaleColumn({
 		? sourceMissingReasonLabel(sourceMissingReason)
 		: null;
 	return (
-		<div className="sticky left-0 z-[1] flex w-72 shrink-0 flex-col gap-1.5 rounded-md border border-brand/30 bg-brand/5 p-2 shadow-sm">
+		<div className="sticky left-0 z-[1] flex w-72 shrink-0 flex-col gap-1.5 rounded-md border border-brand/30 bg-background p-2 shadow-sm">
 			<div className="flex items-center gap-1.5">
 				<Sparkles aria-label="Source locale" className="size-3 text-brand" />
 				<span className="font-medium font-mono text-[11px]">
@@ -925,7 +925,7 @@ function SourceLocaleColumn({
 				</span>
 			</div>
 			<div
-				className="min-h-16 whitespace-pre-wrap rounded-sm bg-background/60 px-2 py-1.5 text-xs leading-relaxed"
+				className="min-h-16 whitespace-pre-wrap rounded-sm bg-muted px-2 py-1.5 text-xs leading-relaxed"
 				dir="auto"
 			>
 				{sourceValue && sourceValue.trim().length > 0 ? (

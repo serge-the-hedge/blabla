@@ -1,15 +1,36 @@
 import { cn } from "@blabla/ui/lib/utils";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Authenticated, Unauthenticated } from "convex/react";
+import { Authenticated, Unauthenticated, useMutation } from "convex/react";
+import { useEffect, useRef } from "react";
 import { BrandWordmark } from "@/components/brand";
 import { ModeToggle } from "@/components/mode-toggle";
 import UserMenu from "@/components/user-menu";
+import { api } from "@/lib/convex-api";
 
 const links = [
 	{ to: "/", label: "Home" },
 	{ to: "/projects", label: "Projects" },
 	{ to: "/dashboard", label: "Account" },
 ] as const;
+
+function PendingInviteActivator() {
+	const acceptPendingInvites = useMutation(api.projects.acceptPendingInvites);
+	const hasRun = useRef(false);
+
+	useEffect(() => {
+		if (hasRun.current) {
+			return;
+		}
+		hasRun.current = true;
+		acceptPendingInvites().catch((error) => {
+			if (import.meta.env.DEV) {
+				console.warn("Failed to accept pending invites", error);
+			}
+		});
+	}, [acceptPendingInvites]);
+
+	return null;
+}
 
 export default function Header() {
 	const pathname = useRouterState({
@@ -49,6 +70,7 @@ export default function Header() {
 				<div className="flex items-center gap-2">
 					<ModeToggle />
 					<Authenticated>
+						<PendingInviteActivator />
 						<UserMenu />
 					</Authenticated>
 					<Unauthenticated>
