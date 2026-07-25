@@ -83,7 +83,7 @@ function ImportRoute() {
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader
 				title="Import"
-				description="Bootstrap or update strings from JSON and Flutter ARB."
+				description="Add missing strings from JSON and Flutter ARB without overwriting existing translations."
 			/>
 			<Card size="sm" className="max-w-3xl">
 				<CardContent>
@@ -159,7 +159,7 @@ function ImportRoute() {
 								/>
 								<FieldDescription>
 									Paste a JSON object of <code>key → value</code> pairs, or a
-									Flutter ARB document.
+									Flutter ARB document. Existing values are skipped.
 								</FieldDescription>
 							</Field>
 							<Button type="submit" disabled={!localeCode || isSubmitting}>
