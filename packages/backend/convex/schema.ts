@@ -29,6 +29,7 @@ const importJobInput = v.object({
 	localeCode: v.string(),
 	screenSlug: v.optional(v.string()),
 	tagSlugs: v.optional(v.array(v.string())),
+	mode: v.optional(v.union(v.literal("create_missing"), v.literal("upsert"))),
 });
 const importJobResult = v.union(
 	v.object({ imported: v.number() }),

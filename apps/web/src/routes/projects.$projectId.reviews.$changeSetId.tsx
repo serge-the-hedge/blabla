@@ -183,13 +183,14 @@ function ReviewDetailRoute() {
 
 	const canReview =
 		changeSet?.status === "open" || changeSet?.status === "draft";
-	const applicableCount = counts.accepted + counts.pending;
+	const applicableCount = counts.accepted;
 	const allItemsRejected = items.length > 0 && counts.rejected === items.length;
 	const busy = pendingAction.kind !== "idle";
 	const canApply =
 		canReview &&
 		applicableCount > 0 &&
 		!allItemsRejected &&
+		counts.pending === 0 &&
 		counts.conflicted === 0;
 	const canUseReviewControls = canReview && !busy;
 
@@ -379,7 +380,7 @@ function ReviewDetailRoute() {
 								<Check data-icon="inline-start" />
 								{pendingAction.kind === "applying"
 									? "Applying…"
-									: "Apply review"}
+									: `Apply ${applicableCount} accepted`}
 							</Button>
 						</>
 					) : null

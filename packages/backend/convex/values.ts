@@ -1,13 +1,16 @@
 import { ConvexError, v } from "convex/values";
 
 import type { Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
 import { requireUser } from "./auth";
 import { now, statusForValue } from "./lib";
 import { requireEditor, requireViewer } from "./permissions";
 
+const MAX_TRANSLATIONS_PER_KEY = 50;
+
 async function getValue(
-	ctx: any,
+	ctx: QueryCtx | MutationCtx,
 	keyId: Id<"translationKeys">,
 	localeId: Id<"locales">,
 ) {
@@ -19,7 +22,7 @@ async function getValue(
 		});
 	return await ctx.db
 		.query("translationValues")
-		.withIndex("by_project_key_locale", (q: any) =>
+		.withIndex("by_project_key_locale", (q) =>
 			q
 				.eq("projectId", key.projectId)
 				.eq("keyId", keyId)
@@ -28,7 +31,10 @@ async function getValue(
 		.unique();
 }
 
-async function getSourceValue(ctx: any, keyId: Id<"translationKeys">) {
+async function getSourceValue(
+	ctx: QueryCtx | MutationCtx,
+	keyId: Id<"translationKeys">,
+) {
 	const key = await ctx.db.get(keyId);
 	if (!key)
 		throw new ConvexError({
@@ -41,7 +47,7 @@ async function getSourceValue(ctx: any, keyId: Id<"translationKeys">) {
 }
 
 export async function upsertTranslationValue(
-	ctx: any,
+	ctx: MutationCtx,
 	args: {
 		projectId: Id<"projects">;
 		keyId: Id<"translationKeys">;
@@ -113,15 +119,21 @@ export async function upsertTranslationValue(
 	if (project?.sourceLocaleId === args.localeId) {
 		const values = await ctx.db
 			.query("translationValues")
-			.withIndex("by_key", (q: any) => q.eq("keyId", args.keyId))
-			.collect();
+			.withIndex("by_key", (q) => q.eq("keyId", args.keyId))
+			.take(MAX_TRANSLATIONS_PER_KEY + 1);
+		if (values.length > MAX_TRANSLATIONS_PER_KEY) {
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message: `Source updates support at most ${MAX_TRANSLATIONS_PER_KEY} translations per key.`,
+			});
+		}
 		await Promise.all(
 			values
 				.filter(
-					(value: any) =>
+					(value) =>
 						value.localeId !== args.localeId && value.status !== "missing",
 				)
-				.map((value: any) =>
+				.map((value) =>
 					ctx.db.patch(value._id, {
 						status: "stale",
 						sourceVersion: nextVersion,

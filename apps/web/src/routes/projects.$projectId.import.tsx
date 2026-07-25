@@ -56,6 +56,7 @@ function ImportRoute() {
 			projectId: convexProjectId,
 			localeCode,
 			content,
+			mode: "create_missing" as const,
 			screenSlug: screenSlug || undefined,
 			tagSlugs: tagSlugs
 				.split(",")
@@ -63,9 +64,9 @@ function ImportRoute() {
 				.filter(Boolean),
 		};
 		try {
-			const jobId =
-				format === "json" ? await importJson(args) : await importArb(args);
-			toast.success(`Import queued: ${jobId}`);
+			if (format === "json") await importJson(args);
+			else await importArb(args);
+			toast.success("Import completed");
 		} catch (error) {
 			console.error(error);
 			toast.error(
@@ -163,7 +164,7 @@ function ImportRoute() {
 							</Field>
 							<Button type="submit" disabled={!localeCode || isSubmitting}>
 								<Upload data-icon="inline-start" />
-								{isSubmitting ? "Queueing..." : "Queue import"}
+								{isSubmitting ? "Importing…" : "Import"}
 							</Button>
 						</FieldGroup>
 					</form>
