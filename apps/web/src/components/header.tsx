@@ -39,7 +39,7 @@ export default function Header() {
 
 	return (
 		<header className="sticky top-0 z-30 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-			<div className="flex h-12 items-center justify-between gap-4 px-4">
+			<div className="flex h-12 items-center justify-between gap-2 px-3 sm:gap-4 sm:px-4">
 				<div className="flex items-center gap-6">
 					<Link
 						to="/"
@@ -47,7 +47,10 @@ export default function Header() {
 					>
 						<BrandWordmark />
 					</Link>
-					<nav className="flex items-center gap-1 text-sm">
+					<nav
+						aria-label="Main"
+						className="hidden items-center gap-1 text-sm sm:flex"
+					>
 						{links.map(({ to, label }) => {
 							const active =
 								to === "/"

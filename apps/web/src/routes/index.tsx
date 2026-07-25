@@ -170,7 +170,7 @@ function HomeComponent() {
 												? authCheck.ok
 													? "OK"
 													: (authCheck.message ?? "Failed")
-												: "Checking..."}
+												: "Checking…"}
 										</dd>
 									</div>
 								</dl>

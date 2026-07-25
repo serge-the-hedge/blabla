@@ -8,7 +8,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@blabla/ui/components/dropdown-menu";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { LogOut } from "lucide-react";
 import { toast } from "sonner";
@@ -32,14 +32,18 @@ export default function UserMenu() {
 
 	return (
 		<DropdownMenu>
-			<DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
+			<DropdownMenuTrigger
+				render={
+					<Button variant="ghost" size="sm" aria-label="Open account menu" />
+				}
+			>
 				<span
 					aria-hidden
 					className="inline-flex size-5 items-center justify-center rounded-full bg-brand text-[10px] text-brand-foreground"
 				>
 					{initials}
 				</span>
-				<span className="max-w-[10rem] truncate">
+				<span className="hidden max-w-[10rem] truncate sm:inline">
 					{user?.name ?? "Account"}
 				</span>
 			</DropdownMenuTrigger>
@@ -51,6 +55,10 @@ export default function UserMenu() {
 							{user?.email}
 						</span>
 					</DropdownMenuLabel>
+					<DropdownMenuSeparator />
+					<DropdownMenuItem render={<Link to="/dashboard" />}>
+						Account
+					</DropdownMenuItem>
 					<DropdownMenuSeparator />
 					<DropdownMenuItem
 						variant="destructive"
