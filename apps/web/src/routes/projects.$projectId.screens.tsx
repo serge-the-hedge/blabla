@@ -17,6 +17,7 @@ import type { FormEvent } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { ConfirmAction } from "@/components/confirm-action";
 import {
 	PageHeader,
 	ProjectShell,
@@ -27,20 +28,53 @@ export const Route = createFileRoute("/projects/$projectId/screens")({
 	component: ScreensRoute,
 });
 
+type ScreenRow = { _id: string; name: string; slug: string };
+
 function ScreensRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/screens" });
 	const convexProjectId = convexId<"projects">(projectId);
 	const project = useQuery(api.projects.get, { projectId: convexProjectId });
-	const screens = useQuery(api.screens.list, { projectId: convexProjectId });
+	const screens = useQuery(api.screens.list, { projectId: convexProjectId }) as
+		| ScreenRow[]
+		| undefined;
 	const upsert = useMutation(api.screens.upsert);
 	const archive = useMutation(api.screens.archive);
 	const [name, setName] = useState("");
+	const [isSubmitting, setIsSubmitting] = useState(false);
+	const [archivingId, setArchivingId] = useState<string>();
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
-		await upsert({ projectId: convexProjectId, name });
-		setName("");
-		toast.success("Screen saved");
+		setIsSubmitting(true);
+		try {
+			await upsert({ projectId: convexProjectId, name });
+			setName("");
+			toast.success("Screen saved");
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? `Could not save screen: ${error.message}`
+					: "Could not save screen. Check the name and try again.",
+			);
+		} finally {
+			setIsSubmitting(false);
+		}
+	}
+
+	async function archiveScreen(screen: ScreenRow) {
+		setArchivingId(screen._id);
+		try {
+			await archive({ screenId: convexId<"screens">(screen._id) });
+			toast.success("Screen archived");
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? `Could not archive screen: ${error.message}`
+					: "Could not archive screen. Try again.",
+			);
+		} finally {
+			setArchivingId(undefined);
+		}
 	}
 
 	return (
@@ -50,19 +84,21 @@ function ScreensRoute() {
 				<Card size="sm">
 					<CardContent>
 						<form onSubmit={submit}>
-							<FieldGroup className="grid grid-cols-[1fr_auto] items-end gap-3">
+							<FieldGroup className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[1fr_auto]">
 								<Field>
 									<FieldLabel htmlFor="screen-name">Name</FieldLabel>
 									<Input
 										id="screen-name"
+										name="screenName"
+										autoComplete="off"
 										value={name}
 										onChange={(event) => setName(event.target.value)}
-										placeholder="Checkout"
+										placeholder="Checkout…"
 									/>
 								</Field>
-								<Button type="submit" disabled={!name.trim()}>
+								<Button type="submit" disabled={!name.trim() || isSubmitting}>
 									<Plus data-icon="inline-start" />
-									Save
+									{isSubmitting ? "Saving…" : "Save screen"}
 								</Button>
 							</FieldGroup>
 						</form>
@@ -86,7 +122,7 @@ function ScreensRoute() {
 				) : (
 					<Card size="sm">
 						<CardContent className="divide-y">
-							{screens.map((screen: any) => (
+							{screens.map((screen) => (
 								<div
 									key={screen._id}
 									className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
@@ -97,13 +133,16 @@ function ScreensRoute() {
 											{screen.slug}
 										</span>
 									</div>
-									<Button
-										size="sm"
-										variant="outline"
-										onClick={() => archive({ screenId: screen._id })}
-									>
-										Archive
-									</Button>
+									<ConfirmAction
+										triggerLabel={
+											archivingId === screen._id ? "Archiving…" : "Archive"
+										}
+										title={`Archive ${screen.name}?`}
+										description="This screen will no longer appear in active filters. Existing strings remain available."
+										confirmLabel="Archive screen"
+										disabled={archivingId !== undefined}
+										onConfirm={() => archiveScreen(screen)}
+									/>
 								</div>
 							))}
 						</CardContent>
