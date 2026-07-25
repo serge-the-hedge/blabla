@@ -42,6 +42,7 @@ function NewProjectRoute() {
 	const [slugTouched, setSlugTouched] = useState(false);
 	const [sourceLocaleCode, setSourceLocaleCode] = useState("en");
 	const [sourceLocaleLabel, setSourceLocaleLabel] = useState("English");
+	const [isSubmitting, setIsSubmitting] = useState(false);
 
 	function handleNameChange(value: string) {
 		setName(value);
@@ -50,6 +51,7 @@ function NewProjectRoute() {
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
+		setIsSubmitting(true);
 		try {
 			const projectId = await createProject({
 				name,
@@ -67,8 +69,10 @@ function NewProjectRoute() {
 			toast.error(
 				error instanceof Error
 					? `Could not create project: ${error.message}`
-					: "Could not create project",
+					: "Could not create project. Check the details and try again.",
 			);
+		} finally {
+			setIsSubmitting(false);
 		}
 	}
 
@@ -149,8 +153,8 @@ function NewProjectRoute() {
 								</Field>
 							</div>
 							<div className="flex gap-2">
-								<Button type="submit" disabled={!name.trim()}>
-									Create project
+								<Button type="submit" disabled={!name.trim() || isSubmitting}>
+									{isSubmitting ? "Creating project…" : "Create project"}
 								</Button>
 								<Button variant="outline" render={<Link to="/projects" />}>
 									Cancel

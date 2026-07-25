@@ -184,6 +184,7 @@ function LocaleEditor({
 					</span>
 					{locale.isSource ? (
 						<Sparkles
+							role="img"
 							aria-label="Source locale"
 							className="size-3 text-brand"
 						/>
@@ -193,6 +194,7 @@ function LocaleEditor({
 			</div>
 			<Textarea
 				className="min-h-16 text-xs leading-relaxed"
+				aria-label={`${locale.label} value`}
 				value={value}
 				onChange={(event) => {
 					if (saving) {
@@ -430,6 +432,9 @@ function KeyTagComposer({
 					<TagIcon />
 				</InputGroupAddon>
 				<InputGroupInput
+					name={`tag-${item._id}`}
+					autoComplete="off"
+					aria-label={`Add tag to ${item.key}`}
 					value={tagInput}
 					onChange={(event) => setTagInput(event.target.value)}
 					onKeyDown={(event) => {
@@ -438,7 +443,7 @@ function KeyTagComposer({
 							addTag();
 						}
 					}}
-					placeholder="Add or find tag"
+					placeholder="Add or find tag…"
 					disabled={saving}
 				/>
 				<InputGroupAddon align="inline-end">
@@ -536,6 +541,7 @@ function StringsRoute() {
 	const exportArb = useMutation(api.exports.startArbExport);
 	const [newKey, setNewKey] = useState("");
 	const [newValue, setNewValue] = useState("");
+	const [isAddingKey, setIsAddingKey] = useState(false);
 	const [selectedExportFormat, setSelectedExportFormat] =
 		useState<ExportFormat>("json");
 	const [selectedExportLocale, setSelectedExportLocale] = useState("");
@@ -552,19 +558,30 @@ function StringsRoute() {
 	async function addKey(event: FormEvent) {
 		event.preventDefault();
 		if (!project?.sourceLocale?._id || !newKey.trim()) return;
-		await createKey({
-			projectId: convexProjectId,
-			key: newKey,
-			initialValues: [
-				{
-					localeId: convexId<"locales">(project.sourceLocale._id),
-					value: newValue,
-				},
-			],
-		});
-		setNewKey("");
-		setNewValue("");
-		toast.success("String created");
+		setIsAddingKey(true);
+		try {
+			await createKey({
+				projectId: convexProjectId,
+				key: newKey,
+				initialValues: [
+					{
+						localeId: convexId<"locales">(project.sourceLocale._id),
+						value: newValue,
+					},
+				],
+			});
+			setNewKey("");
+			setNewValue("");
+			toast.success("String created");
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? `Could not add string: ${error.message}`
+					: "Could not add string. Check the key and try again.",
+			);
+		} finally {
+			setIsAddingKey(false);
+		}
 	}
 
 	const filteredKeys = keyRows.filter((item) =>
@@ -729,10 +746,12 @@ function StringsRoute() {
 								</Field>
 								<Button
 									type="submit"
-									disabled={!newKey.trim() || !project?.sourceLocale?._id}
+									disabled={
+										!newKey.trim() || !project?.sourceLocale?._id || isAddingKey
+									}
 								>
 									<Plus data-icon="inline-start" />
-									Add string
+									{isAddingKey ? "Adding…" : "Add string"}
 								</Button>
 							</FieldGroup>
 						</form>
@@ -749,6 +768,8 @@ function StringsRoute() {
 							/>
 							<Input
 								id="strings-search"
+								name="query"
+								autoComplete="off"
 								className="pl-7"
 								value={query}
 								onChange={(event) => setQuery(event.target.value)}
@@ -815,16 +836,16 @@ function StringsRoute() {
 				<div className="flex flex-wrap items-center gap-3">
 					<div className="flex items-center gap-2 text-xs">
 						<Checkbox
-							aria-label="Select visible strings"
+							id="select-visible-strings"
 							checked={allVisibleSelected}
 							indeterminate={indeterminate}
 							onCheckedChange={(checked) => toggleVisibleKeys(Boolean(checked))}
 						/>
-						<span>
+						<label htmlFor="select-visible-strings">
 							{selectedKeyIds.size > 0
 								? `${selectedKeyIds.size} selected`
 								: `Select visible (${filteredKeys.length})`}
-						</span>
+						</label>
 					</div>
 					<form
 						onSubmit={applyBatchTags}
@@ -838,7 +859,11 @@ function StringsRoute() {
 								)
 							}
 						>
-							<SelectTrigger size="sm" className="min-w-40">
+							<SelectTrigger
+								size="sm"
+								className="min-w-40"
+								aria-label="Existing tag"
+							>
 								<SelectValue placeholder="Existing tag" />
 							</SelectTrigger>
 							<SelectContent>
@@ -853,9 +878,12 @@ function StringsRoute() {
 							</SelectContent>
 						</Select>
 						<Input
+							name="batchTagSlugs"
+							autoComplete="off"
+							aria-label="New tag slugs"
 							value={batchNewTags}
 							onChange={(event) => setBatchNewTags(event.target.value)}
-							placeholder="New tag slugs (comma-separated)"
+							placeholder="checkout, legal…"
 							className="min-w-48 flex-1"
 						/>
 						<Button
@@ -874,7 +902,11 @@ function StringsRoute() {
 								setSelectedExportFormat(value as ExportFormat)
 							}
 						>
-							<SelectTrigger size="sm" className="w-28">
+							<SelectTrigger
+								size="sm"
+								className="w-28"
+								aria-label="Export format"
+							>
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
@@ -888,7 +920,11 @@ function StringsRoute() {
 							value={selectedExportLocale}
 							onValueChange={(value) => setSelectedExportLocale(value ?? "")}
 						>
-							<SelectTrigger size="sm" className="w-32">
+							<SelectTrigger
+								size="sm"
+								className="w-32"
+								aria-label="Export locale"
+							>
 								<SelectValue placeholder="Locale" />
 							</SelectTrigger>
 							<SelectContent>
