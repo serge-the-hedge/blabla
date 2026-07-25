@@ -9,33 +9,28 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as SignInRouteImport } from './routes/sign-in'
-import { Route as ProjectsRouteImport } from './routes/projects'
-import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as ProjectsNewRouteImport } from './routes/projects.new'
+import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as ProjectsRouteImport } from './routes/projects'
+import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
-import { Route as ProjectsProjectIdTagsRouteImport } from './routes/projects.$projectId.tags'
-import { Route as ProjectsProjectIdStringsRouteImport } from './routes/projects.$projectId.strings'
-import { Route as ProjectsProjectIdSettingsRouteImport } from './routes/projects.$projectId.settings'
-import { Route as ProjectsProjectIdScreensRouteImport } from './routes/projects.$projectId.screens'
-import { Route as ProjectsProjectIdReviewsRouteImport } from './routes/projects.$projectId.reviews'
-import { Route as ProjectsProjectIdLocalesRouteImport } from './routes/projects.$projectId.locales'
-import { Route as ProjectsProjectIdImportRouteImport } from './routes/projects.$projectId.import'
+import { Route as ProjectsNewRouteImport } from './routes/projects.new'
 import { Route as ProjectsProjectIdExportRouteImport } from './routes/projects.$projectId.export'
+import { Route as ProjectsProjectIdImportRouteImport } from './routes/projects.$projectId.import'
+import { Route as ProjectsProjectIdLocalesRouteImport } from './routes/projects.$projectId.locales'
+import { Route as ProjectsProjectIdReviewsRouteImport } from './routes/projects.$projectId.reviews'
+import { Route as ProjectsProjectIdScreensRouteImport } from './routes/projects.$projectId.screens'
+import { Route as ProjectsProjectIdSettingsRouteImport } from './routes/projects.$projectId.settings'
+import { Route as ProjectsProjectIdStringsRouteImport } from './routes/projects.$projectId.strings'
+import { Route as ProjectsProjectIdTagsRouteImport } from './routes/projects.$projectId.tags'
 import { Route as ProjectsProjectIdReviewsIndexRouteImport } from './routes/projects.$projectId.reviews.index'
-import { Route as ProjectsProjectIdSettingsMembersRouteImport } from './routes/projects.$projectId.settings.members'
-import { Route as ProjectsProjectIdSettingsApiTokensRouteImport } from './routes/projects.$projectId.settings.api-tokens'
 import { Route as ProjectsProjectIdReviewsChangeSetIdRouteImport } from './routes/projects.$projectId.reviews.$changeSetId'
+import { Route as ProjectsProjectIdSettingsApiTokensRouteImport } from './routes/projects.$projectId.settings.api-tokens'
+import { Route as ProjectsProjectIdSettingsMembersRouteImport } from './routes/projects.$projectId.settings.members'
 
-const SignInRoute = SignInRouteImport.update({
-  id: '/sign-in',
-  path: '/sign-in',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProjectsRoute = ProjectsRouteImport.update({
-  id: '/projects',
-  path: '/projects',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DashboardRoute = DashboardRouteImport.update({
@@ -43,42 +38,40 @@ const DashboardRoute = DashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const ProjectsRoute = ProjectsRouteImport.update({
+  id: '/projects',
+  path: '/projects',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProjectsNewRoute = ProjectsNewRouteImport.update({
-  id: '/new',
-  path: '/new',
-  getParentRoute: () => ProjectsRoute,
+const SignInRoute = SignInRouteImport.update({
+  id: '/sign-in',
+  path: '/sign-in',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsProjectIdRoute = ProjectsProjectIdRouteImport.update({
   id: '/$projectId',
   path: '/$projectId',
   getParentRoute: () => ProjectsRoute,
 } as any)
-const ProjectsProjectIdTagsRoute = ProjectsProjectIdTagsRouteImport.update({
-  id: '/tags',
-  path: '/tags',
+const ProjectsNewRoute = ProjectsNewRouteImport.update({
+  id: '/new',
+  path: '/new',
+  getParentRoute: () => ProjectsRoute,
+} as any)
+const ProjectsProjectIdExportRoute = ProjectsProjectIdExportRouteImport.update({
+  id: '/export',
+  path: '/export',
   getParentRoute: () => ProjectsProjectIdRoute,
 } as any)
-const ProjectsProjectIdStringsRoute =
-  ProjectsProjectIdStringsRouteImport.update({
-    id: '/strings',
-    path: '/strings',
-    getParentRoute: () => ProjectsProjectIdRoute,
-  } as any)
-const ProjectsProjectIdSettingsRoute =
-  ProjectsProjectIdSettingsRouteImport.update({
-    id: '/settings',
-    path: '/settings',
-    getParentRoute: () => ProjectsProjectIdRoute,
-  } as any)
-const ProjectsProjectIdScreensRoute =
-  ProjectsProjectIdScreensRouteImport.update({
-    id: '/screens',
-    path: '/screens',
+const ProjectsProjectIdImportRoute = ProjectsProjectIdImportRouteImport.update({
+  id: '/import',
+  path: '/import',
+  getParentRoute: () => ProjectsProjectIdRoute,
+} as any)
+const ProjectsProjectIdLocalesRoute =
+  ProjectsProjectIdLocalesRouteImport.update({
+    id: '/locales',
+    path: '/locales',
     getParentRoute: () => ProjectsProjectIdRoute,
   } as any)
 const ProjectsProjectIdReviewsRoute =
@@ -87,20 +80,27 @@ const ProjectsProjectIdReviewsRoute =
     path: '/reviews',
     getParentRoute: () => ProjectsProjectIdRoute,
   } as any)
-const ProjectsProjectIdLocalesRoute =
-  ProjectsProjectIdLocalesRouteImport.update({
-    id: '/locales',
-    path: '/locales',
+const ProjectsProjectIdScreensRoute =
+  ProjectsProjectIdScreensRouteImport.update({
+    id: '/screens',
+    path: '/screens',
     getParentRoute: () => ProjectsProjectIdRoute,
   } as any)
-const ProjectsProjectIdImportRoute = ProjectsProjectIdImportRouteImport.update({
-  id: '/import',
-  path: '/import',
-  getParentRoute: () => ProjectsProjectIdRoute,
-} as any)
-const ProjectsProjectIdExportRoute = ProjectsProjectIdExportRouteImport.update({
-  id: '/export',
-  path: '/export',
+const ProjectsProjectIdSettingsRoute =
+  ProjectsProjectIdSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
+    getParentRoute: () => ProjectsProjectIdRoute,
+  } as any)
+const ProjectsProjectIdStringsRoute =
+  ProjectsProjectIdStringsRouteImport.update({
+    id: '/strings',
+    path: '/strings',
+    getParentRoute: () => ProjectsProjectIdRoute,
+  } as any)
+const ProjectsProjectIdTagsRoute = ProjectsProjectIdTagsRouteImport.update({
+  id: '/tags',
+  path: '/tags',
   getParentRoute: () => ProjectsProjectIdRoute,
 } as any)
 const ProjectsProjectIdReviewsIndexRoute =
@@ -109,11 +109,11 @@ const ProjectsProjectIdReviewsIndexRoute =
     path: '/',
     getParentRoute: () => ProjectsProjectIdReviewsRoute,
   } as any)
-const ProjectsProjectIdSettingsMembersRoute =
-  ProjectsProjectIdSettingsMembersRouteImport.update({
-    id: '/members',
-    path: '/members',
-    getParentRoute: () => ProjectsProjectIdSettingsRoute,
+const ProjectsProjectIdReviewsChangeSetIdRoute =
+  ProjectsProjectIdReviewsChangeSetIdRouteImport.update({
+    id: '/$changeSetId',
+    path: '/$changeSetId',
+    getParentRoute: () => ProjectsProjectIdReviewsRoute,
   } as any)
 const ProjectsProjectIdSettingsApiTokensRoute =
   ProjectsProjectIdSettingsApiTokensRouteImport.update({
@@ -121,11 +121,11 @@ const ProjectsProjectIdSettingsApiTokensRoute =
     path: '/api-tokens',
     getParentRoute: () => ProjectsProjectIdSettingsRoute,
   } as any)
-const ProjectsProjectIdReviewsChangeSetIdRoute =
-  ProjectsProjectIdReviewsChangeSetIdRouteImport.update({
-    id: '/$changeSetId',
-    path: '/$changeSetId',
-    getParentRoute: () => ProjectsProjectIdReviewsRoute,
+const ProjectsProjectIdSettingsMembersRoute =
+  ProjectsProjectIdSettingsMembersRouteImport.update({
+    id: '/members',
+    path: '/members',
+    getParentRoute: () => ProjectsProjectIdSettingsRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
@@ -259,18 +259,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/sign-in': {
-      id: '/sign-in'
-      path: '/sign-in'
-      fullPath: '/sign-in'
-      preLoaderRoute: typeof SignInRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/projects': {
-      id: '/projects'
-      path: '/projects'
-      fullPath: '/projects'
-      preLoaderRoute: typeof ProjectsRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/dashboard': {
@@ -280,19 +273,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/projects': {
+      id: '/projects'
+      path: '/projects'
+      fullPath: '/projects'
+      preLoaderRoute: typeof ProjectsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/new': {
-      id: '/projects/new'
-      path: '/new'
-      fullPath: '/projects/new'
-      preLoaderRoute: typeof ProjectsNewRouteImport
-      parentRoute: typeof ProjectsRoute
+    '/sign-in': {
+      id: '/sign-in'
+      path: '/sign-in'
+      fullPath: '/sign-in'
+      preLoaderRoute: typeof SignInRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/projects/$projectId': {
       id: '/projects/$projectId'
@@ -301,46 +294,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectIdRouteImport
       parentRoute: typeof ProjectsRoute
     }
-    '/projects/$projectId/tags': {
-      id: '/projects/$projectId/tags'
-      path: '/tags'
-      fullPath: '/projects/$projectId/tags'
-      preLoaderRoute: typeof ProjectsProjectIdTagsRouteImport
-      parentRoute: typeof ProjectsProjectIdRoute
+    '/projects/new': {
+      id: '/projects/new'
+      path: '/new'
+      fullPath: '/projects/new'
+      preLoaderRoute: typeof ProjectsNewRouteImport
+      parentRoute: typeof ProjectsRoute
     }
-    '/projects/$projectId/strings': {
-      id: '/projects/$projectId/strings'
-      path: '/strings'
-      fullPath: '/projects/$projectId/strings'
-      preLoaderRoute: typeof ProjectsProjectIdStringsRouteImport
-      parentRoute: typeof ProjectsProjectIdRoute
-    }
-    '/projects/$projectId/settings': {
-      id: '/projects/$projectId/settings'
-      path: '/settings'
-      fullPath: '/projects/$projectId/settings'
-      preLoaderRoute: typeof ProjectsProjectIdSettingsRouteImport
-      parentRoute: typeof ProjectsProjectIdRoute
-    }
-    '/projects/$projectId/screens': {
-      id: '/projects/$projectId/screens'
-      path: '/screens'
-      fullPath: '/projects/$projectId/screens'
-      preLoaderRoute: typeof ProjectsProjectIdScreensRouteImport
-      parentRoute: typeof ProjectsProjectIdRoute
-    }
-    '/projects/$projectId/reviews': {
-      id: '/projects/$projectId/reviews'
-      path: '/reviews'
-      fullPath: '/projects/$projectId/reviews'
-      preLoaderRoute: typeof ProjectsProjectIdReviewsRouteImport
-      parentRoute: typeof ProjectsProjectIdRoute
-    }
-    '/projects/$projectId/locales': {
-      id: '/projects/$projectId/locales'
-      path: '/locales'
-      fullPath: '/projects/$projectId/locales'
-      preLoaderRoute: typeof ProjectsProjectIdLocalesRouteImport
+    '/projects/$projectId/export': {
+      id: '/projects/$projectId/export'
+      path: '/export'
+      fullPath: '/projects/$projectId/export'
+      preLoaderRoute: typeof ProjectsProjectIdExportRouteImport
       parentRoute: typeof ProjectsProjectIdRoute
     }
     '/projects/$projectId/import': {
@@ -350,11 +315,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectIdImportRouteImport
       parentRoute: typeof ProjectsProjectIdRoute
     }
-    '/projects/$projectId/export': {
-      id: '/projects/$projectId/export'
-      path: '/export'
-      fullPath: '/projects/$projectId/export'
-      preLoaderRoute: typeof ProjectsProjectIdExportRouteImport
+    '/projects/$projectId/locales': {
+      id: '/projects/$projectId/locales'
+      path: '/locales'
+      fullPath: '/projects/$projectId/locales'
+      preLoaderRoute: typeof ProjectsProjectIdLocalesRouteImport
+      parentRoute: typeof ProjectsProjectIdRoute
+    }
+    '/projects/$projectId/reviews': {
+      id: '/projects/$projectId/reviews'
+      path: '/reviews'
+      fullPath: '/projects/$projectId/reviews'
+      preLoaderRoute: typeof ProjectsProjectIdReviewsRouteImport
+      parentRoute: typeof ProjectsProjectIdRoute
+    }
+    '/projects/$projectId/screens': {
+      id: '/projects/$projectId/screens'
+      path: '/screens'
+      fullPath: '/projects/$projectId/screens'
+      preLoaderRoute: typeof ProjectsProjectIdScreensRouteImport
+      parentRoute: typeof ProjectsProjectIdRoute
+    }
+    '/projects/$projectId/settings': {
+      id: '/projects/$projectId/settings'
+      path: '/settings'
+      fullPath: '/projects/$projectId/settings'
+      preLoaderRoute: typeof ProjectsProjectIdSettingsRouteImport
+      parentRoute: typeof ProjectsProjectIdRoute
+    }
+    '/projects/$projectId/strings': {
+      id: '/projects/$projectId/strings'
+      path: '/strings'
+      fullPath: '/projects/$projectId/strings'
+      preLoaderRoute: typeof ProjectsProjectIdStringsRouteImport
+      parentRoute: typeof ProjectsProjectIdRoute
+    }
+    '/projects/$projectId/tags': {
+      id: '/projects/$projectId/tags'
+      path: '/tags'
+      fullPath: '/projects/$projectId/tags'
+      preLoaderRoute: typeof ProjectsProjectIdTagsRouteImport
       parentRoute: typeof ProjectsProjectIdRoute
     }
     '/projects/$projectId/reviews/': {
@@ -364,12 +364,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectIdReviewsIndexRouteImport
       parentRoute: typeof ProjectsProjectIdReviewsRoute
     }
-    '/projects/$projectId/settings/members': {
-      id: '/projects/$projectId/settings/members'
-      path: '/members'
-      fullPath: '/projects/$projectId/settings/members'
-      preLoaderRoute: typeof ProjectsProjectIdSettingsMembersRouteImport
-      parentRoute: typeof ProjectsProjectIdSettingsRoute
+    '/projects/$projectId/reviews/$changeSetId': {
+      id: '/projects/$projectId/reviews/$changeSetId'
+      path: '/$changeSetId'
+      fullPath: '/projects/$projectId/reviews/$changeSetId'
+      preLoaderRoute: typeof ProjectsProjectIdReviewsChangeSetIdRouteImport
+      parentRoute: typeof ProjectsProjectIdReviewsRoute
     }
     '/projects/$projectId/settings/api-tokens': {
       id: '/projects/$projectId/settings/api-tokens'
@@ -378,12 +378,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectIdSettingsApiTokensRouteImport
       parentRoute: typeof ProjectsProjectIdSettingsRoute
     }
-    '/projects/$projectId/reviews/$changeSetId': {
-      id: '/projects/$projectId/reviews/$changeSetId'
-      path: '/$changeSetId'
-      fullPath: '/projects/$projectId/reviews/$changeSetId'
-      preLoaderRoute: typeof ProjectsProjectIdReviewsChangeSetIdRouteImport
-      parentRoute: typeof ProjectsProjectIdReviewsRoute
+    '/projects/$projectId/settings/members': {
+      id: '/projects/$projectId/settings/members'
+      path: '/members'
+      fullPath: '/projects/$projectId/settings/members'
+      preLoaderRoute: typeof ProjectsProjectIdSettingsMembersRouteImport
+      parentRoute: typeof ProjectsProjectIdSettingsRoute
     }
   }
 }

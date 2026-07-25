@@ -15,6 +15,11 @@
 			"!**/.nx",
 			"!**/dev-dist",
 			"!**/.zed",
+			"!**/.agents",
+			"!**/.claude",
+			"!**/.codex",
+			"!**/.cursor",
+			"!**/.pi",
 			"!**/.vscode",
 			"!**/routeTree.gen.ts",
 			"!**/src-tauri",
@@ -37,7 +42,7 @@
 	"linter": {
 		"enabled": true,
 		"rules": {
-			"recommended": true,
+			"preset": "recommended",
 			"correctness": {
 				"useExhaustiveDependencies": "info"
 			},
