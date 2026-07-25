@@ -19,12 +19,13 @@
 	},
 	"type": "module",
 	"scripts": {
-		"dev": "turbo dev",
-		"build": "turbo build",
-		"check-types": "turbo check-types",
-		"dev:web": "turbo -F web dev",
-		"dev:server": "turbo -F @blabla/backend dev",
-		"dev:setup": "turbo -F @blabla/backend dev:setup",
+		"dev": "turbo run dev",
+		"build": "turbo run build",
+		"check-types": "turbo run check-types",
+		"test": "turbo run test",
+		"dev:web": "turbo run dev -F web",
+		"dev:server": "turbo run dev -F @blabla/backend",
+		"dev:setup": "turbo run dev:setup -F @blabla/backend",
 		"check": "biome check --write ."
 	},
 	"dependencies": {
