@@ -21,12 +21,14 @@
 	"scripts": {
 		"dev": "turbo run dev",
 		"build": "turbo run build",
+		"lint": "biome check .",
 		"check-types": "turbo run check-types",
 		"test": "turbo run test",
+		"check": "bun run lint && bun run check-types && bun run test && bun run build",
+		"check:fix": "biome check --write .",
 		"dev:web": "turbo run dev -F web",
 		"dev:server": "turbo run dev -F @blabla/backend",
-		"dev:setup": "turbo run dev:setup -F @blabla/backend",
-		"check": "biome check --write ."
+		"dev:setup": "turbo run dev:setup -F @blabla/backend"
 	},
 	"dependencies": {
 		"@blabla/env": "workspace:*",
