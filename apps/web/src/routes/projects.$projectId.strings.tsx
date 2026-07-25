@@ -4,6 +4,7 @@ import { Card, CardContent } from "@blabla/ui/components/card";
 import { Checkbox } from "@blabla/ui/components/checkbox";
 import {
 	Empty,
+	EmptyContent,
 	EmptyDescription,
 	EmptyHeader,
 	EmptyMedia,
@@ -31,6 +32,7 @@ import { Textarea } from "@blabla/ui/components/textarea";
 import { cn } from "@blabla/ui/lib/utils";
 import {
 	createFileRoute,
+	Link,
 	useNavigate,
 	useParams,
 	useSearch,
@@ -43,6 +45,7 @@ import {
 	Search,
 	Sparkles,
 	Tag as TagIcon,
+	Upload,
 	X,
 } from "lucide-react";
 import type { FormEvent } from "react";
@@ -567,6 +570,7 @@ function StringsRoute() {
 	const filteredKeys = keyRows.filter((item) =>
 		query.trim() ? item.key.toLowerCase().includes(query.toLowerCase()) : true,
 	);
+	const hasActiveFilters = Boolean(screenId || tagId || query.trim());
 	const selectedVisibleCount = filteredKeys.filter((item) =>
 		selectedKeyIds.has(item._id),
 	).length;
@@ -697,24 +701,40 @@ function StringsRoute() {
 			<div className="flex flex-col gap-4">
 				<Card size="sm">
 					<CardContent>
-						<form
-							onSubmit={addKey}
-							className="grid grid-cols-[1fr_1fr_auto] gap-2"
-						>
-							<Input
-								placeholder="key.path (e.g. checkout.payButton)"
-								value={newKey}
-								onChange={(event) => setNewKey(event.target.value)}
-							/>
-							<Input
-								placeholder="Source value"
-								value={newValue}
-								onChange={(event) => setNewValue(event.target.value)}
-							/>
-							<Button type="submit" disabled={!newKey.trim()}>
-								<Plus data-icon="inline-start" />
-								Add string
-							</Button>
+						<form id="add-string" onSubmit={addKey}>
+							<FieldGroup className="grid grid-cols-1 items-end gap-2 sm:grid-cols-[1fr_1fr_auto]">
+								<Field>
+									<FieldLabel htmlFor="new-string-key">Key</FieldLabel>
+									<Input
+										id="new-string-key"
+										name="key"
+										autoComplete="off"
+										placeholder="checkout.payButton…"
+										value={newKey}
+										onChange={(event) => setNewKey(event.target.value)}
+									/>
+								</Field>
+								<Field>
+									<FieldLabel htmlFor="new-string-value">
+										Source value
+									</FieldLabel>
+									<Input
+										id="new-string-value"
+										name="sourceValue"
+										autoComplete="off"
+										placeholder="Pay now…"
+										value={newValue}
+										onChange={(event) => setNewValue(event.target.value)}
+									/>
+								</Field>
+								<Button
+									type="submit"
+									disabled={!newKey.trim() || !project?.sourceLocale?._id}
+								>
+									<Plus data-icon="inline-start" />
+									Add string
+								</Button>
+							</FieldGroup>
 						</form>
 					</CardContent>
 				</Card>
@@ -902,11 +922,56 @@ function StringsRoute() {
 							<EmptyMedia variant="icon">
 								<Inbox />
 							</EmptyMedia>
-							<EmptyTitle>No strings here</EmptyTitle>
+							<EmptyTitle>
+								{hasActiveFilters
+									? "No strings match"
+									: "Add your first strings"}
+							</EmptyTitle>
 							<EmptyDescription>
-								Adjust the filters above, or add a new key.
+								{hasActiveFilters
+									? "Clear the current search and filters to see all strings."
+									: "Import an existing locale file, or add a string manually above."}
 							</EmptyDescription>
 						</EmptyHeader>
+						<EmptyContent>
+							{hasActiveFilters ? (
+								<Button
+									type="button"
+									variant="outline"
+									onClick={() => {
+										setQuery("");
+										setScreenId(undefined);
+										filterByTag(undefined);
+									}}
+								>
+									Clear filters
+								</Button>
+							) : (
+								<>
+									<Button
+										render={
+											<Link
+												to="/projects/$projectId/import"
+												params={{ projectId }}
+											/>
+										}
+									>
+										<Upload data-icon="inline-start" />
+										Import strings
+									</Button>
+									<Button
+										type="button"
+										variant="outline"
+										onClick={() =>
+											document.getElementById("new-string-key")?.focus()
+										}
+									>
+										<Plus data-icon="inline-start" />
+										Add manually
+									</Button>
+								</>
+							)}
+						</EmptyContent>
 					</Empty>
 				) : (
 					<div className="flex flex-col gap-2">

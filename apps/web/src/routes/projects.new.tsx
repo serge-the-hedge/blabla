@@ -152,11 +152,9 @@ function NewProjectRoute() {
 								<Button type="submit" disabled={!name.trim()}>
 									Create project
 								</Button>
-								<Link to="/projects">
-									<Button type="button" variant="outline">
-										Cancel
-									</Button>
-								</Link>
+								<Button variant="outline" render={<Link to="/projects" />}>
+									Cancel
+								</Button>
 							</div>
 						</FieldGroup>
 					</form>

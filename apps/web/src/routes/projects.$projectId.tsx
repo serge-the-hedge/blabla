@@ -34,6 +34,6 @@ function ProjectIndexRoute() {
 	}
 
 	return (
-		<div className="p-5 text-muted-foreground text-sm">Opening project...</div>
+		<div className="p-5 text-muted-foreground text-sm">Opening project…</div>
 	);
 }

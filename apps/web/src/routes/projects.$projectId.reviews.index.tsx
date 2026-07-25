@@ -3,19 +3,16 @@ import { Button } from "@blabla/ui/components/button";
 import { Card, CardContent } from "@blabla/ui/components/card";
 import {
 	Empty,
+	EmptyContent,
 	EmptyDescription,
 	EmptyHeader,
 	EmptyMedia,
 	EmptyTitle,
 } from "@blabla/ui/components/empty";
 import { Skeleton } from "@blabla/ui/components/skeleton";
-import {
-	createFileRoute,
-	useNavigate,
-	useParams,
-} from "@tanstack/react-router";
+import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
-import { Bot, GitPullRequestArrow, User } from "lucide-react";
+import { Bot, GitPullRequestArrow, KeyRound, User } from "lucide-react";
 
 import { PageHeader } from "@/components/localization/project-shell";
 import { api, convexId } from "@/lib/convex-api";
@@ -50,7 +47,6 @@ const STATUS_VARIANT: Record<
 
 function ReviewsIndexRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/reviews/" });
-	const navigate = useNavigate({ from: "/projects/$projectId/reviews/" });
 	const changeSets = useQuery(api.changeSets.list, {
 		projectId: convexId<"projects">(projectId),
 	}) as ChangeSetListRow[] | undefined;
@@ -71,9 +67,24 @@ function ReviewsIndexRoute() {
 						</EmptyMedia>
 						<EmptyTitle>No change sets yet</EmptyTitle>
 						<EmptyDescription>
-							Edits proposed by agents or users will appear here for review.
+							Connect an agent with a scoped API token. Its proposed edits will
+							arrive here for review.
 						</EmptyDescription>
 					</EmptyHeader>
+					<EmptyContent>
+						<Button
+							variant="outline"
+							render={
+								<Link
+									to="/projects/$projectId/settings/api-tokens"
+									params={{ projectId }}
+								/>
+							}
+						>
+							<KeyRound data-icon="inline-start" />
+							Create API token
+						</Button>
+					</EmptyContent>
 				</Empty>
 			) : (
 				<Card size="sm">
@@ -115,18 +126,23 @@ function ReviewsIndexRoute() {
 											/{" "}
 											<span className="text-destructive">
 												-{changeSet.summary.deletions}
-											</span>{" "}
-											· {changeSet.author?.kind}
+											</span>
+											{changeSet.author?.kind
+												? ` · ${changeSet.author.kind}`
+												: null}
 										</div>
 									</div>
 									<Button
 										size="sm"
 										variant="outline"
-										onClick={() =>
-											navigate({
-												to: "/projects/$projectId/reviews/$changeSetId",
-												params: { projectId, changeSetId: changeSet._id },
-											})
+										render={
+											<Link
+												to="/projects/$projectId/reviews/$changeSetId"
+												params={{
+													projectId,
+													changeSetId: changeSet._id,
+												}}
+											/>
 										}
 									>
 										Review
