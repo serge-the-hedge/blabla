@@ -30,7 +30,7 @@ import {
 } from "convex/react";
 import { ArrowUpRight, FolderKanban, Plus } from "lucide-react";
 
-import SignInForm from "@/components/sign-in-form";
+import AuthRedirect from "@/components/auth-redirect";
 import { api } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects")({
@@ -53,12 +53,10 @@ function ProjectsHeader() {
 					Localization workspaces and review queues.
 				</p>
 			</div>
-			<Link to="/projects/new">
-				<Button>
-					<Plus data-icon="inline-start" />
-					New project
-				</Button>
-			</Link>
+			<Button render={<Link to="/projects/new" />}>
+				<Plus data-icon="inline-start" />
+				New project
+			</Button>
 		</div>
 	);
 }
@@ -95,12 +93,10 @@ function ProjectsContent() {
 						</EmptyDescription>
 					</EmptyHeader>
 					<EmptyContent>
-						<Link to="/projects/new">
-							<Button>
-								<Plus data-icon="inline-start" />
-								Create project
-							</Button>
-						</Link>
+						<Button render={<Link to="/projects/new" />}>
+							<Plus data-icon="inline-start" />
+							Create project
+						</Button>
 					</EmptyContent>
 				</Empty>
 			) : (
@@ -152,7 +148,7 @@ function ProjectsRoute() {
 				{pathname === "/projects" ? <ProjectsContent /> : <Outlet />}
 			</Authenticated>
 			<Unauthenticated>
-				<SignInForm onSwitchToSignUp={() => undefined} />
+				<AuthRedirect />
 			</Unauthenticated>
 			<AuthLoading>
 				<div className="mx-auto max-w-5xl px-6 py-8">

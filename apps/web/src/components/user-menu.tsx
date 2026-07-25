@@ -1,4 +1,3 @@
-import { api } from "@blabla/backend/convex/_generated/api";
 import { Button } from "@blabla/ui/components/button";
 import {
 	DropdownMenu,
@@ -14,6 +13,7 @@ import { useQuery } from "convex/react";
 import { LogOut } from "lucide-react";
 
 import { authClient } from "@/lib/auth-client";
+import { api } from "@/lib/convex-api";
 
 function initialsOf(name: string | undefined, email: string | undefined) {
 	if (name?.trim()) {
@@ -57,7 +57,11 @@ export default function UserMenu() {
 							authClient.signOut({
 								fetchOptions: {
 									onSuccess: () => {
-										navigate({ to: "/dashboard" });
+										navigate({
+											to: "/sign-in",
+											search: { mode: "sign-in", redirect: "/projects" },
+											replace: true,
+										});
 									},
 								},
 							});

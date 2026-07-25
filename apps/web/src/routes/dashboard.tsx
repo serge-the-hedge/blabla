@@ -1,4 +1,3 @@
-import { api } from "@blabla/backend/convex/_generated/api";
 import {
 	Card,
 	CardContent,
@@ -14,10 +13,8 @@ import {
 	Unauthenticated,
 	useQuery,
 } from "convex/react";
-import { useState } from "react";
-
-import SignInForm from "@/components/sign-in-form";
-import SignUpForm from "@/components/sign-up-form";
+import AuthRedirect from "@/components/auth-redirect";
+import { api } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/dashboard")({
 	component: RouteComponent,
@@ -73,19 +70,13 @@ function PrivateDashboardContent() {
 }
 
 function RouteComponent() {
-	const [showSignIn, setShowSignIn] = useState(false);
-
 	return (
 		<>
 			<Authenticated>
 				<PrivateDashboardContent />
 			</Authenticated>
 			<Unauthenticated>
-				{showSignIn ? (
-					<SignInForm onSwitchToSignUp={() => setShowSignIn(false)} />
-				) : (
-					<SignUpForm onSwitchToSignIn={() => setShowSignIn(true)} />
-				)}
+				<AuthRedirect />
 			</Unauthenticated>
 			<AuthLoading>
 				<div className="mx-auto flex max-w-3xl flex-col gap-3 px-6 py-8">
