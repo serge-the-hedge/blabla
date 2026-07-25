@@ -18,6 +18,7 @@ import type { FormEvent } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { ConfirmAction } from "@/components/confirm-action";
 import {
 	PageHeader,
 	ProjectShell,
@@ -28,15 +29,25 @@ export const Route = createFileRoute("/projects/$projectId/locales")({
 	component: LocalesRoute,
 });
 
+type LocaleRow = {
+	_id: string;
+	code: string;
+	label: string;
+	isSource?: boolean;
+};
+
 function LocalesRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/locales" });
 	const convexProjectId = convexId<"projects">(projectId);
 	const project = useQuery(api.projects.get, { projectId: convexProjectId });
-	const locales = useQuery(api.locales.list, { projectId: convexProjectId });
+	const locales = useQuery(api.locales.list, { projectId: convexProjectId }) as
+		| LocaleRow[]
+		| undefined;
 	const createLocale = useMutation(api.locales.create);
 	const archiveLocale = useMutation(api.locales.archive);
 	const [code, setCode] = useState("");
 	const [label, setLabel] = useState("");
+	const [archivingId, setArchivingId] = useState<string>();
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
@@ -54,6 +65,7 @@ function LocalesRoute() {
 	}
 
 	async function onArchive(localeId: string) {
+		setArchivingId(localeId);
 		try {
 			await archiveLocale({ localeId: convexId<"locales">(localeId) });
 			toast.success("Locale archived");
@@ -62,6 +74,8 @@ function LocalesRoute() {
 			toast.error(
 				error instanceof Error ? error.message : "Could not archive locale",
 			);
+		} finally {
+			setArchivingId(undefined);
 		}
 	}
 
@@ -75,11 +89,14 @@ function LocalesRoute() {
 				<Card size="sm">
 					<CardContent>
 						<form onSubmit={submit}>
-							<FieldGroup className="grid grid-cols-[160px_1fr_auto] items-end gap-3">
+							<FieldGroup className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[160px_1fr_auto]">
 								<Field>
 									<FieldLabel htmlFor="locale-code">Code</FieldLabel>
 									<Input
 										id="locale-code"
+										name="localeCode"
+										autoComplete="off"
+										spellCheck={false}
 										value={code}
 										onChange={(event) => setCode(event.target.value)}
 										placeholder="hy"
@@ -89,6 +106,8 @@ function LocalesRoute() {
 									<FieldLabel htmlFor="locale-label">Label</FieldLabel>
 									<Input
 										id="locale-label"
+										name="localeLabel"
+										autoComplete="off"
 										value={label}
 										onChange={(event) => setLabel(event.target.value)}
 										placeholder="Armenian"
@@ -120,7 +139,7 @@ function LocalesRoute() {
 				) : (
 					<Card size="sm">
 						<CardContent className="divide-y">
-							{locales.map((locale: any) => (
+							{locales.map((locale) => (
 								<div
 									key={locale._id}
 									className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
@@ -144,13 +163,16 @@ function LocalesRoute() {
 										</span>
 									</div>
 									{!locale.isSource ? (
-										<Button
-											size="sm"
-											variant="outline"
-											onClick={() => onArchive(locale._id)}
-										>
-											Archive
-										</Button>
+										<ConfirmAction
+											triggerLabel={
+												archivingId === locale._id ? "Archiving…" : "Archive"
+											}
+											title={`Archive ${locale.label}?`}
+											description="This locale will be hidden from active translation and export views. Existing values are retained."
+											confirmLabel="Archive locale"
+											disabled={archivingId !== undefined}
+											onConfirm={() => onArchive(locale._id)}
+										/>
 									) : null}
 								</div>
 							))}

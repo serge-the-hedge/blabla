@@ -63,7 +63,7 @@ function NewProjectRoute() {
 			await navigate({
 				to: "/projects/$projectId/strings",
 				params: { projectId },
-				search: { tag: undefined },
+				search: { tag: undefined, screen: undefined, q: undefined },
 			});
 		} catch (error) {
 			toast.error(

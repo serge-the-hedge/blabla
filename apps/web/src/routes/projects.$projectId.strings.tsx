@@ -65,7 +65,12 @@ import {
 
 export const Route = createFileRoute("/projects/$projectId/strings")({
 	validateSearch: (search: Record<string, unknown>) => ({
-		tag: typeof search.tag === "string" ? search.tag : undefined,
+		tag: typeof search.tag === "string" && search.tag ? search.tag : undefined,
+		screen:
+			typeof search.screen === "string" && search.screen
+				? search.screen
+				: undefined,
+		q: typeof search.q === "string" && search.q ? search.q : undefined,
 	}),
 	component: StringsRoute,
 });
@@ -169,7 +174,7 @@ function LocaleEditor({
 	return (
 		<div
 			className={cn(
-				"flex w-72 shrink-0 flex-col gap-1.5 rounded-md border bg-background p-2 transition-colors",
+				"flex w-full shrink-0 flex-col gap-1.5 rounded-md border bg-background p-2 transition-colors sm:w-72",
 				locale.isSource && "border-brand/30 bg-brand/5",
 				dirty && "border-ring/50 ring-1 ring-ring/20",
 			)}
@@ -196,6 +201,17 @@ function LocaleEditor({
 				className="min-h-16 text-xs leading-relaxed"
 				aria-label={`${locale.label} value`}
 				value={value}
+				onKeyDown={(event) => {
+					if (
+						(event.metaKey || event.ctrlKey) &&
+						event.key === "Enter" &&
+						dirty &&
+						!saving
+					) {
+						event.preventDefault();
+						void save();
+					}
+				}}
 				onChange={(event) => {
 					if (saving) {
 						editedDuringSaveRef.current = true;
@@ -279,7 +295,7 @@ function KeyRow({
 						<KeyTagComposer item={item} allTags={allTags} />
 					</div>
 				</div>
-				<div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+				<div className="-mx-1 flex flex-col gap-2 px-1 pb-1 sm:flex-row sm:overflow-x-auto">
 					{locales.map((locale) => {
 						const stored = valuesByLocale.get(locale._id);
 						return (
@@ -495,9 +511,15 @@ function StringsRoute() {
 	const locales = useQuery(api.locales.list, { projectId: convexProjectId });
 	const screens = useQuery(api.screens.list, { projectId: convexProjectId });
 	const tags = useQuery(api.tags.list, { projectId: convexProjectId });
-	const [screenId, setScreenId] = useState<string | undefined>(undefined);
-	const [tagId, setTagId] = useState<string | undefined>(undefined);
-	const [query, setQuery] = useState("");
+	const tagOptions = (tags ?? []) as Tag[];
+	const screenOptions = (screens ?? []) as Screen[];
+	const tagId = search.tag
+		? tagOptions.find((tag) => tag.slug === search.tag)?._id
+		: undefined;
+	const screenId = search.screen
+		? screenOptions.find((screen) => screen.slug === search.screen)?._id
+		: undefined;
+	const query = search.q ?? "";
 	const [selectedKeyIds, setSelectedKeyIds] = useState<Set<string>>(new Set());
 	const [batchTagId, setBatchTagId] = useState("");
 	const [batchNewTags, setBatchNewTags] = useState("");
@@ -545,15 +567,6 @@ function StringsRoute() {
 	const [selectedExportFormat, setSelectedExportFormat] =
 		useState<ExportFormat>("json");
 	const [selectedExportLocale, setSelectedExportLocale] = useState("");
-	const tagOptions = (tags ?? []) as Tag[];
-
-	useEffect(() => {
-		if (tags === undefined) return;
-		const nextTag = search.tag
-			? tagOptions.find((tag) => tag.slug === search.tag)
-			: undefined;
-		setTagId(nextTag?._id);
-	}, [search.tag, tags, tagOptions]);
 
 	async function addKey(event: FormEvent) {
 		event.preventDefault();
@@ -687,17 +700,15 @@ function StringsRoute() {
 		}
 	}
 
-	const screenOptions = (screens ?? []) as Screen[];
-
-	function filterByTag(tag: Tag | undefined) {
-		setTagId(tag?._id);
-		navigate({
-			search: (current) => ({
-				...current,
-				tag: tag?.slug,
-			}),
+	function updateFilters(next: { tag?: string; screen?: string; q?: string }) {
+		void navigate({
+			search: (current) => ({ ...current, ...next }),
 			replace: true,
 		});
+	}
+
+	function filterByTag(tag: Tag | undefined) {
+		updateFilters({ tag: tag?.slug });
 	}
 
 	return (
@@ -772,7 +783,9 @@ function StringsRoute() {
 								autoComplete="off"
 								className="pl-7"
 								value={query}
-								onChange={(event) => setQuery(event.target.value)}
+								onChange={(event) =>
+									updateFilters({ q: event.target.value || undefined })
+								}
 								placeholder="Find by key…"
 							/>
 						</div>
@@ -780,11 +793,11 @@ function StringsRoute() {
 					<Field>
 						<FieldLabel htmlFor="strings-screen">Screen</FieldLabel>
 						<Select
-							value={screenId ?? "__all__"}
+							value={search.screen ?? "__all__"}
 							onValueChange={(next) =>
-								setScreenId(
-									next === "__all__" || next == null ? undefined : next,
-								)
+								updateFilters({
+									screen: next === "__all__" || next == null ? undefined : next,
+								})
 							}
 						>
 							<SelectTrigger id="strings-screen" className="w-full">
@@ -794,7 +807,7 @@ function StringsRoute() {
 								<SelectGroup>
 									<SelectItem value="__all__">All screens</SelectItem>
 									{screenOptions.map((screen) => (
-										<SelectItem key={screen._id} value={screen._id}>
+										<SelectItem key={screen._id} value={screen.slug}>
 											{screen.slug}
 										</SelectItem>
 									))}
@@ -805,13 +818,11 @@ function StringsRoute() {
 					<Field>
 						<FieldLabel htmlFor="strings-tag">Tag</FieldLabel>
 						<Select
-							value={tagId ?? "__all__"}
+							value={search.tag ?? "__all__"}
 							onValueChange={(next) =>
-								filterByTag(
-									next === "__all__" || next == null
-										? undefined
-										: tagOptions.find((tag) => tag._id === next),
-								)
+								updateFilters({
+									tag: next === "__all__" || next == null ? undefined : next,
+								})
 							}
 						>
 							<SelectTrigger id="strings-tag" className="w-full">
@@ -821,7 +832,7 @@ function StringsRoute() {
 								<SelectGroup>
 									<SelectItem value="__all__">All tags</SelectItem>
 									{tagOptions.map((tag) => (
-										<SelectItem key={tag._id} value={tag._id}>
+										<SelectItem key={tag._id} value={tag.slug}>
 											{tag.slug}
 										</SelectItem>
 									))}
@@ -975,9 +986,11 @@ function StringsRoute() {
 									type="button"
 									variant="outline"
 									onClick={() => {
-										setQuery("");
-										setScreenId(undefined);
-										filterByTag(undefined);
+										updateFilters({
+											q: undefined,
+											screen: undefined,
+											tag: undefined,
+										});
 									}}
 								>
 									Clear filters

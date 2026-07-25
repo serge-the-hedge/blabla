@@ -142,6 +142,7 @@ function ReviewsIndexRoute() {
 													projectId,
 													changeSetId: changeSet._id,
 												}}
+												search={{ status: undefined }}
 											/>
 										}
 									>

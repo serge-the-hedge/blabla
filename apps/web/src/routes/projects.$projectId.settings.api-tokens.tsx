@@ -37,6 +37,7 @@ import type { FormEvent } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { ConfirmAction } from "@/components/confirm-action";
 import {
 	PageHeader,
 	ProjectShell,
@@ -73,9 +74,12 @@ function ApiTokensRoute() {
 		"propose",
 	]);
 	const [rawToken, setRawToken] = useState("");
+	const [isCreating, setIsCreating] = useState(false);
+	const [revokingId, setRevokingId] = useState<string>();
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
+		setIsCreating(true);
 		try {
 			const result = await createToken({
 				projectId: convexProjectId,
@@ -89,13 +93,33 @@ function ApiTokensRoute() {
 			toast.error(
 				error instanceof Error ? error.message : "Could not create token",
 			);
+		} finally {
+			setIsCreating(false);
 		}
 	}
 
 	async function copyToken() {
 		if (!rawToken) return;
-		await navigator.clipboard.writeText(rawToken);
-		toast.success("Token copied to clipboard");
+		try {
+			await navigator.clipboard.writeText(rawToken);
+			toast.success("Token copied to clipboard");
+		} catch {
+			toast.error("Could not copy the token. Select and copy it manually.");
+		}
+	}
+
+	async function revokeToken(token: ApiToken) {
+		setRevokingId(token._id);
+		try {
+			await revoke({ tokenId: convexId<"apiTokens">(token._id) });
+			toast.success("Token revoked");
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Could not revoke token",
+			);
+		} finally {
+			setRevokingId(undefined);
+		}
 	}
 
 	function closeToken() {
@@ -124,6 +148,8 @@ function ApiTokensRoute() {
 									<FieldLabel htmlFor="token-name">Name</FieldLabel>
 									<Input
 										id="token-name"
+										name="tokenName"
+										autoComplete="off"
 										value={name}
 										onChange={(event) => setName(event.target.value)}
 										placeholder="agent-ci, translator-bot…"
@@ -168,10 +194,12 @@ function ApiTokensRoute() {
 								</Field>
 								<Button
 									type="submit"
-									disabled={!name.trim() || selectedScopes.length === 0}
+									disabled={
+										!name.trim() || selectedScopes.length === 0 || isCreating
+									}
 								>
 									<Plus data-icon="inline-start" />
-									Create token
+									{isCreating ? "Creating…" : "Create token"}
 								</Button>
 								{rawToken ? (
 									<div className="flex flex-col gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs">
@@ -289,26 +317,16 @@ function ApiTokensRoute() {
 											))}
 										</div>
 									</div>
-									<Button
-										size="sm"
-										variant="outline"
-										onClick={async () => {
-											try {
-												await revoke({
-													tokenId: convexId<"apiTokens">(token._id),
-												});
-												toast.success("Token revoked");
-											} catch (error) {
-												toast.error(
-													error instanceof Error
-														? error.message
-														: "Could not revoke token",
-												);
-											}
-										}}
-									>
-										Revoke
-									</Button>
+									<ConfirmAction
+										triggerLabel={
+											revokingId === token._id ? "Revoking…" : "Revoke"
+										}
+										title={`Revoke ${token.name}?`}
+										description="Any agent using this token will immediately lose access. This cannot be undone."
+										confirmLabel="Revoke token"
+										disabled={revokingId !== undefined}
+										onConfirm={() => revokeToken(token)}
+									/>
 								</div>
 							))}
 						</CardContent>

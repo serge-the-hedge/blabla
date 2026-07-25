@@ -106,7 +106,7 @@ function ProjectsContent() {
 							key={project._id}
 							to="/projects/$projectId/strings"
 							params={{ projectId: project._id }}
-							search={{ tag: undefined }}
+							search={{ tag: undefined, screen: undefined, q: undefined }}
 							className="group outline-none focus-visible:ring-2 focus-visible:ring-ring"
 						>
 							<Card className="h-full transition-colors group-hover:bg-muted/40">

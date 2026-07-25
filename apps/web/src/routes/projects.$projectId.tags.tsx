@@ -10,17 +10,14 @@ import {
 import { Field, FieldGroup, FieldLabel } from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
 import { Skeleton } from "@blabla/ui/components/skeleton";
-import {
-	createFileRoute,
-	useNavigate,
-	useParams,
-} from "@tanstack/react-router";
+import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { Plus, Tags as TagsIcon } from "lucide-react";
 import type { FormEvent } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { ConfirmAction } from "@/components/confirm-action";
 import {
 	PageHeader,
 	ProjectShell,
@@ -41,7 +38,6 @@ type TagRow = {
 function TagsRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/tags" });
 	const convexProjectId = convexId<"projects">(projectId);
-	const navigate = useNavigate({ from: "/projects/$projectId/tags" });
 	const project = useQuery(api.projects.get, { projectId: convexProjectId });
 	const tags = useQuery(api.tags.list, { projectId: convexProjectId }) as
 		| TagRow[]
@@ -50,20 +46,37 @@ function TagsRoute() {
 	const archive = useMutation(api.tags.archive);
 	const [name, setName] = useState("");
 	const [color, setColor] = useState("#4f46e5");
+	const [isSubmitting, setIsSubmitting] = useState(false);
+	const [archivingId, setArchivingId] = useState<string>();
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
-		await upsert({ projectId: convexProjectId, name, color });
-		setName("");
-		toast.success("Tag saved");
+		setIsSubmitting(true);
+		try {
+			await upsert({ projectId: convexProjectId, name, color });
+			setName("");
+			toast.success("Tag saved");
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Could not save tag",
+			);
+		} finally {
+			setIsSubmitting(false);
+		}
 	}
 
-	function openStringsForTag(tag: { slug: string }) {
-		navigate({
-			to: "/projects/$projectId/strings",
-			params: { projectId },
-			search: { tag: tag.slug },
-		});
+	async function archiveTag(tag: TagRow) {
+		setArchivingId(tag._id);
+		try {
+			await archive({ tagId: convexId<"tags">(tag._id) });
+			toast.success("Tag archived");
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Could not archive tag",
+			);
+		} finally {
+			setArchivingId(undefined);
+		}
 	}
 
 	return (
@@ -76,11 +89,13 @@ function TagsRoute() {
 				<Card size="sm">
 					<CardContent>
 						<form onSubmit={submit}>
-							<FieldGroup className="grid grid-cols-[1fr_120px_auto] items-end gap-3">
+							<FieldGroup className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[1fr_120px_auto]">
 								<Field>
 									<FieldLabel htmlFor="tag-name">Name</FieldLabel>
 									<Input
 										id="tag-name"
+										name="tagName"
+										autoComplete="off"
 										value={name}
 										onChange={(event) => setName(event.target.value)}
 										placeholder="checkout"
@@ -98,9 +113,9 @@ function TagsRoute() {
 										/>
 									</div>
 								</Field>
-								<Button type="submit" disabled={!name.trim()}>
+								<Button type="submit" disabled={!name.trim() || isSubmitting}>
 									<Plus data-icon="inline-start" />
-									Save
+									{isSubmitting ? "Saving…" : "Save tag"}
 								</Button>
 							</FieldGroup>
 						</form>
@@ -135,26 +150,32 @@ function TagsRoute() {
 											style={{ backgroundColor: tag.color }}
 											aria-hidden
 										/>
-										<button
-											type="button"
-											className="flex min-w-0 flex-col text-left"
-											onClick={() => openStringsForTag(tag)}
+										<Link
+											to="/projects/$projectId/strings"
+											params={{ projectId }}
+											search={{
+												tag: tag.slug,
+												screen: undefined,
+												q: undefined,
+											}}
+											className="flex min-w-0 flex-col rounded-sm text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 										>
 											<span className="font-medium text-sm">{tag.name}</span>
-											<span className="font-mono text-muted-foreground text-xs hover:underline">
+											<span className="font-mono text-muted-foreground text-xs">
 												{tag.slug}
 											</span>
-										</button>
+										</Link>
 									</div>
-									<Button
-										size="sm"
-										variant="outline"
-										onClick={() =>
-											archive({ tagId: convexId<"tags">(tag._id) })
+									<ConfirmAction
+										triggerLabel={
+											archivingId === tag._id ? "Archiving…" : "Archive"
 										}
-									>
-										Archive
-									</Button>
+										title={`Archive ${tag.name}?`}
+										description="This tag will be removed from active filters and string metadata."
+										confirmLabel="Archive tag"
+										disabled={archivingId !== undefined}
+										onConfirm={() => archiveTag(tag)}
+									/>
 								</div>
 							))}
 						</CardContent>

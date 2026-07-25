@@ -57,9 +57,11 @@ function ExportRoute() {
 	const [selectionValue, setSelectionValue] = useState("");
 	const [content, setContent] = useState("");
 	const [generatedFileName, setGeneratedFileName] = useState("");
+	const [isGenerating, setIsGenerating] = useState(false);
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
+		setIsGenerating(true);
 		const selection =
 			selectionType === "keys"
 				? {
@@ -74,37 +76,49 @@ function ExportRoute() {
 					: selectionType === "screen"
 						? { type: "screen" as const, screen: selectionValue }
 						: { type: "all" as const };
-		const result =
-			format === "json"
-				? await exportJson({
-						projectId: convexProjectId,
-						localeCode,
-						selection,
-					})
-				: await exportArb({
-						projectId: convexProjectId,
-						localeCode,
-						selection,
-					});
-		setContent(result.content ?? "");
-		setGeneratedFileName(
-			buildExportFileName({
-				projectSlug: project?.slug ?? project?.name,
-				localeCode,
-				scope:
-					selectionType === "all"
-						? "all"
-						: `${selectionType}-${selectionValue || "selection"}`,
-				format,
-			}),
-		);
-		toast.success("Export ready");
+		try {
+			const result =
+				format === "json"
+					? await exportJson({
+							projectId: convexProjectId,
+							localeCode,
+							selection,
+						})
+					: await exportArb({
+							projectId: convexProjectId,
+							localeCode,
+							selection,
+						});
+			setContent(result.content ?? "");
+			setGeneratedFileName(
+				buildExportFileName({
+					projectSlug: project?.slug ?? project?.name,
+					localeCode,
+					scope:
+						selectionType === "all"
+							? "all"
+							: `${selectionType}-${selectionValue || "selection"}`,
+					format,
+				}),
+			);
+			toast.success("Export ready");
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Could not generate export",
+			);
+		} finally {
+			setIsGenerating(false);
+		}
 	}
 
 	async function copyContent() {
 		if (!content) return;
-		await navigator.clipboard.writeText(content);
-		toast.success("Copied to clipboard");
+		try {
+			await navigator.clipboard.writeText(content);
+			toast.success("Copied to clipboard");
+		} catch {
+			toast.error("Could not copy the export. Select and copy it manually.");
+		}
 	}
 
 	function downloadContent() {
@@ -211,9 +225,16 @@ function ExportRoute() {
 									/>
 								</Field>
 							</div>
-							<Button type="submit" disabled={!localeCode}>
+							<Button
+								type="submit"
+								disabled={
+									!localeCode ||
+									isGenerating ||
+									(selectionType !== "all" && !selectionValue.trim())
+								}
+							>
 								<Download data-icon="inline-start" />
-								Generate export
+								{isGenerating ? "Generating…" : "Generate export"}
 							</Button>
 							<Field>
 								<div className="flex items-center justify-between">
@@ -246,7 +267,7 @@ function ExportRoute() {
 									className="min-h-80 font-mono"
 									readOnly
 									value={content}
-									placeholder="Generated output will appear here."
+									placeholder="Generated output will appear here…"
 								/>
 								<FieldDescription>
 									Result is generated synchronously. Long exports may take a

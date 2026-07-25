@@ -41,7 +41,12 @@ import {
 	TooltipTrigger,
 } from "@blabla/ui/components/tooltip";
 import { cn } from "@blabla/ui/lib/utils";
-import { createFileRoute, useParams } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	useNavigate,
+	useParams,
+	useSearch,
+} from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { Check, Download, Inbox, Sparkles, Undo2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -58,6 +63,13 @@ import {
 export const Route = createFileRoute(
 	"/projects/$projectId/reviews/$changeSetId",
 )({
+	validateSearch: (search: Record<string, unknown>) => ({
+		status:
+			typeof search.status === "string" &&
+			["pending", "accepted", "rejected", "conflicted"].includes(search.status)
+				? (search.status as StatusFilter)
+				: undefined,
+	}),
 	component: ReviewDetailRoute,
 });
 
@@ -147,6 +159,12 @@ function ReviewDetailRoute() {
 	const { changeSetId } = useParams({
 		from: "/projects/$projectId/reviews/$changeSetId",
 	});
+	const search = useSearch({
+		from: "/projects/$projectId/reviews/$changeSetId",
+	});
+	const navigate = useNavigate({
+		from: "/projects/$projectId/reviews/$changeSetId",
+	});
 	const convexChangeSetId = convexId<"changeSets">(changeSetId);
 	const changeSet = useQuery(api.changeSets.get, {
 		changeSetId: convexChangeSetId,
@@ -168,7 +186,7 @@ function ReviewDetailRoute() {
 	const [pendingAction, setPendingAction] = useState<PendingAction>({
 		kind: "idle",
 	});
-	const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+	const statusFilter: StatusFilter = search.status ?? "all";
 	const [acceptedExportFormat, setAcceptedExportFormat] =
 		useState<ExportFormat>("json");
 
@@ -460,7 +478,12 @@ function ReviewDetailRoute() {
 						counts={counts}
 						totalCount={items.length}
 						statusFilter={statusFilter}
-						onStatusFilterChange={setStatusFilter}
+						onStatusFilterChange={(status) =>
+							void navigate({
+								search: { status: status === "all" ? undefined : status },
+								replace: true,
+							})
+						}
 						canReview={canReview}
 						pendingAction={pendingAction}
 						onMarkPending={markPending}
@@ -719,7 +742,7 @@ function KeyGroupCard({
 				) : null}
 			</div>
 			<CardContent>
-				<div className="-mx-1 flex items-stretch gap-2 overflow-x-auto px-1 pb-1">
+				<div className="-mx-1 flex flex-col items-stretch gap-2 px-1 pb-1 sm:flex-row sm:overflow-x-auto">
 					{!sourceInItems ? (
 						<SourceLocaleColumn
 							sourceLocaleCode={group.sourceLocaleCode}
@@ -839,7 +862,7 @@ function ReviewItemEditor({
 	return (
 		<div
 			className={cn(
-				"flex w-80 shrink-0 flex-col gap-1.5 rounded-md border bg-background p-2 transition-colors",
+				"flex w-full shrink-0 flex-col gap-1.5 rounded-md border bg-background p-2 transition-colors sm:w-80",
 				item.status === "rejected" && "opacity-60",
 				dirty && "border-ring/50 ring-1 ring-ring/20",
 				item.status === "conflicted" &&
@@ -851,6 +874,7 @@ function ReviewItemEditor({
 				<div className="flex min-w-0 items-center gap-1.5">
 					{isSource ? (
 						<Sparkles
+							role="img"
 							aria-label="Source locale"
 							className="size-3 shrink-0 text-brand"
 						/>
@@ -1008,7 +1032,7 @@ function SourceLocaleColumn({
 		? sourceMissingReasonLabel(sourceMissingReason)
 		: null;
 	return (
-		<div className="sticky left-0 z-[1] flex w-72 shrink-0 flex-col gap-1.5 rounded-md border border-brand/30 bg-background p-2 shadow-sm">
+		<div className="flex w-full shrink-0 flex-col gap-1.5 rounded-md border border-brand/30 bg-background p-2 shadow-sm sm:sticky sm:left-0 sm:z-[1] sm:w-72">
 			<div className="flex items-center gap-1.5">
 				<Sparkles aria-label="Source locale" className="size-3 text-brand" />
 				<span className="font-medium font-mono text-[11px]">
