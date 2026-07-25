@@ -159,7 +159,6 @@ function LocaleEditor({
 				localeId: convexId<"locales">(locale._id),
 				value,
 			});
-			toast.success(`${locale.code} saved`);
 		} catch (error) {
 			toast.error(
 				error instanceof Error
@@ -267,7 +266,10 @@ function KeyRow({
 	return (
 		<Card
 			size="sm"
-			className={cn("transition-colors", selected && "ring-2 ring-ring/40")}
+			className={cn(
+				"transition-colors [contain-intrinsic-size:auto_24rem] [content-visibility:auto]",
+				selected && "ring-2 ring-ring/40",
+			)}
 		>
 			<CardContent className="flex flex-col gap-3">
 				<div className="flex items-start gap-3">
@@ -359,7 +361,7 @@ function KeyTagList({
 					>
 						<button
 							type="button"
-							className="font-mono hover:underline"
+							className="rounded-sm font-mono hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 							onClick={() => onFilterTag(canonicalTag)}
 							title={`Filter by ${tag.slug}`}
 						>
@@ -367,7 +369,7 @@ function KeyTagList({
 						</button>
 						<button
 							type="button"
-							className="text-muted-foreground hover:text-foreground disabled:opacity-50"
+							className="rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
 							onClick={() => removeTag(canonicalTag)}
 							disabled={removingTagId === tag._id}
 							aria-label={`Remove ${tag.slug} from ${item.key}`}
