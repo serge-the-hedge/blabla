@@ -1,3 +1,19 @@
+import {
+	Alert,
+	AlertDescription,
+	AlertTitle,
+} from "@blabla/ui/components/alert";
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+	AlertDialogTrigger,
+} from "@blabla/ui/components/alert-dialog";
 import { Badge } from "@blabla/ui/components/badge";
 import { Button } from "@blabla/ui/components/button";
 import { Card, CardContent } from "@blabla/ui/components/card";
@@ -237,8 +253,8 @@ function ReviewDetailRoute() {
 					: await rejectUnmarkedItems({ changeSetId: convexChangeSetId });
 			toast.success(
 				action === "accept"
-					? `Accepted ${result.updated} unmarked items`
-					: `Rejected ${result.updated} unmarked items`,
+					? `Accepted ${result.updated} pending items`
+					: `Rejected ${result.updated} pending items`,
 			);
 		} catch (error) {
 			toast.error(
@@ -340,12 +356,12 @@ function ReviewDetailRoute() {
 				content: result.content,
 				fileName: buildExportFileName({
 					projectSlug: result.projectSlug,
-					scope: "approved-by-locale",
+					scope: "accepted-by-locale",
 					format: acceptedExportFormat,
 				}),
 				format: acceptedExportFormat,
 			});
-			toast.success("Approved changes downloaded");
+			toast.success("Accepted changes downloaded");
 		} catch (error) {
 			toast.error(
 				error instanceof Error ? error.message : "Could not export changes",
@@ -365,23 +381,73 @@ function ReviewDetailRoute() {
 				action={
 					changeSet ? (
 						<>
-							<Button
-								variant="outline"
-								onClick={rejectChangeSet}
-								disabled={!canUseReviewControls}
-							>
-								<X data-icon="inline-start" />
-								{pendingAction.kind === "rejecting" ? "Rejecting…" : "Reject"}
-							</Button>
-							<Button
-								onClick={applyReview}
-								disabled={!canApply || !canUseReviewControls}
-							>
-								<Check data-icon="inline-start" />
-								{pendingAction.kind === "applying"
-									? "Applying…"
-									: `Apply ${applicableCount} accepted`}
-							</Button>
+							<AlertDialog>
+								<AlertDialogTrigger
+									render={
+										<Button
+											variant="outline"
+											disabled={!canUseReviewControls}
+										/>
+									}
+								>
+									<X data-icon="inline-start" />
+									{pendingAction.kind === "rejecting"
+										? "Rejecting…"
+										: "Reject change set"}
+								</AlertDialogTrigger>
+								<AlertDialogContent size="sm">
+									<AlertDialogHeader>
+										<AlertDialogTitle>Reject this change set?</AlertDialogTitle>
+										<AlertDialogDescription>
+											This closes the review without applying any accepted
+											items. You cannot reopen it.
+										</AlertDialogDescription>
+									</AlertDialogHeader>
+									<AlertDialogFooter>
+										<AlertDialogCancel>Keep reviewing</AlertDialogCancel>
+										<AlertDialogAction
+											variant="destructive"
+											onClick={rejectChangeSet}
+										>
+											Reject change set
+										</AlertDialogAction>
+									</AlertDialogFooter>
+								</AlertDialogContent>
+							</AlertDialog>
+							<AlertDialog>
+								<AlertDialogTrigger
+									render={
+										<Button disabled={!canApply || !canUseReviewControls} />
+									}
+								>
+									<Check data-icon="inline-start" />
+									{pendingAction.kind === "applying"
+										? "Applying…"
+										: `Apply ${applicableCount} accepted`}
+								</AlertDialogTrigger>
+								<AlertDialogContent size="sm">
+									<AlertDialogHeader>
+										<AlertDialogTitle>
+											Apply {applicableCount} accepted{" "}
+											{applicableCount === 1 ? "item" : "items"}?
+										</AlertDialogTitle>
+										<AlertDialogDescription>
+											Accepted changes will update the live project.{" "}
+											{counts.rejected}{" "}
+											{counts.rejected === 1
+												? "rejected item is"
+												: "rejected items are"}{" "}
+											excluded.
+										</AlertDialogDescription>
+									</AlertDialogHeader>
+									<AlertDialogFooter>
+										<AlertDialogCancel>Review again</AlertDialogCancel>
+										<AlertDialogAction onClick={applyReview}>
+											Apply accepted changes
+										</AlertDialogAction>
+									</AlertDialogFooter>
+								</AlertDialogContent>
+							</AlertDialog>
 						</>
 					) : null
 				}
@@ -509,6 +575,29 @@ function ReviewToolbar({
 					})}
 				</div>
 			</div>
+			<Alert
+				variant={counts.conflicted > 0 ? "destructive" : "default"}
+				aria-live="polite"
+			>
+				<AlertTitle>
+					{counts.conflicted > 0
+						? "Apply blocked"
+						: counts.pending > 0
+							? "Review every item"
+							: counts.accepted > 0
+								? "Ready to apply"
+								: "No accepted items"}
+				</AlertTitle>
+				<AlertDescription>
+					{counts.conflicted > 0
+						? `${counts.conflicted} conflicted ${counts.conflicted === 1 ? "item blocks" : "items block"} apply. Reject them or ask for new proposals.`
+						: counts.pending > 0
+							? `Accept or reject all ${counts.pending} pending ${counts.pending === 1 ? "item" : "items"} before applying.`
+							: counts.accepted > 0
+								? `${counts.accepted} accepted ${counts.accepted === 1 ? "item will" : "items will"} update the live project. Rejected items are excluded.`
+								: "Accept at least 1 item to enable apply."}
+				</AlertDescription>
+			</Alert>
 			<div className="flex flex-wrap items-center justify-between gap-2">
 				<div className="flex flex-wrap gap-1.5">
 					<Button
@@ -518,7 +607,7 @@ function ReviewToolbar({
 						disabled={!canReview || busy || counts.pending === 0}
 					>
 						<Check data-icon="inline-start" />
-						{isBulkAccepting ? "Accepting…" : "Accept unmarked"}
+						{isBulkAccepting ? "Accepting…" : "Accept pending"}
 					</Button>
 					<Button
 						size="xs"
@@ -528,7 +617,7 @@ function ReviewToolbar({
 						disabled={!canReview || busy || counts.pending === 0}
 					>
 						<X data-icon="inline-start" />
-						{isBulkRejecting ? "Rejecting…" : "Reject unmarked"}
+						{isBulkRejecting ? "Rejecting…" : "Reject pending"}
 					</Button>
 				</div>
 				<div className="flex flex-wrap items-center gap-2">
@@ -555,7 +644,7 @@ function ReviewToolbar({
 						disabled={counts.accepted === 0 || busy}
 					>
 						<Download data-icon="inline-start" />
-						{isExporting ? "Exporting…" : "Download approved"}
+						{isExporting ? "Exporting…" : "Download accepted"}
 					</Button>
 				</div>
 			</div>
@@ -808,6 +897,7 @@ function ReviewItemEditor({
 				</span>
 				<Textarea
 					className="min-h-16 text-xs leading-relaxed"
+					aria-label={`Proposed value for ${item.locale?.label ?? item.fieldPath}`}
 					value={draft}
 					onChange={(event) => setDraft(event.target.value)}
 					placeholder="—"
@@ -818,8 +908,14 @@ function ReviewItemEditor({
 
 			{item.status === "conflicted" ? (
 				<div className="text-[10px] text-destructive">
-					Live value changed since this proposal. Reject or resubmit.
+					The live value changed. Reject this item, then ask for a new proposal.
 				</div>
+			) : null}
+
+			{dirty ? (
+				<p className="text-[10px] text-muted-foreground">
+					Save or reset your edit before accepting or rejecting.
+				</p>
 			) : null}
 
 			<div className="flex flex-wrap items-center justify-between gap-1.5">
