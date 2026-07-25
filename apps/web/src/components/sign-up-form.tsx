@@ -171,7 +171,7 @@ export default function SignUpForm({ redirectTo }: { redirectTo: string }) {
 										{isSubmitting ? (
 											<Loader2
 												data-icon="inline-start"
-												className="animate-spin"
+												className="animate-spin motion-reduce:animate-none"
 											/>
 										) : null}
 										{isSubmitting ? "Creating account…" : "Create account"}

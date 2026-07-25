@@ -149,7 +149,7 @@ export default function SignInForm({ redirectTo }: { redirectTo: string }) {
 										{isSubmitting ? (
 											<Loader2
 												data-icon="inline-start"
-												className="animate-spin"
+												className="animate-spin motion-reduce:animate-none"
 											/>
 										) : null}
 										{isSubmitting ? "Signing in…" : "Sign in"}

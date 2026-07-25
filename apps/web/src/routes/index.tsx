@@ -80,7 +80,7 @@ function StatusPill({ status }: { status: "ok" | "loading" | "error" }) {
 		status === "ok"
 			? "bg-success"
 			: status === "loading"
-				? "bg-warning animate-pulse"
+				? "bg-warning animate-pulse motion-reduce:animate-none"
 				: "bg-destructive";
 	return (
 		<span className="inline-flex items-center gap-2 rounded-full border bg-background/60 px-2.5 py-1 text-muted-foreground text-xs">

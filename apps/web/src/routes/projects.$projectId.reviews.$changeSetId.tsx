@@ -1034,7 +1034,11 @@ function SourceLocaleColumn({
 	return (
 		<div className="flex w-full shrink-0 flex-col gap-1.5 rounded-md border border-brand/30 bg-background p-2 shadow-sm sm:sticky sm:left-0 sm:z-[1] sm:w-72">
 			<div className="flex items-center gap-1.5">
-				<Sparkles aria-label="Source locale" className="size-3 text-brand" />
+				<Sparkles
+					role="img"
+					aria-label="Source locale"
+					className="size-3 text-brand"
+				/>
 				<span className="font-medium font-mono text-[11px]">
 					{sourceLocaleCode}
 				</span>
