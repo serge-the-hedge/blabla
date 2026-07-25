@@ -11,6 +11,7 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { LogOut } from "lucide-react";
+import { toast } from "sonner";
 
 import { authClient } from "@/lib/auth-client";
 import { api } from "@/lib/convex-api";
@@ -54,14 +55,19 @@ export default function UserMenu() {
 					<DropdownMenuItem
 						variant="destructive"
 						onClick={() => {
-							authClient.signOut({
+							void authClient.signOut({
 								fetchOptions: {
 									onSuccess: () => {
-										navigate({
+										void navigate({
 											to: "/sign-in",
 											search: { mode: "sign-in", redirect: "/projects" },
 											replace: true,
 										});
+									},
+									onError: (context) => {
+										toast.error(
+											context.error.message || "Could not sign out. Try again.",
+										);
 									},
 								},
 							});
