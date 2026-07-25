@@ -1,7 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 
 import {
+	MAX_IMPORT_BYTES,
+	MAX_IMPORT_KEY_LENGTH,
 	MAX_IMPORT_MESSAGES,
+	MAX_IMPORT_TAGS,
+	MAX_IMPORT_VALUE_LENGTH,
 	parseArbMessages,
 	parseJsonMessages,
 	validateImportTags,
@@ -35,6 +39,30 @@ describe("import validation", () => {
 		);
 	});
 
+	test("enforces byte, key, value, and nesting limits before writes", () => {
+		expect(() =>
+			parseJsonMessages(
+				JSON.stringify({ message: "é".repeat(MAX_IMPORT_BYTES) }),
+			),
+		).toThrow("256 KiB or smaller");
+		expect(() =>
+			parseJsonMessages(
+				JSON.stringify({ ["k".repeat(MAX_IMPORT_KEY_LENGTH + 1)]: "value" }),
+			),
+		).toThrow("Import keys must be");
+		expect(() =>
+			parseJsonMessages(
+				JSON.stringify({ message: "v".repeat(MAX_IMPORT_VALUE_LENGTH + 1) }),
+			),
+		).toThrow("Import values must be");
+
+		let nested: unknown = "value";
+		for (let depth = 0; depth < 21; depth += 1) nested = { child: nested };
+		expect(() => parseJsonMessages(JSON.stringify(nested))).toThrow(
+			"at most 20 levels",
+		);
+	});
+
 	test("validates ARB message and metadata shapes", () => {
 		const result = parseArbMessages(
 			'{"hello":"Hello","@hello":{"description":"Greeting"}}',
@@ -44,10 +72,33 @@ describe("import validation", () => {
 			description: "Greeting",
 		});
 		expect(() => parseArbMessages('{"hello":42}')).toThrow("must be a string");
+		expect(() => parseArbMessages('{"hello":"Hi","@hello":[]}')).toThrow(
+			"must be an object",
+		);
+		expect(() =>
+			parseArbMessages(
+				JSON.stringify({
+					hello: "Hi",
+					"@hello": {
+						placeholders: Object.fromEntries(
+							Array.from({ length: 51 }, (_, index) => [`p${index}`, {}]),
+						),
+					},
+				}),
+			),
+		).toThrow("at most 50 named entries");
 	});
 
-	test("rejects tag labels that cannot produce a valid slug", () => {
+	test("rejects invalid or excessive tag labels", () => {
 		expect(() => validateImportTags(["checkout", "legal"])).not.toThrow();
 		expect(() => validateImportTags(["!!!"])).toThrow("valid, non-empty tags");
+		expect(() =>
+			validateImportTags(
+				Array.from(
+					{ length: MAX_IMPORT_TAGS + 1 },
+					(_, index) => `tag-${index}`,
+				),
+			),
+		).toThrow(`at most ${MAX_IMPORT_TAGS}`);
 	});
 });

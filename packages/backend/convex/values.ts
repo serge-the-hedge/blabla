@@ -183,12 +183,16 @@ export const listForKeys = query({
 			});
 		}
 		await requireViewer(ctx, projectId);
-		const values = await ctx.db
-			.query("translationValues")
-			.withIndex("by_project", (q) => q.eq("projectId", projectId))
-			.collect();
-		const keyIds = new Set(args.keyIds);
-		return values.filter((value) => keyIds.has(value.keyId));
+		const uniqueKeyIds = Array.from(new Set(args.keyIds));
+		const valuesByKey = await Promise.all(
+			uniqueKeyIds.map((keyId) =>
+				ctx.db
+					.query("translationValues")
+					.withIndex("by_key", (q) => q.eq("keyId", keyId))
+					.collect(),
+			),
+		);
+		return valuesByKey.flat();
 	},
 });
 
