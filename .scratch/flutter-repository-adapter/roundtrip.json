@@ -1,0 +1,102 @@
+{
+  "snapshot": {
+    "repository": "brickit-app/brickit-flutter",
+    "commit": "19a07bc364b30c5cfa675c7107f31d47f4357643",
+    "manifest": {
+      "packages/brickit_generated/lib/l10n/intl_en.arb": "f422abea36591ee7365e9532938d9c53b3eef22ff7b459e873508c82b1d4b326",
+      "packages/brickit_generated/lib/l10n/intl_de.arb": "1b12e95a16d059e84da6673d6cb30a25efcf6778e888511a5163103c51c42347",
+      "packages/brickit_generated/lib/l10n/intl_es.arb": "914100f84e27cdfcbc4a8cb9674e2cb2d36673eab76bc883c28f87d939fcf379",
+      "packages/brickit_generated/lib/l10n/intl_fr.arb": "8af9c190dc5cfaaabad9948891e52a6a4b66e9f872811f8f471061b1a4ff6f8d",
+      "packages/brickit_generated/lib/l10n/intl_ru.arb": "21685de90379a7965598015253f9a0031fa2402358ff368124759a28e7d983e4",
+      "packages/brickit_generated/lib/l10n/intl_zh.arb": "527fef17c262542b461ffcbb3d1c0e59f0aa73c9f6da4c9bb6e70bfc60f96b2a"
+    },
+    "bytes": 989444
+  },
+  "coverage": {
+    "source_keys": 1459,
+    "per_locale": {
+      "de": {
+        "keys": 1459,
+        "empty": 10,
+        "identical_to_source": 125
+      },
+      "es": {
+        "keys": 1459,
+        "empty": 11,
+        "identical_to_source": 79
+      },
+      "fr": {
+        "keys": 1459,
+        "empty": 5,
+        "identical_to_source": 68
+      },
+      "ru": {
+        "keys": 1459,
+        "empty": 12,
+        "identical_to_source": 55
+      },
+      "zh": {
+        "keys": 1459,
+        "empty": 10,
+        "identical_to_source": 54
+      }
+    }
+  },
+  "lossless_writeback": {
+    "en": true,
+    "de": true,
+    "es": true,
+    "fr": true,
+    "ru": true,
+    "zh": true
+  },
+  "gen_l10n": {
+    "cmd": "fvm flutter gen-l10n",
+    "code": 0,
+    "seconds": 0.78,
+    "stdout": "Because l10n.yaml exists, the options defined there will be used instead.\nTo use the command line arguments, delete the l10n.yaml file in the Flutter project.",
+    "stderr": "l10n.yaml: The argument \"synthetic-package\" no longer has any effect and should be removed. See http://flutter.dev/to/flutter-gen-deprecation"
+  },
+  "verify": {
+    "keys_unchanged": true,
+    "generated_files_changed": [
+      "app_localizations_de.dart"
+    ],
+    "public_api_unchanged": true,
+    "edited_keys": [
+      "aboutapp_brickit",
+      "about_app_disclaimer",
+      "aboutapp_insta",
+      "aboutapp_license",
+      "about_app_privacy_policy"
+    ],
+    "values_landed": true
+  },
+  "commit": {
+    "cmd": "git -c user.name=blabla -c user.email=bot@blabla.local commit -m l10n: apply Blabla release bundle (probe)",
+    "code": 0,
+    "seconds": 0.04,
+    "stdout": "[blabla/release-probe 48e4e9989] l10n: apply Blabla release bundle (probe)\n 2 files changed, 10 insertions(+), 10 deletions(-)",
+    "stderr": ""
+  },
+  "pull_request": {
+    "files": "packages/brickit_generated/lib/l10n/app_localizations_de.dart | 10 +++++-----\n packages/brickit_generated/lib/l10n/intl_de.arb               | 10 +++++-----\n 2 files changed, 10 insertions(+), 10 deletions(-)",
+    "numstat": "5\t5\tpackages/brickit_generated/lib/l10n/app_localizations_de.dart\n5\t5\tpackages/brickit_generated/lib/l10n/intl_de.arb"
+  },
+  "ci_gate_probe": {
+    "cmd": "fvm flutter gen-l10n && git diff --exit-code -- packages/brickit_generated/lib/l10n",
+    "code": 0,
+    "seconds": 0.78,
+    "stdout": "Because l10n.yaml exists, the options defined there will be used instead.\nTo use the command line arguments, delete the l10n.yaml file in the Flutter project.",
+    "stderr": "l10n.yaml: The argument \"synthetic-package\" no longer has any effect and should be removed. See http://flutter.dev/to/flutter-gen-deprecation"
+  },
+  "rollback": {
+    "cmd": "git revert --no-edit HEAD",
+    "code": 0,
+    "seconds": 0.03,
+    "stdout": "[blabla/release-probe 27411f949] Revert \"l10n: apply Blabla release bundle (probe)\"\n Date: Sat Aug 1 19:55:35 2026 +0300\n 2 files changed, 10 insertions(+), 10 deletions(-)",
+    "stderr": ""
+  },
+  "rollback_clean": true,
+  "rollback_restores_source": true
+}
