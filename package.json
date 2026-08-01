@@ -28,7 +28,8 @@
 		"check:fix": "biome check --write .",
 		"dev:web": "turbo run dev -F web",
 		"dev:server": "turbo run dev -F @blabla/backend",
-		"dev:setup": "turbo run dev:setup -F @blabla/backend"
+		"dev:setup": "turbo run dev:setup -F @blabla/backend",
+		"prototype:localization-sync": "bun packages/backend/prototypes/localization-sync.tui.prototype.ts"
 	},
 	"dependencies": {
 		"@blabla/env": "workspace:*",
