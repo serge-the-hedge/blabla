@@ -1,0 +1,290 @@
+{
+  "corpus": {
+    "keys": 1434,
+    "dart_files_scanned": 677,
+    "receiver_names": [
+      "appLocalization",
+      "appLocalizations",
+      "get",
+      "l10n",
+      "localization",
+      "localizations",
+      "unsafeOf"
+    ],
+    "target_locales": [
+      "de",
+      "es",
+      "fr",
+      "ru",
+      "zh"
+    ]
+  },
+  "call_site": {
+    "referenced_keys": 769,
+    "total_references": 945,
+    "single_file_keys": 688,
+    "multi_file_keys": 81,
+    "sample": {
+      "about_app_disclaimer": {
+        "packages/brickit/lib/screens/settings/about_app_screen.dart": [
+          143
+        ]
+      },
+      "about_app_privacy_policy": {
+        "packages/brickit/lib/screens/settings/about_app_screen.dart": [
+          128,
+          134
+        ],
+        "packages/brickit/lib/screens/uikit/showcase_screen.dart": [
+          280,
+          365
+        ],
+        "packages/brickit/lib/widgets/paywall/common/paywall_footer.dart": [
+          79
+        ]
+      },
+      "aboutapp_brickit": {
+        "packages/brickit/lib/screens/settings/about_app_screen.dart": [
+          67
+        ]
+      },
+      "aboutapp_insta": {
+        "packages/brickit/lib/screens/settings/about_app_screen.dart": [
+          105
+        ],
+        "packages/brickit/lib/screens/uikit/showcase_screen.dart": [
+          332
+        ]
+      }
+    }
+  },
+  "screen": {
+    "single_area": 713,
+    "single_area_pct": "92.7%",
+    "multi_area": 56,
+    "no_direct_screen_file": 583,
+    "no_direct_screen_pct": "75.8%",
+    "single_area_sample": {
+      "about_app_disclaimer": [
+        "screens/settings"
+      ],
+      "aboutapp_brickit": [
+        "screens/settings"
+      ],
+      "activity_feed_author_idea_notification": [
+        "widgets/activity_feed"
+      ],
+      "activity_feed_following_notification": [
+        "widgets/activity_feed"
+      ],
+      "activity_feed_idea_craft_notification": [
+        "widgets/activity_feed"
+      ]
+    },
+    "multi_area_sample": {
+      "about_app_privacy_policy": [
+        "screens/settings",
+        "screens/uikit",
+        "widgets/paywall",
+        "widgets/sign_in"
+      ],
+      "aboutapp_insta": [
+        "screens/settings",
+        "screens/uikit"
+      ],
+      "aboutapp_license": [
+        "screens/settings",
+        "screens/uikit",
+        "widgets/paywall",
+        "widgets/sign_in"
+      ],
+      "aboutapp_rate": [
+        "screens/settings",
+        "screens/uikit"
+      ],
+      "aboutapp_rate_google": [
+        "screens/settings",
+        "screens/uikit"
+      ]
+    },
+    "no_direct_screen_sample": {
+      "activity_feed_author_idea_notification": [
+        "widgets/activity_feed"
+      ],
+      "activity_feed_following_notification": [
+        "widgets/activity_feed"
+      ],
+      "activity_feed_idea_craft_notification": [
+        "widgets/activity_feed"
+      ],
+      "activity_feed_idea_like_notification": [
+        "widgets/activity_feed"
+      ],
+      "activity_feed_new_photo_notification": [
+        "widgets/activity_feed"
+      ]
+    }
+  },
+  "dynamic": {
+    "keys_selected_in_helpers": 49,
+    "helper_count": 12,
+    "overlap_with_single_area": 45,
+    "sample": [
+      {
+        "file": "packages/brickit/lib/screens/pom_screens/pom_how_to.dart",
+        "helper": "_getCurrentText",
+        "line": 107,
+        "keys": [
+          "pom_how_to_edu_step_1",
+          "pom_how_to_edu_step_2",
+          "pom_how_to_edu_step_3",
+          "pom_how_to_edu_step_4",
+          "pom_how_to_edu_step_5",
+          "pom_how_to_edu_step_6"
+        ]
+      },
+      {
+        "file": "packages/brickit/lib/widgets/brickit_pom/idea/brickit_data_source_select.dart",
+        "helper": "_getTitle",
+        "line": 840,
+        "keys": [
+          "ideas_data_source_collection_empty_title",
+          "ideas_data_source_collection_full_title",
+          "ideas_data_source_multiscan_empty_title",
+          "ideas_data_source_multiscan_full_title",
+          "ideas_data_source_single_empty_title",
+          "ideas_data_source_single_full_title"
+        ]
+      },
+      {
+        "file": "packages/brickit/lib/widgets/brickit_pom/scanner/scanner_education.dart",
+        "helper": "getTitle",
+        "line": 202,
+        "keys": [
+          "pom_education_screen_step_1_title",
+          "pom_education_screen_step_2_title",
+          "pom_education_screen_step_3_title",
+          "pom_education_screen_step_4_title",
+          "pom_education_screen_step_5_title",
+          "pom_education_screen_step_6_title"
+        ]
+      },
+      {
+        "file": "packages/brickit/lib/widgets/brickit_pom/scanner/scanner_education.dart",
+        "helper": "getDescription",
+        "line": 221,
+        "keys": [
+          "pom_education_screen_step_1_text",
+          "pom_education_screen_step_2_text",
+          "pom_education_screen_step_3_text",
+          "pom_education_screen_step_4_text",
+          "pom_education_screen_step_5_text",
+          "pom_education_screen_step_6_text"
+        ]
+      },
+      {
+        "file": "packages/brickit/lib/widgets/brickit_pom/idea/brickit_data_source_select.dart",
+        "helper": "_getDescription",
+        "line": 857,
+        "keys": [
+          "experience_page_craft_idea_bricks",
+          "ideas_data_source_collection_empty_desc",
+          "ideas_data_source_multiscan_empty_desc",
+          "ideas_data_source_single_empty_desc",
+          "workshop_datasource_singlescan_days"
+        ]
+      }
+    ]
+  },
+  "unreferenced": {
+    "count": 665,
+    "pct_of_catalog": "46.4%",
+    "sample": [
+      "ads_banner_close_button_text",
+      "after_scan_page_pom_description",
+      "after_scan_page_pom_title",
+      "assemble_state_build",
+      "bbox_feedback_another",
+      "bbox_feedback_choose",
+      "bbox_feedback_hidden",
+      "bbox_feedback_no_size",
+      "bbox_feedback_panel_tooltip",
+      "bbox_feedback_replace_tooltip",
+      "bbox_feedback_reply",
+      "bbox_feedback_updated"
+    ]
+  },
+  "layout": {
+    "keys_with_measurable_expansion": 1431,
+    "expansion_ge_1_4x": 422,
+    "short_source_le_20_chars": 857,
+    "referenced_near_constraint_hint": 90,
+    "constraint_hint_pct_of_referenced": "11.7%",
+    "worst_expansion_sample": [
+      {
+        "key": "puzzle_map_tooltip",
+        "source_len": 23,
+        "worst_len": 70,
+        "ratio": 3.04,
+        "locale": "ru",
+        "near_constraint_hint": false
+      },
+      {
+        "key": "viewfinder_status_text_demo",
+        "source_len": 27,
+        "worst_len": 79,
+        "ratio": 2.93,
+        "locale": "ru",
+        "near_constraint_hint": false
+      },
+      {
+        "key": "pm_onboarding_paywall_title_2",
+        "source_len": 8,
+        "worst_len": 23,
+        "ratio": 2.88,
+        "locale": "de",
+        "near_constraint_hint": false
+      },
+      {
+        "key": "idea_matching_bricks_loading",
+        "source_len": 8,
+        "worst_len": 22,
+        "ratio": 2.75,
+        "locale": "es",
+        "near_constraint_hint": true
+      },
+      {
+        "key": "multiscan_scan_delete_modal_desc",
+        "source_len": 26,
+        "worst_len": 70,
+        "ratio": 2.69,
+        "locale": "de",
+        "near_constraint_hint": false
+      },
+      {
+        "key": "the_newest",
+        "source_len": 9,
+        "worst_len": 24,
+        "ratio": 2.67,
+        "locale": "fr",
+        "near_constraint_hint": false
+      },
+      {
+        "key": "puzzle_no_new_items_rescan",
+        "source_len": 8,
+        "worst_len": 21,
+        "ratio": 2.62,
+        "locale": "ru",
+        "near_constraint_hint": false
+      },
+      {
+        "key": "pm_bulk_edit_menu_title",
+        "source_len": 9,
+        "worst_len": 23,
+        "ratio": 2.56,
+        "locale": "ru",
+        "near_constraint_hint": false
+      }
+    ]
+  }
+}
