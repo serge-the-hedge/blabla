@@ -9,9 +9,15 @@
 
 export type LocaleCode = "en" | "de" | "es" | "fr" | "ru" | "zh";
 
-export const SOURCE: LocaleCode = "en";
+/**
+ * English leads the list because it is the value the others are measured
+ * against, not because it is a different kind of thing. Every Locale here is
+ * an ordinary editable row.
+ */
+export const LOCALES: LocaleCode[] = ["en", "de", "es", "fr", "ru", "zh"];
+export const REFERENCE: LocaleCode = "en";
+/** Only used where a Locale genuinely cannot be English — the language picker. */
 export const TARGETS: LocaleCode[] = ["de", "es", "fr", "ru", "zh"];
-export const ALL_LOCALES: LocaleCode[] = ["en", ...TARGETS];
 
 export const LOCALE_LABEL: Record<LocaleCode, string> = {
 	en: "English",
@@ -54,28 +60,40 @@ export type ValueState =
 	/** Source changed cosmetically. Ships unchanged; flagged for the translator. */
 	| "stale-cosmetic"
 	/** References a placeholder the source deleted. Non-waivable blocker. */
-	| "broken";
+	| "broken"
+	/**
+	 * An edit to English. English is an ordinary editable Locale here, but Git
+	 * authors the Source Contract (#5), so a Blabla-side edit to it is a Source
+	 * Proposal: provisional until a developer lands it and Blabla re-ingests.
+	 */
+	| "proposal";
 
 export const STATE_LABEL: Record<ValueState, string> = {
-	current: "Current",
-	identical: "Same as English",
+	current: "",
+	identical: "",
+	blank: "",
+	"stale-cosmetic": "",
 	"imported-identical": "English, not chosen",
-	blank: "Deliberately empty",
-	undecided: "No value",
-	"stale-semantic": "Source changed",
-	"stale-cosmetic": "Source touched",
-	broken: "Broken",
+	undecided: "needs a value",
+	"stale-semantic": "English changed",
+	broken: "broken",
+	proposal: "proposed to Git",
 };
 
-/** Does this state stop its Locale from shipping? */
+/**
+ * Does this state stop its Locale from shipping? Also decides whether the row
+ * says anything at rest: a settled value is silent, and that silence is the
+ * whole noise budget.
+ */
 export const STATE_BLOCKS: Record<ValueState, boolean> = {
 	current: false,
 	identical: false,
-	"imported-identical": true,
 	blank: false,
+	"stale-cosmetic": false,
+	proposal: false,
+	"imported-identical": true,
 	undecided: true,
 	"stale-semantic": true,
-	"stale-cosmetic": false,
 	broken: true,
 };
 
@@ -86,6 +104,7 @@ export const STATE_ATTENTION: Record<ValueState, Attention> = {
 	current: "settled",
 	identical: "settled",
 	blank: "settled",
+	proposal: "settled",
 	broken: "blocked",
 	undecided: "decide",
 	"imported-identical": "decide",
@@ -440,6 +459,23 @@ export const KEYS: KeyEntry[] = [
 		]),
 	},
 ];
+
+/**
+ * English is not a source panel — it is a row like the other five, and it is
+ * editable. Its value is still the one every other row is measured against,
+ * because Git authors the Source Contract; that shows up as its provenance
+ * ("from Git") and as the Source Proposal state an edit to it produces, not
+ * as a different shape on the page.
+ */
+for (const entry of KEYS) {
+	entry.targets.en = {
+		locale: "en",
+		value: entry.source,
+		state: "current",
+		by: "Git",
+		at: entry.change?.snapshot ?? "develop @ 19a07bc",
+	};
+}
 
 /** Split an ICU plural expression into its arms. Prototype-grade, not a parser. */
 export function splitPluralArms(
