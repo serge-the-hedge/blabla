@@ -354,11 +354,11 @@ export const KEYS: KeyEntry[] = [
 		key: "finder_found_basic_ideas",
 		screen: "finder",
 		placeholders: {},
-		source: "Ideas picked up",
+		source: "Picked up ideas",
 		change: {
 			kind: "contract",
 			was: "Picked up {d} ideas",
-			now: "Ideas picked up",
+			now: "Picked up ideas",
 			summary: "Placeholder {d} was removed — the count moved to its own line.",
 			snapshot: "develop @ 19a07bc",
 		},
@@ -476,34 +476,76 @@ export function joinPluralArms(
 		.join(" ")}}`;
 }
 
-/** Word-level diff, enough to show what a source change did. */
-export function wordDiff(was: string, now: string) {
-	const a = was.split(/(\s+)/);
-	const b = now.split(/(\s+)/);
-	let head = 0;
-	while (head < a.length && head < b.length && a[head] === b[head]) head += 1;
-	let tail = 0;
-	while (
-		tail < a.length - head &&
-		tail < b.length - head &&
-		a[a.length - 1 - tail] === b[b.length - 1 - tail]
-	) {
-		tail += 1;
+export type DiffSegment = { kind: "same" | "removed" | "added"; text: string };
+
+/**
+ * Word-level diff over an LCS, so a change in two places reads as two marks
+ * rather than one swallowed tail. ICU makes that difference matter: a plain
+ * head-and-tail diff of a plural marks every arm changed when one word moved.
+ */
+export function wordDiff(was: string, now: string): DiffSegment[] {
+	const a = was.split(/(\s+)/).filter(Boolean);
+	const b = now.split(/(\s+)/).filter(Boolean);
+
+	// lcs[i][j] = length of the longest common subsequence of a[i:] and b[j:].
+	const lcs: number[][] = Array.from({ length: a.length + 1 }, () =>
+		new Array<number>(b.length + 1).fill(0),
+	);
+	for (let i = a.length - 1; i >= 0; i -= 1) {
+		for (let j = b.length - 1; j >= 0; j -= 1) {
+			lcs[i][j] =
+				a[i] === b[j]
+					? lcs[i + 1][j + 1] + 1
+					: Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+		}
 	}
-	return {
-		prefix: a.slice(0, head).join(""),
-		removed: a.slice(head, a.length - tail).join(""),
-		added: b.slice(head, b.length - tail).join(""),
-		suffix: a.slice(a.length - tail).join(""),
+
+	const segments: DiffSegment[] = [];
+	const push = (kind: DiffSegment["kind"], text: string) => {
+		const last = segments[segments.length - 1];
+		if (last && last.kind === kind) last.text += text;
+		else segments.push({ kind, text });
 	};
+
+	let i = 0;
+	let j = 0;
+	while (i < a.length && j < b.length) {
+		if (a[i] === b[j]) {
+			push("same", a[i]);
+			i += 1;
+			j += 1;
+		} else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+			push("removed", a[i]);
+			i += 1;
+		} else {
+			push("added", b[j]);
+			j += 1;
+		}
+	}
+	for (; i < a.length; i += 1) push("removed", a[i]);
+	for (; j < b.length; j += 1) push("added", b[j]);
+
+	return segments;
 }
 
-/** The Reconciliation Report row this key would sit under, for the inline context. */
-export const REPORT_ROWS: Record<string, string> = {
-	part_count: "Changed in Git",
-	brickit_school_about_app_desc: "Changed in Git",
-	finder_found_basic_ideas: "Broken by a source change",
-	experience_page_craft_idea_bricks: "To translate",
-	notification_center_no_results: "To review",
-	pm_pocket_loading_state: "To review",
-};
+/**
+ * The Reconciliation Report row this key would sit under, for the inline
+ * context. Group order is the one settled in #15 — scope, then severity, then
+ * routine work — not the fixture's order.
+ */
+export const REPORT_GROUP_ORDER = [
+	"Broken by a source change",
+	"Changed in Git",
+	"To review",
+	"To translate",
+] as const;
+
+export const REPORT_ROWS: Record<string, (typeof REPORT_GROUP_ORDER)[number]> =
+	{
+		finder_found_basic_ideas: "Broken by a source change",
+		part_count: "Changed in Git",
+		brickit_school_about_app_desc: "Changed in Git",
+		notification_center_no_results: "To review",
+		pm_pocket_loading_state: "To review",
+		experience_page_craft_idea_bricks: "To translate",
+	};

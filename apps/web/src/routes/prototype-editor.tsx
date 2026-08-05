@@ -44,6 +44,7 @@ import {
 	LOCALE_LABEL,
 	type LocaleCode,
 	PLURAL_CATEGORIES,
+	REPORT_GROUP_ORDER,
 	REPORT_ROWS,
 	STATE_ATTENTION,
 	STATE_BLOCKS,
@@ -215,18 +216,21 @@ function SourceChangeDiff({ entry }: { entry: KeyEntry }) {
 				</span>
 			</div>
 			<div className="text-[11px] leading-relaxed" dir="auto">
-				<span className="text-muted-foreground">{diff.prefix}</span>
-				{diff.removed ? (
-					<span className="bg-destructive/10 text-destructive line-through">
-						{diff.removed}
+				{diff.map((segment, index) => (
+					<span
+						// biome-ignore lint/suspicious/noArrayIndexKey: static diff, never reordered
+						key={index}
+						className={cn(
+							segment.kind === "removed" &&
+								"bg-destructive/10 text-destructive line-through",
+							segment.kind === "added" &&
+								"bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+							segment.kind === "same" && "text-muted-foreground",
+						)}
+					>
+						{segment.text}
 					</span>
-				) : null}
-				{diff.added ? (
-					<span className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
-						{diff.added}
-					</span>
-				) : null}
-				<span className="text-muted-foreground">{diff.suffix}</span>
+				))}
 			</div>
 		</div>
 	);
@@ -814,10 +818,7 @@ function VariantC({ entry, state }: { entry: KeyEntry; state: EditorState }) {
 						)}
 						Settled — {settled.length}:{" "}
 						{settled
-							.map(
-								(item) =>
-									`${item.locale} ${STATE_LABEL[item.state].toLowerCase()}`,
-							)
+							.map((item) => `${item.locale} ${STATE_LABEL[item.state]}`)
 							.join(" · ")}
 					</button>
 					{showSettled ? (
@@ -985,9 +986,11 @@ function ReportHost({
 	variant: Variant;
 	state: EditorState;
 }) {
-	const [open, setOpen] = useState<string | null>(KEYS[4].key);
+	const [open, setOpen] = useState<string | null>("part_count");
 	const rows = KEYS.filter((entry) => REPORT_ROWS[entry.key]);
-	const groups = [...new Set(rows.map((entry) => REPORT_ROWS[entry.key]))];
+	const groups = REPORT_GROUP_ORDER.filter((group) =>
+		rows.some((entry) => REPORT_ROWS[entry.key] === group),
+	);
 
 	return (
 		<div className="flex flex-col gap-4">
