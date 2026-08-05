@@ -1,16 +1,25 @@
-// PROTOTYPE ONLY — throwaway. Three variants of the per-key, many-Locale
-// editing block on one route, switchable via ?variant=. Answers "Prototype the
-// per-key translation editor" (#24). Delete with the branch that holds it.
+// PROTOTYPE ONLY — throwaway. Round two of the per-key, many-Locale editing
+// block, at /prototype-editor?variant=. Answers "Prototype the per-key
+// translation editor" (#24). Delete with the branch that holds it.
 //
-// A — Ledger:    every Locale, one line each. Scanning is the primary act;
-//                editing is a mode you enter on one line at a time.
-// B — Focus:     one Locale at a time behind a rail. Doing the work is the
-//                primary act; cross-locale scanning is demoted to dots.
-// C — Attention: only what is unsettled, grouped by the decision it waits for.
-//                Settled Locales collapse to one line.
+// Round one (A–C, in this branch's history) was rejected on one point that
+// invalidated all three: every variant put a click between the translator and
+// the field. Round two takes that as the governing constraint —
 //
-// The `context` search param puts the same block in both homes it has to work
-// in: the Strings page, and inlined under a Reconciliation Report row.
+//   *Every value on screen is already a live field. Typing is the zero-click
+//    act. Only deliberate, rare decisions cost a click.*
+//
+// D — Ledger:   per-key card, every Locale a live row under the source.
+// E — Grid:     keys down, Locales across, every cell live. The translator's
+//               workhorse: Tab across a key, Enter down a Locale.
+// F — Language: one Locale at a time, source and target paired full-width,
+//               the whole catalog front to back.
+//
+// Also gone: the "Use English here" button. Putting English in a target is
+// typing English into the field, and the field says so as you do it.
+//
+// The `context` param puts the same block in both homes it has to work in:
+// the Strings page, and inlined in a Reconciliation Report row.
 
 import { Badge } from "@blabla/ui/components/badge";
 import { Button } from "@blabla/ui/components/button";
@@ -20,24 +29,13 @@ import { Separator } from "@blabla/ui/components/separator";
 import { Textarea } from "@blabla/ui/components/textarea";
 import { cn } from "@blabla/ui/lib/utils";
 import { createFileRoute } from "@tanstack/react-router";
-import {
-	ChevronDown,
-	ChevronRight,
-	CircleSlash,
-	Equal,
-	Languages,
-	Pencil,
-	ShieldAlert,
-	Sparkles,
-} from "lucide-react";
-import { useMemo, useState } from "react";
+import { Check, CircleSlash, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
 import {
-	ATTENTION_LABEL,
-	type Attention,
 	joinPluralArms,
 	KEYS,
 	type KeyEntry,
@@ -46,7 +44,6 @@ import {
 	PLURAL_CATEGORIES,
 	REPORT_GROUP_ORDER,
 	REPORT_ROWS,
-	STATE_ATTENTION,
 	STATE_BLOCKS,
 	STATE_LABEL,
 	splitPluralArms,
@@ -59,81 +56,180 @@ import { PrototypeVariantSwitcher } from "@/components/localization/prototype-va
 
 export const Route = createFileRoute("/prototype-editor")({
 	validateSearch: (search: Record<string, unknown>) => ({
-		variant: typeof search.variant === "string" ? search.variant : "A",
+		variant: typeof search.variant === "string" ? search.variant : "D",
 		context: search.context === "report" ? "report" : "strings",
+		locale:
+			typeof search.locale === "string" &&
+			TARGETS.includes(search.locale as LocaleCode)
+				? (search.locale as LocaleCode)
+				: "de",
 	}),
 	component: PrototypeEditorRoute,
 });
 
 const VARIANTS = [
-	{ key: "A", name: "Ledger — every Locale, one line" },
-	{ key: "B", name: "Focus — one Locale, all the room" },
-	{ key: "C", name: "Attention — only what is unsettled" },
+	{ key: "D", name: "Ledger — every Locale live under the source" },
+	{ key: "E", name: "Grid — keys down, Locales across" },
+	{ key: "F", name: "Language — one Locale, front to back" },
 ];
 
 const ME = "Sergey";
 const NOW = "today";
 
-// ─────────────────────────────────────────────────────────────── shared state
+// ───────────────────────────────────────────────────────────────────── state
+//
+// One store for all three variants. Drafts live beside saved values so a field
+// is always typeable without any per-field mounting ceremony, and `commit` is
+// the single gesture behind blur, ⌘↵, and the confirm button.
 
-type Edits = Record<string, TargetValue>;
+const idOf = (entry: KeyEntry, locale: LocaleCode) => `${entry.key}:${locale}`;
 
 function useEditorState() {
-	const [edits, setEdits] = useState<Edits>({});
+	const [saved, setSaved] = useState<Record<string, TargetValue>>({});
+	const [drafts, setDrafts] = useState<Record<string, string>>({});
+	const [flash, setFlash] = useState<string | null>(null);
 
-	const readValue = (entry: KeyEntry, locale: LocaleCode): TargetValue =>
-		edits[`${entry.key}:${locale}`] ?? entry.targets[locale];
+	const stored = useCallback(
+		(entry: KeyEntry, locale: LocaleCode): TargetValue =>
+			saved[idOf(entry, locale)] ?? entry.targets[locale],
+		[saved],
+	);
 
-	const write = (
-		entry: KeyEntry,
-		locale: LocaleCode,
-		next: Partial<TargetValue>,
-	) =>
-		setEdits((current) => ({
-			...current,
-			[`${entry.key}:${locale}`]: {
-				...(current[`${entry.key}:${locale}`] ?? entry.targets[locale]),
-				by: ME,
-				at: NOW,
-				...next,
-			},
-		}));
+	const draft = useCallback(
+		(entry: KeyEntry, locale: LocaleCode): string => {
+			const id = idOf(entry, locale);
+			return drafts[id] ?? stored(entry, locale).value;
+		},
+		[drafts, stored],
+	);
+
+	const setDraft = useCallback(
+		(entry: KeyEntry, locale: LocaleCode, value: string) =>
+			setDrafts((current) => ({ ...current, [idOf(entry, locale)]: value })),
+		[],
+	);
+
+	const write = useCallback(
+		(entry: KeyEntry, locale: LocaleCode, next: Partial<TargetValue>) => {
+			const id = idOf(entry, locale);
+			setSaved((current) => ({
+				...current,
+				[id]: {
+					...(current[id] ?? entry.targets[locale]),
+					by: ME,
+					at: NOW,
+					...next,
+				},
+			}));
+			setDrafts((current) => {
+				const { [id]: _dropped, ...rest } = current;
+				return rest;
+			});
+			setFlash(id);
+			window.setTimeout(
+				() => setFlash((live) => (live === id ? null : live)),
+				900,
+			);
+		},
+		[],
+	);
+
+	/**
+	 * The one gesture. Touched the value → it is an edit. Left it alone and it
+	 * was stale → it is a confirmation. Left it alone and it was not stale →
+	 * nothing happened, and nothing should.
+	 */
+	const commit = useCallback(
+		(entry: KeyEntry, locale: LocaleCode): boolean => {
+			const current = stored(entry, locale);
+			const next = draft(entry, locale);
+			if (next !== current.value) {
+				write(entry, locale, {
+					value: next,
+					state: next === entry.source ? "identical" : "current",
+					reason: undefined,
+					note: undefined,
+				});
+				return true;
+			}
+			if (
+				current.state === "stale-semantic" ||
+				current.state === "stale-cosmetic"
+			) {
+				write(entry, locale, { state: "current" });
+				return true;
+			}
+			return false;
+		},
+		[draft, stored, write],
+	);
 
 	return {
-		readValue,
-		reset: () => setEdits({}),
-		/** Ordinary edit. Typing the source text is what makes it identical. */
-		save: (entry: KeyEntry, locale: LocaleCode, value: string) =>
-			write(entry, locale, {
-				value,
-				state: value === entry.source ? "identical" : "current",
-				reason: undefined,
-				note: undefined,
-			}),
-		/** Stale confirmed as still correct — the value itself does not change. */
-		confirm: (entry: KeyEntry, locale: LocaleCode) =>
-			write(entry, locale, { state: "current", note: undefined }),
-		/** Deliberate blank. The reason is the thing that makes it shippable. */
+		stored,
+		draft,
+		setDraft,
+		commit,
+		flash,
+		/** A blank ships only with a reason. This is the one click worth charging. */
 		blank: (entry: KeyEntry, locale: LocaleCode, reason: string) =>
 			write(entry, locale, { value: "", state: "blank", reason }),
+		revert: (entry: KeyEntry, locale: LocaleCode) =>
+			setDrafts((current) => {
+				const { [idOf(entry, locale)]: _dropped, ...rest } = current;
+				return rest;
+			}),
+		reset: () => {
+			setSaved({});
+			setDrafts({});
+		},
 	};
 }
 
 type EditorState = ReturnType<typeof useEditorState>;
 
-// ───────────────────────────────────────────────────────── shared vocabulary
-// Only the state vocabulary and the field primitives are shared. Every variant
-// owns its own layout — that is the thing being compared.
+/**
+ * ⌘↵ jumps to the next field still waiting on someone, skipping everything
+ * settled — the difference between working a catalog and scrolling one. Field
+ * order is DOM order, so each variant gets the traversal its layout implies
+ * without declaring one.
+ */
+function focusNextUnsettled(from: HTMLElement) {
+	const fields = Array.from(
+		document.querySelectorAll<HTMLElement>("[data-field]"),
+	);
+	const index = fields.indexOf(from);
+	if (index < 0) return;
+	const next =
+		fields.slice(index + 1).find((el) => el.dataset.settled === "false") ??
+		fields.slice(0, index).find((el) => el.dataset.settled === "false");
+	next?.focus();
+	if (next instanceof HTMLTextAreaElement || next instanceof HTMLInputElement) {
+		next.setSelectionRange(next.value.length, next.value.length);
+	}
+}
+
+// ────────────────────────────────────────────────────────────── vocabulary
 
 const STATE_TONE: Record<ValueState, string> = {
 	current: "text-muted-foreground",
 	identical: "text-muted-foreground",
 	blank: "text-muted-foreground",
-	"stale-cosmetic": "text-amber-600 dark:text-amber-500",
+	"stale-cosmetic": "text-muted-foreground",
 	"stale-semantic": "text-amber-700 dark:text-amber-400",
 	"imported-identical": "text-amber-700 dark:text-amber-400",
 	undecided: "text-amber-700 dark:text-amber-400",
 	broken: "text-destructive",
+};
+
+const STATE_EDGE: Record<ValueState, string> = {
+	current: "border-l-emerald-500/40",
+	identical: "border-l-muted-foreground/30",
+	blank: "border-l-muted-foreground/30",
+	"stale-cosmetic": "border-l-muted-foreground/40",
+	"stale-semantic": "border-l-amber-500",
+	"imported-identical": "border-l-amber-500",
+	undecided: "border-l-amber-500",
+	broken: "border-l-destructive",
 };
 
 function StateDot({ state }: { state: ValueState }) {
@@ -154,122 +250,235 @@ function StateDot({ state }: { state: ValueState }) {
 	);
 }
 
-function StateLabel({ state }: { state: ValueState }) {
-	return (
-		<span className={cn("text-[11px]", STATE_TONE[state])}>
-			{STATE_LABEL[state]}
-		</span>
-	);
-}
-
-function ValuePreview({
-	target,
-	className,
+function SourceChangeStrip({
+	entry,
+	compact,
 }: {
-	target: TargetValue;
-	className?: string;
+	entry: KeyEntry;
+	compact?: boolean;
 }) {
-	if (target.state === "blank") {
-		return (
-			<span className={cn("text-[11px] text-muted-foreground", className)}>
-				<em>empty</em> — {target.reason}
-			</span>
-		);
-	}
-	if (!target.value) {
-		return (
-			<span className={cn("text-[11px] text-muted-foreground/60", className)}>
-				—
-			</span>
-		);
-	}
-	return (
-		<span className={cn("truncate text-xs", className)} dir="auto">
-			{target.value}
-		</span>
-	);
-}
-
-function SourceChangeDiff({ entry }: { entry: KeyEntry }) {
 	if (!entry.change) return null;
+	const cosmetic = entry.change.kind === "cosmetic";
 	const diff = wordDiff(entry.change.was, entry.change.now);
 	return (
-		<div className="flex flex-col gap-1 border-amber-500/50 border-l-2 bg-amber-500/5 py-1.5 pr-2 pl-2.5">
-			<div className="flex items-baseline gap-2">
-				<Badge
-					variant="outline"
+		<div
+			className={cn(
+				"flex flex-col gap-0.5 border-l-2 py-1 pr-2 pl-2.5",
+				cosmetic
+					? "border-l-muted-foreground/30 bg-muted/40"
+					: "border-l-amber-500 bg-amber-500/5",
+			)}
+		>
+			<div className="flex flex-wrap items-baseline gap-x-2 text-[10px]">
+				<span
 					className={cn(
-						"h-4 px-1 text-[10px]",
-						entry.change.kind === "cosmetic"
-							? "border-muted-foreground/30 text-muted-foreground"
-							: "border-amber-500/50 text-amber-700 dark:text-amber-400",
+						"font-medium uppercase tracking-wide",
+						cosmetic
+							? "text-muted-foreground"
+							: "text-amber-700 dark:text-amber-400",
 					)}
 				>
-					{entry.change.kind === "cosmetic"
-						? "cosmetic"
+					{cosmetic
+						? "Cosmetic — ships either way"
 						: entry.change.kind === "contract"
-							? "contract"
-							: "meaning"}
-				</Badge>
-				<span className="text-[11px] text-muted-foreground">
-					{entry.change.summary}
+							? "Contract — cannot ship until repaired"
+							: "Meaning — will not ship until answered"}
 				</span>
+				<span className="text-muted-foreground">{entry.change.summary}</span>
 			</div>
-			<div className="text-[11px] leading-relaxed" dir="auto">
-				{diff.map((segment, index) => (
-					<span
-						// biome-ignore lint/suspicious/noArrayIndexKey: static diff, never reordered
-						key={index}
-						className={cn(
-							segment.kind === "removed" &&
-								"bg-destructive/10 text-destructive line-through",
-							segment.kind === "added" &&
-								"bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-							segment.kind === "same" && "text-muted-foreground",
-						)}
-					>
-						{segment.text}
+			{compact ? null : (
+				<div className="text-[11px] leading-relaxed" dir="auto">
+					{diff.map((segment, index) => (
+						<span
+							// biome-ignore lint/suspicious/noArrayIndexKey: static diff, never reordered
+							key={index}
+							className={cn(
+								segment.kind === "removed" &&
+									"bg-destructive/10 text-destructive line-through",
+								segment.kind === "added" &&
+									"bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+								segment.kind === "same" && "text-muted-foreground",
+							)}
+						>
+							{segment.text}
+						</span>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
+// ────────────────────────────────────────────────────────────── the field
+//
+// The whole point of round two. This is never a button, never a disclosure,
+// never a mode. It is on screen, focusable, and typeable from the first paint.
+
+type FieldProps = {
+	entry: KeyEntry;
+	locale: LocaleCode;
+	state: EditorState;
+	/** Extra classes for the input itself, so each variant can set its density. */
+	className?: string;
+	/** Rendered under the field when it has focus. */
+	footer?: "inline" | "none";
+};
+
+function useFieldPlumbing(
+	entry: KeyEntry,
+	locale: LocaleCode,
+	state: EditorState,
+) {
+	const target = state.stored(entry, locale);
+	const value = state.draft(entry, locale);
+	const dirty = value !== target.value;
+	const settled = !STATE_BLOCKS[target.state] && !dirty;
+
+	const onKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+		if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+			event.preventDefault();
+			state.commit(entry, locale);
+			focusNextUnsettled(event.currentTarget);
+			return;
+		}
+		if (event.key === "Escape" && dirty) {
+			event.preventDefault();
+			state.revert(entry, locale);
+		}
+	};
+
+	return { target, value, dirty, settled, onKeyDown };
+}
+
+function LiveField({
+	entry,
+	locale,
+	state,
+	className,
+	footer = "inline",
+}: FieldProps) {
+	const { target, value, dirty, settled, onKeyDown } = useFieldPlumbing(
+		entry,
+		locale,
+		state,
+	);
+	const [focused, setFocused] = useState(false);
+	const [blanking, setBlanking] = useState(false);
+	const sourceArms = entry.plural ? splitPluralArms(entry.source) : null;
+	const flashing = state.flash === idOf(entry, locale);
+
+	const shared = {
+		"data-field": true,
+		"data-settled": settled ? "true" : "false",
+		dir: "auto" as const,
+		onKeyDown,
+		onFocus: () => setFocused(true),
+		onBlur: () => {
+			setFocused(false);
+			if (dirty) state.commit(entry, locale);
+		},
+	};
+
+	if (blanking) {
+		return (
+			<BlankPrompt
+				onCancel={() => setBlanking(false)}
+				onSave={(reason) => {
+					state.blank(entry, locale, reason);
+					setBlanking(false);
+				}}
+			/>
+		);
+	}
+
+	return (
+		<div className="flex min-w-0 flex-col gap-1">
+			{target.state === "blank" && !dirty ? (
+				<div
+					className={cn(
+						"flex items-baseline gap-1.5 border border-dashed px-2 py-1.5 text-[11px] text-muted-foreground",
+						className,
+					)}
+				>
+					<CircleSlash aria-hidden="true" className="size-3 shrink-0" />
+					<span>
+						<em>Renders nothing</em> — {target.reason}
 					</span>
-				))}
-			</div>
+					<button
+						type="button"
+						{...shared}
+						className="ml-auto shrink-0 underline underline-offset-2 hover:text-foreground"
+						onClick={() => state.setDraft(entry, locale, " ")}
+					>
+						Write a value instead
+					</button>
+				</div>
+			) : sourceArms && entry.plural ? (
+				<PluralArms
+					entry={entry}
+					locale={locale}
+					value={value}
+					sourceArms={sourceArms.arms}
+					onChange={(next) => state.setDraft(entry, locale, next)}
+					shared={shared}
+					className={className}
+				/>
+			) : (
+				<Textarea
+					aria-label={`${LOCALE_LABEL[locale]} — ${entry.key}`}
+					className={cn(
+						"field-sizing-content min-h-8 resize-none py-1.5 text-xs leading-relaxed",
+						flashing && "border-emerald-500/60",
+						className,
+					)}
+					placeholder={target.state === "undecided" ? "—" : undefined}
+					spellCheck
+					value={value}
+					onChange={(event) =>
+						state.setDraft(entry, locale, event.target.value)
+					}
+					{...shared}
+				/>
+			)}
+
+			{footer === "inline" ? (
+				<FieldFooter
+					entry={entry}
+					locale={locale}
+					state={state}
+					target={target}
+					value={value}
+					dirty={dirty}
+					focused={focused}
+					flashing={flashing}
+					onBlank={() => setBlanking(true)}
+				/>
+			) : null}
 		</div>
 	);
 }
 
 /**
- * The value field. One textarea for a plain message; one field per plural
- * category the *target language* needs when the source is a plural — which is
- * why zh gets one field and ru gets four for the same key.
+ * One input per plural category the *target language* needs — zh gets one, ru
+ * gets four, for the same key. Always rendered; never behind a disclosure.
  */
-function ValueField({
+function PluralArms({
 	entry,
 	locale,
 	value,
+	sourceArms,
 	onChange,
-	rows,
+	shared,
+	className,
 }: {
 	entry: KeyEntry;
 	locale: LocaleCode;
 	value: string;
+	sourceArms: { category: string; body: string }[];
 	onChange: (next: string) => void;
-	rows?: number;
+	shared: Record<string, unknown>;
+	className?: string;
 }) {
-	const sourceArms = entry.plural ? splitPluralArms(entry.source) : null;
-
-	if (!entry.plural || !sourceArms) {
-		return (
-			<Textarea
-				aria-label={`${LOCALE_LABEL[locale]} value`}
-				className="min-h-16 text-xs leading-relaxed"
-				style={rows ? { minHeight: `${rows * 1.5}rem` } : undefined}
-				value={value}
-				dir="auto"
-				placeholder="—"
-				onChange={(event) => onChange(event.target.value)}
-			/>
-		);
-	}
-
 	const parsed = splitPluralArms(value);
 	const needed = PLURAL_CATEGORIES[locale];
 	const extra = (parsed?.arms ?? [])
@@ -279,23 +488,17 @@ function ValueField({
 	const armOf = (category: string) =>
 		parsed?.arms.find((arm) => arm.category === category)?.body ?? "";
 	const sourceArmOf = (category: string) =>
-		sourceArms.arms.find((arm) => arm.category === category)?.body ??
-		sourceArms.arms.find((arm) => arm.category === "other")?.body ??
+		sourceArms.find((arm) => arm.category === category)?.body ??
+		sourceArms.find((arm) => arm.category === "other")?.body ??
 		"";
 
 	return (
-		<div className="flex flex-col gap-1.5">
-			<div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-				<Languages aria-hidden="true" className="size-3" />
-				{LOCALE_LABEL[locale]} needs {needed.length}{" "}
-				{needed.length === 1 ? "form" : "forms"} for{" "}
-				<code className="font-mono">{`{${entry.plural.arg}}`}</code>
-			</div>
+		<div className="flex flex-col gap-1">
 			{categories.map((category) => (
-				<div key={category} className="flex items-start gap-2">
+				<div key={category} className="flex items-center gap-1.5">
 					<span
 						className={cn(
-							"w-12 shrink-0 pt-1.5 text-right font-mono text-[10px]",
+							"w-10 shrink-0 text-right font-mono text-[10px]",
 							needed.includes(category)
 								? "text-muted-foreground"
 								: "text-muted-foreground/50 line-through",
@@ -303,38 +506,130 @@ function ValueField({
 					>
 						{category}
 					</span>
-					<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-						<Input
-							aria-label={`${LOCALE_LABEL[locale]} ${category} form`}
-							className="h-7 text-xs"
-							dir="auto"
-							value={armOf(category)}
-							placeholder={sourceArmOf(category)}
-							onChange={(event) => {
-								const arms = categories
-									.map((item) => ({
-										category: item,
-										body: item === category ? event.target.value : armOf(item),
-									}))
-									.filter((arm) => arm.body !== "");
-								onChange(
-									arms.length
-										? joinPluralArms(
-												parsed?.arg ?? entry.plural?.arg ?? "count",
-												arms,
-											)
-										: "",
-								);
-							}}
-						/>
-					</div>
+					<Input
+						aria-label={`${LOCALE_LABEL[locale]} ${category} — ${entry.key}`}
+						className={cn("h-7 min-w-0 flex-1 text-xs", className)}
+						placeholder={sourceArmOf(category)}
+						value={armOf(category)}
+						onChange={(event) => {
+							const arms = categories
+								.map((item) => ({
+									category: item,
+									body: item === category ? event.target.value : armOf(item),
+								}))
+								.filter((arm) => arm.body !== "");
+							onChange(
+								arms.length
+									? joinPluralArms(
+											parsed?.arg ?? entry.plural?.arg ?? "count",
+											arms,
+										)
+									: "",
+							);
+						}}
+						{...shared}
+					/>
 				</div>
 			))}
 		</div>
 	);
 }
 
-/** The prompt that makes a blank shippable: it refuses to save without a reason. */
+/**
+ * Everything under the field. It never occupies space that the field wants,
+ * and it never contains anything the translator must click to type.
+ */
+function FieldFooter({
+	entry,
+	locale,
+	state,
+	target,
+	value,
+	dirty,
+	focused,
+	flashing,
+	onBlank,
+}: {
+	entry: KeyEntry;
+	locale: LocaleCode;
+	state: EditorState;
+	target: TargetValue;
+	value: string;
+	dirty: boolean;
+	focused: boolean;
+	flashing: boolean;
+	onBlank: () => void;
+}) {
+	const stale =
+		target.state === "stale-semantic" || target.state === "stale-cosmetic";
+
+	if (flashing) {
+		return (
+			<span className="flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400">
+				<Check aria-hidden="true" className="size-3" />
+				Saved
+			</span>
+		);
+	}
+
+	if (target.state === "broken" && !dirty) {
+		return <span className="text-[10px] text-destructive">{target.note}</span>;
+	}
+
+	if (!focused && !dirty) {
+		return (
+			<span className="flex items-center gap-1.5 text-[10px]">
+				<span className={STATE_TONE[target.state]}>
+					{STATE_LABEL[target.state]}
+				</span>
+				{target.by ? (
+					<span className="text-muted-foreground/70">
+						{target.by}, {target.at}
+					</span>
+				) : null}
+			</span>
+		);
+	}
+
+	return (
+		<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px]">
+			{stale && !dirty ? (
+				<button
+					type="button"
+					className="font-medium text-amber-700 underline underline-offset-2 dark:text-amber-400"
+					// onMouseDown, not onClick: the field's blur must not beat the click.
+					onMouseDown={(event) => {
+						event.preventDefault();
+						state.commit(entry, locale);
+					}}
+				>
+					⌘↵ Still correct
+				</button>
+			) : dirty ? (
+				<span className="text-muted-foreground">⌘↵ Save and go on</span>
+			) : null}
+			{value === entry.source && entry.source ? (
+				<span className="text-muted-foreground">
+					Identical to English — saving records that as the decision
+				</span>
+			) : null}
+			{target.state !== "blank" ? (
+				<button
+					type="button"
+					className="ml-auto inline-flex items-center gap-1 text-muted-foreground underline underline-offset-2 hover:text-foreground"
+					onMouseDown={(event) => {
+						event.preventDefault();
+						onBlank();
+					}}
+				>
+					<CircleSlash aria-hidden="true" className="size-3" />
+					Deliberately empty
+				</button>
+			) : null}
+		</div>
+	);
+}
+
 function BlankPrompt({
 	onCancel,
 	onSave,
@@ -343,18 +638,24 @@ function BlankPrompt({
 	onSave: (reason: string) => void;
 }) {
 	const [reason, setReason] = useState("");
+	const ref = useRef<HTMLInputElement>(null);
+	useEffect(() => ref.current?.focus(), []);
 	return (
-		<div className="flex flex-col gap-2 border border-dashed p-2.5">
-			<div className="text-[11px] text-muted-foreground">
+		<div className="flex flex-col gap-1.5 border border-dashed p-2">
+			<span className="text-[10px] text-muted-foreground">
 				A blank ships only with a reason, and the reason stays with the value
 				across snapshots. Why should this render as nothing?
-			</div>
+			</span>
 			<Input
-				autoFocus
+				ref={ref}
 				className="h-7 text-xs"
-				placeholder="e.g. Row is icon-only in German — the label overflows the chip."
+				placeholder="Row is icon-only in German — the label overflows the chip."
 				value={reason}
 				onChange={(event) => setReason(event.target.value)}
+				onKeyDown={(event) => {
+					if (event.key === "Enter" && reason.trim()) onSave(reason.trim());
+					if (event.key === "Escape") onCancel();
+				}}
 			/>
 			<div className="flex justify-end gap-1.5">
 				<Button size="xs" variant="ghost" onClick={onCancel}>
@@ -372,243 +673,60 @@ function BlankPrompt({
 	);
 }
 
-/** Actions common to editing any one target — laid out by each variant. */
-function EditorActions({
-	entry,
-	locale,
-	target,
-	draft,
-	state,
-	onDone,
-	onBlank,
-}: {
-	entry: KeyEntry;
-	locale: LocaleCode;
-	target: TargetValue;
-	draft: string;
-	state: EditorState;
-	onDone: () => void;
-	onBlank: () => void;
-}) {
-	const dirty = draft !== target.value;
-	const stale =
-		target.state === "stale-semantic" || target.state === "stale-cosmetic";
-
+function SourceLine({ entry }: { entry: KeyEntry }) {
 	return (
-		<div className="flex flex-wrap items-center justify-between gap-2">
-			<div className="flex flex-wrap items-center gap-1.5">
-				{stale && !dirty ? (
-					<Button
-						size="xs"
-						variant="outline"
-						onClick={() => {
-							state.confirm(entry, locale);
-							onDone();
-						}}
-					>
-						Still correct
-					</Button>
-				) : null}
-				<Button size="xs" variant="ghost" onClick={onBlank}>
-					<CircleSlash aria-hidden="true" data-icon="inline-start" />
-					Deliberately empty…
-				</Button>
-				{draft !== entry.source ? (
-					<Button
-						size="xs"
-						variant="ghost"
-						title="Put the English text in, as a decision"
-						onClick={() => {
-							state.save(entry, locale, entry.source);
-							onDone();
-						}}
-					>
-						<Equal aria-hidden="true" data-icon="inline-start" />
-						Use English here
-					</Button>
-				) : (
-					<span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-						<Equal aria-hidden="true" className="size-3" />
-						Saving this records a deliberate English value
-					</span>
-				)}
-			</div>
-			<div className="flex items-center gap-1.5">
-				<Button size="xs" variant="ghost" onClick={onDone}>
-					Cancel
-				</Button>
-				<Button
-					size="xs"
-					disabled={!dirty && !stale}
-					onClick={() => {
-						state.save(entry, locale, draft);
-						onDone();
-					}}
-				>
-					Save
-				</Button>
-			</div>
-		</div>
-	);
-}
-
-/** One open editor, used by all three variants but placed differently by each. */
-function OpenEditor({
-	entry,
-	locale,
-	state,
-	onDone,
-	rows,
-	showSource,
-}: {
-	entry: KeyEntry;
-	locale: LocaleCode;
-	state: EditorState;
-	onDone: () => void;
-	rows?: number;
-	showSource?: boolean;
-}) {
-	const target = state.readValue(entry, locale);
-	const [draft, setDraft] = useState(target.value);
-	const [blanking, setBlanking] = useState(false);
-
-	return (
-		<div className="flex flex-col gap-2">
-			{entry.change ? <SourceChangeDiff entry={entry} /> : null}
-			{showSource ? (
-				<div className="flex flex-col gap-0.5">
-					<span className="text-[10px] text-muted-foreground uppercase tracking-wide">
-						English
-					</span>
-					<span className="text-xs leading-relaxed">{entry.source}</span>
-				</div>
-			) : null}
-			{target.note ? (
-				<div className="flex items-start gap-1.5 text-[11px] text-destructive">
-					<ShieldAlert aria-hidden="true" className="mt-0.5 size-3 shrink-0" />
-					{target.note}
-				</div>
-			) : null}
-			{target.state === "blank" ? (
-				<div className="text-[11px] text-muted-foreground">
-					Recorded blank: “{target.reason}” — editing replaces it.
-				</div>
-			) : null}
-			<ValueField
-				entry={entry}
-				locale={locale}
-				value={draft}
-				onChange={setDraft}
-				rows={rows}
-			/>
-			{blanking ? (
-				<BlankPrompt
-					onCancel={() => setBlanking(false)}
-					onSave={(reason) => {
-						state.blank(entry, locale, reason);
-						setBlanking(false);
-						onDone();
-					}}
-				/>
-			) : (
-				<EditorActions
-					entry={entry}
-					locale={locale}
-					target={target}
-					draft={draft}
-					state={state}
-					onDone={onDone}
-					onBlank={() => setBlanking(true)}
-				/>
-			)}
-		</div>
+		<p className="text-xs leading-relaxed" dir="auto">
+			{entry.source}
+		</p>
 	);
 }
 
 function KeyIdentity({ entry }: { entry: KeyEntry }) {
 	return (
-		<div className="flex min-w-0 flex-wrap items-baseline gap-2">
-			<span className="truncate font-mono text-xs">{entry.key}</span>
+		<div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+			<span className="truncate font-mono text-[11px]">{entry.key}</span>
 			{entry.screen ? (
 				<Badge variant="outline" className="h-4 px-1 font-normal text-[10px]">
 					{entry.screen}
 				</Badge>
 			) : null}
-			{entry.placeholders && Object.keys(entry.placeholders).length ? (
-				<span className="font-mono text-[10px] text-muted-foreground">
-					{Object.entries(entry.placeholders)
-						.map(([name, type]) => `{${name}: ${type}}`)
-						.join(" ")}
-				</span>
-			) : null}
 		</div>
 	);
 }
 
-// ──────────────────────────────────────────────────────────── A — the Ledger
+// ───────────────────────────────────────────────────────────── D — Ledger
 
-function VariantA({ entry, state }: { entry: KeyEntry; state: EditorState }) {
-	const [open, setOpen] = useState<LocaleCode | null>(null);
-
+function VariantD({ entry, state }: { entry: KeyEntry; state: EditorState }) {
 	return (
-		<div className="flex flex-col">
-			<div className="flex flex-col gap-2 pb-2.5">
-				<KeyIdentity entry={entry} />
-				{entry.change ? <SourceChangeDiff entry={entry} /> : null}
-			</div>
+		<div className="flex flex-col gap-2">
+			<KeyIdentity entry={entry} />
+			<SourceChangeStrip entry={entry} />
 
 			<div className="flex items-start gap-2 border-y bg-muted/40 px-2 py-1.5">
-				<span className="flex w-24 shrink-0 items-center gap-1.5">
+				<span className="flex w-20 shrink-0 items-center gap-1.5 pt-px">
 					<Sparkles aria-hidden="true" className="size-3 text-brand" />
 					<span className="font-mono text-[11px]">en</span>
 				</span>
-				<span className="min-w-0 flex-1 text-xs leading-relaxed">
-					{entry.source}
-				</span>
+				<div className="min-w-0 flex-1">
+					<SourceLine entry={entry} />
+				</div>
 			</div>
 
-			<div className="flex flex-col divide-y">
+			<div className="flex flex-col gap-1.5">
 				{TARGETS.map((locale) => {
-					const target = state.readValue(entry, locale);
-					const isOpen = open === locale;
+					const target = state.stored(entry, locale);
 					return (
-						<div key={locale} className="flex flex-col">
-							<button
-								type="button"
-								onClick={() => setOpen(isOpen ? null : locale)}
-								className={cn(
-									"flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-									isOpen && "bg-muted/50",
-								)}
-							>
-								<span className="flex w-24 shrink-0 items-center gap-1.5">
-									<StateDot state={target.state} />
-									<span className="font-mono text-[11px]">{locale}</span>
-									<span className="truncate text-[10px] text-muted-foreground">
-										{LOCALE_LABEL[locale]}
-									</span>
+						<div key={locale} className="flex items-start gap-2">
+							<span className="flex w-20 shrink-0 items-center gap-1.5 pt-1.5">
+								<StateDot state={target.state} />
+								<span className="font-mono text-[11px]">{locale}</span>
+								<span className="truncate text-[10px] text-muted-foreground">
+									{LOCALE_LABEL[locale]}
 								</span>
-								<span className="min-w-0 flex-1 overflow-hidden">
-									<ValuePreview target={target} className="block" />
-								</span>
-								<span className="hidden w-36 shrink-0 text-right sm:block">
-									<StateLabel state={target.state} />
-								</span>
-								<Pencil
-									aria-hidden="true"
-									className="size-3 shrink-0 text-muted-foreground"
-								/>
-							</button>
-							{isOpen ? (
-								<div className="bg-muted/20 px-2 py-2.5">
-									<OpenEditor
-										entry={entry}
-										locale={locale}
-										state={state}
-										onDone={() => setOpen(null)}
-									/>
-								</div>
-							) : null}
+							</span>
+							<div className="min-w-0 flex-1">
+								<LiveField entry={entry} locale={locale} state={state} />
+							</div>
 						</div>
 					);
 				})}
@@ -617,359 +735,212 @@ function VariantA({ entry, state }: { entry: KeyEntry; state: EditorState }) {
 	);
 }
 
-// ───────────────────────────────────────────────────────────── B — the Focus
+// ─────────────────────────────────────────────────────────────── E — Grid
 
-function VariantB({ entry, state }: { entry: KeyEntry; state: EditorState }) {
-	const [locale, setLocale] = useState<LocaleCode>(TARGETS[0]);
-	const target = state.readValue(entry, locale);
-	const sourceArms = entry.plural ? splitPluralArms(entry.source) : null;
-
+function GridHeader() {
 	return (
-		<div className="flex flex-col gap-2.5">
-			<KeyIdentity entry={entry} />
-			{entry.change ? <SourceChangeDiff entry={entry} /> : null}
+		<div className="sticky top-0 z-10 flex gap-2 border-b bg-background px-2 py-1.5">
+			<span className="w-[22%] shrink-0 text-[10px] text-muted-foreground uppercase tracking-wide">
+				Key and English
+			</span>
+			{TARGETS.map((locale) => (
+				<span
+					key={locale}
+					className="min-w-0 flex-1 text-[10px] text-muted-foreground uppercase tracking-wide"
+				>
+					{locale} · {LOCALE_LABEL[locale]}
+				</span>
+			))}
+		</div>
+	);
+}
 
-			<div className="grid grid-cols-1 gap-3 sm:grid-cols-[9.5rem_1fr]">
-				<div className="flex flex-col border">
+function VariantERow({
+	entry,
+	state,
+}: {
+	entry: KeyEntry;
+	state: EditorState;
+}) {
+	return (
+		<div className="flex flex-col gap-1 px-2 py-2">
+			<div className="flex gap-2">
+				<div className="flex w-[22%] shrink-0 flex-col gap-1">
+					<KeyIdentity entry={entry} />
+					<SourceLine entry={entry} />
+				</div>
+				{TARGETS.map((locale) => {
+					const target = state.stored(entry, locale);
+					return (
+						<div
+							key={locale}
+							className={cn(
+								"min-w-0 flex-1 border-l-2 pl-1.5",
+								STATE_EDGE[target.state],
+							)}
+						>
+							<LiveField
+								entry={entry}
+								locale={locale}
+								state={state}
+								className="text-[11px]"
+							/>
+						</div>
+					);
+				})}
+			</div>
+			{entry.change ? <SourceChangeStrip entry={entry} compact /> : null}
+		</div>
+	);
+}
+
+// ─────────────────────────────────────────────────────────── F — Language
+
+function VariantFRow({
+	entry,
+	locale,
+	state,
+}: {
+	entry: KeyEntry;
+	locale: LocaleCode;
+	state: EditorState;
+}) {
+	const target = state.stored(entry, locale);
+	return (
+		<div className="flex flex-col gap-1.5 px-3 py-2.5">
+			<div className="flex items-baseline justify-between gap-3">
+				<KeyIdentity entry={entry} />
+				<span className="flex shrink-0 items-center gap-1">
 					{TARGETS.map((item) => {
-						const value = state.readValue(entry, item);
-						const active = item === locale;
+						const other = state.stored(entry, item);
 						return (
-							<button
+							<span
 								key={item}
-								type="button"
-								onClick={() => setLocale(item)}
+								title={`${LOCALE_LABEL[item]} — ${STATE_LABEL[other.state]}`}
 								className={cn(
-									"flex flex-col gap-0.5 border-b px-2 py-1.5 text-left transition-colors last:border-b-0 hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-									active && "bg-muted",
+									"inline-flex items-center gap-0.5 font-mono text-[10px]",
+									item === locale
+										? "text-foreground"
+										: "text-muted-foreground/60",
 								)}
 							>
-								<span className="flex items-center gap-1.5">
-									<StateDot state={value.state} />
-									<span className="font-mono text-[11px]">{item}</span>
-									<span className="truncate text-[10px] text-muted-foreground">
-										{LOCALE_LABEL[item]}
-									</span>
-								</span>
-								<span className="truncate pl-3 text-[10px] text-muted-foreground">
-									{STATE_LABEL[value.state]}
-								</span>
-							</button>
+								<StateDot state={other.state} />
+								{item}
+							</span>
 						);
 					})}
+				</span>
+			</div>
+			<SourceChangeStrip entry={entry} />
+			<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+				<div className="flex min-w-0 flex-col gap-1 border-l-2 border-l-brand/40 pl-2">
+					<span className="text-[10px] text-muted-foreground uppercase tracking-wide">
+						English
+					</span>
+					<SourceLine entry={entry} />
 				</div>
+				<div
+					className={cn("min-w-0 border-l-2 pl-2", STATE_EDGE[target.state])}
+				>
+					<LiveField entry={entry} locale={locale} state={state} />
+				</div>
+			</div>
+		</div>
+	);
+}
 
-				<div className="flex min-w-0 flex-col gap-3">
-					<div className="flex flex-col gap-1 border bg-muted/40 p-2.5">
-						<span className="flex items-center gap-1.5 text-[10px] text-muted-foreground uppercase tracking-wide">
-							<Sparkles aria-hidden="true" className="size-3 text-brand" />
-							English source
+function LanguageBar({
+	locale,
+	onPick,
+	state,
+}: {
+	locale: LocaleCode;
+	onPick: (next: LocaleCode) => void;
+	state: EditorState;
+}) {
+	return (
+		<div className="flex flex-wrap items-center gap-1 border-b pb-2">
+			{TARGETS.map((item) => {
+				const waiting = KEYS.filter(
+					(entry) => STATE_BLOCKS[state.stored(entry, item).state],
+				).length;
+				return (
+					<Button
+						key={item}
+						size="xs"
+						variant={item === locale ? "secondary" : "ghost"}
+						onClick={() => onPick(item)}
+					>
+						{LOCALE_LABEL[item]}
+						<span
+							className={cn(
+								"ml-1 tabular-nums",
+								waiting
+									? "text-amber-700 dark:text-amber-400"
+									: "text-muted-foreground",
+							)}
+						>
+							{waiting || "✓"}
 						</span>
-						{sourceArms ? (
-							<div className="flex flex-col gap-0.5">
-								{sourceArms.arms.map((arm) => (
-									<div key={arm.category} className="flex gap-2">
-										<span className="w-12 shrink-0 text-right font-mono text-[10px] text-muted-foreground">
-											{arm.category}
-										</span>
-										<span className="text-xs">{arm.body}</span>
-									</div>
-								))}
-							</div>
-						) : (
-							<p className="text-xs leading-relaxed">{entry.source}</p>
-						)}
-					</div>
+					</Button>
+				);
+			})}
+		</div>
+	);
+}
 
-					<div className="flex flex-col gap-2">
-						<div className="flex items-center justify-between gap-2">
-							<span className="font-medium text-sm">
-								{LOCALE_LABEL[locale]}
-							</span>
-							<span className="flex items-center gap-1.5">
-								<StateDot state={target.state} />
-								<StateLabel state={target.state} />
-							</span>
-						</div>
-						<OpenEditor
-							key={`${entry.key}:${locale}`}
+// ───────────────────────────────────────────────────────────────── hosting
+
+type Variant = "D" | "E" | "F";
+
+function StringsHost({
+	variant,
+	locale,
+	state,
+	onPickLocale,
+}: {
+	variant: Variant;
+	locale: LocaleCode;
+	state: EditorState;
+	onPickLocale: (next: LocaleCode) => void;
+}) {
+	if (variant === "E") {
+		return (
+			<div className="flex flex-col border">
+				<GridHeader />
+				<div className="flex flex-col divide-y">
+					{KEYS.map((entry) => (
+						<VariantERow key={entry.key} entry={entry} state={state} />
+					))}
+				</div>
+			</div>
+		);
+	}
+
+	if (variant === "F") {
+		return (
+			<div className="flex flex-col gap-2">
+				<LanguageBar locale={locale} onPick={onPickLocale} state={state} />
+				<div className="flex flex-col divide-y border">
+					{KEYS.map((entry) => (
+						<VariantFRow
+							key={entry.key}
 							entry={entry}
 							locale={locale}
 							state={state}
-							onDone={() => undefined}
-							rows={6}
 						/>
-						{target.by ? (
-							<span className="text-[10px] text-muted-foreground">
-								Last decided by {target.by}, {target.at}
-							</span>
-						) : null}
-					</div>
+					))}
 				</div>
 			</div>
-		</div>
-	);
-}
+		);
+	}
 
-// ───────────────────────────────────────────────────────── C — the Attention
-
-const ATTENTION_ORDER: Attention[] = ["blocked", "decide", "review"];
-
-function VariantC({ entry, state }: { entry: KeyEntry; state: EditorState }) {
-	const [open, setOpen] = useState<LocaleCode | null>(null);
-	const [showSettled, setShowSettled] = useState(false);
-
-	const grouped = useMemo(() => {
-		const groups: Record<Attention, TargetValue[]> = {
-			blocked: [],
-			decide: [],
-			review: [],
-			settled: [],
-		};
-		for (const locale of TARGETS) {
-			const value = state.readValue(entry, locale);
-			groups[STATE_ATTENTION[value.state]].push(value);
-		}
-		return groups;
-	}, [entry, state]);
-
-	const settled = grouped.settled;
-	const anyOpen = ATTENTION_ORDER.some((group) => grouped[group].length);
-
-	return (
-		<div className="flex flex-col gap-2.5">
-			<div className="flex flex-col gap-1.5">
-				<KeyIdentity entry={entry} />
-				<p className="text-muted-foreground text-xs leading-relaxed" dir="auto">
-					<Sparkles
-						aria-hidden="true"
-						className="mr-1 inline size-3 text-brand"
-					/>
-					{entry.source}
-				</p>
-			</div>
-			{entry.change ? <SourceChangeDiff entry={entry} /> : null}
-
-			{!anyOpen ? (
-				<div className="border border-dashed px-2.5 py-2 text-[11px] text-muted-foreground">
-					Nothing waiting. All five Locales are settled.
-				</div>
-			) : null}
-
-			{ATTENTION_ORDER.map((group) => {
-				const items = grouped[group];
-				if (!items.length) return null;
-				return (
-					<div key={group} className="flex flex-col">
-						<div className="flex items-baseline gap-2 pb-1">
-							<span
-								className={cn(
-									"font-medium text-[11px] uppercase tracking-wide",
-									group === "blocked"
-										? "text-destructive"
-										: group === "decide"
-											? "text-amber-700 dark:text-amber-400"
-											: "text-muted-foreground",
-								)}
-							>
-								{ATTENTION_LABEL[group]}
-							</span>
-							<span className="text-[11px] text-muted-foreground">
-								{items.length}
-							</span>
-							{group === "review" ? (
-								<span className="text-[10px] text-muted-foreground">
-									{entry.change?.kind === "cosmetic"
-										? "ships unchanged either way"
-										: "will not ship until answered"}
-								</span>
-							) : null}
-						</div>
-						<div className="flex flex-col divide-y border">
-							{items.map((target) => (
-								<AttentionItem
-									key={target.locale}
-									entry={entry}
-									target={target}
-									state={state}
-									open={open === target.locale}
-									onToggle={() =>
-										setOpen(open === target.locale ? null : target.locale)
-									}
-									onDone={() => setOpen(null)}
-								/>
-							))}
-						</div>
-					</div>
-				);
-			})}
-
-			{settled.length ? (
-				<div className="flex flex-col">
-					<button
-						type="button"
-						onClick={() => setShowSettled(!showSettled)}
-						className="flex items-center gap-1.5 py-1 text-left text-[11px] text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-					>
-						{showSettled ? (
-							<ChevronDown aria-hidden="true" className="size-3" />
-						) : (
-							<ChevronRight aria-hidden="true" className="size-3" />
-						)}
-						Settled — {settled.length}:{" "}
-						{settled
-							.map((item) => `${item.locale} ${STATE_LABEL[item.state]}`)
-							.join(" · ")}
-					</button>
-					{showSettled ? (
-						<div className="flex flex-col divide-y border">
-							{settled.map((target) => (
-								<AttentionItem
-									key={target.locale}
-									entry={entry}
-									target={target}
-									state={state}
-									open={open === target.locale}
-									onToggle={() =>
-										setOpen(open === target.locale ? null : target.locale)
-									}
-									onDone={() => setOpen(null)}
-								/>
-							))}
-						</div>
-					) : null}
-				</div>
-			) : null}
-		</div>
-	);
-}
-
-/** The one-line answer to "what is this Locale waiting for, and what do I press". */
-function AttentionItem({
-	entry,
-	target,
-	state,
-	open,
-	onToggle,
-	onDone,
-}: {
-	entry: KeyEntry;
-	target: TargetValue;
-	state: EditorState;
-	open: boolean;
-	onToggle: () => void;
-	onDone: () => void;
-}) {
-	const prompt: Record<ValueState, string> = {
-		broken: target.note ?? "Cannot be carried forward.",
-		undecided: "Nothing here, and nobody has said it should be empty.",
-		"imported-identical": "Holds the English text; nobody chose that.",
-		"stale-semantic": "The English meaning moved. Confirm or update.",
-		"stale-cosmetic": "The English was touched, not changed.",
-		current: "Translated.",
-		identical: "English, deliberately.",
-		blank: `Empty, deliberately — ${target.reason ?? ""}`,
-	};
-
-	return (
-		<div className="flex flex-col">
-			<div className="flex items-start gap-2 px-2 py-1.5">
-				<button
-					type="button"
-					onClick={onToggle}
-					className="flex min-w-0 flex-1 items-start gap-2 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-				>
-					<span className="flex w-24 shrink-0 items-center gap-1.5 pt-0.5">
-						<StateDot state={target.state} />
-						<span className="font-mono text-[11px]">{target.locale}</span>
-						<span className="truncate text-[10px] text-muted-foreground">
-							{LOCALE_LABEL[target.locale]}
-						</span>
-					</span>
-					<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-						<span className={cn("text-[11px]", STATE_TONE[target.state])}>
-							{prompt[target.state]}
-						</span>
-						{target.value ? (
-							<ValuePreview
-								target={target}
-								className="block text-muted-foreground"
-							/>
-						) : null}
-					</span>
-				</button>
-				<span className="flex shrink-0 items-center gap-1">
-					{target.state === "stale-semantic" ||
-					target.state === "stale-cosmetic" ? (
-						<Button
-							size="xs"
-							variant="outline"
-							onClick={() => state.confirm(entry, target.locale)}
-						>
-							Still correct
-						</Button>
-					) : null}
-					{target.state === "imported-identical" ? (
-						<Button
-							size="xs"
-							variant="outline"
-							onClick={() => state.save(entry, target.locale, entry.source)}
-						>
-							Meant to be English
-						</Button>
-					) : null}
-					<Button size="xs" variant="ghost" onClick={onToggle}>
-						{open ? "Close" : "Edit"}
-					</Button>
-				</span>
-			</div>
-			{open ? (
-				<div className="border-t bg-muted/20 px-2 py-2.5">
-					<OpenEditor
-						entry={entry}
-						locale={target.locale}
-						state={state}
-						onDone={onDone}
-						showSource
-					/>
-				</div>
-			) : null}
-		</div>
-	);
-}
-
-// ───────────────────────────────────────────────────── the two hosting shells
-
-type Variant = "A" | "B" | "C";
-
-function Block({
-	variant,
-	entry,
-	state,
-}: {
-	variant: Variant;
-	entry: KeyEntry;
-	state: EditorState;
-}) {
-	if (variant === "A") return <VariantA entry={entry} state={state} />;
-	if (variant === "B") return <VariantB entry={entry} state={state} />;
-	return <VariantC entry={entry} state={state} />;
-}
-
-/** Home 1: the Strings page — the block is the whole body, one card per key. */
-function StringsHost({
-	variant,
-	state,
-}: {
-	variant: Variant;
-	state: EditorState;
-}) {
 	return (
 		<div className="flex flex-col gap-3">
 			{KEYS.map((entry) => (
 				<Card key={entry.key} size="sm">
 					<CardContent>
-						<Block variant={variant} entry={entry} state={state} />
+						<VariantD entry={entry} state={state} />
 						{entry.staged ? <StagedNote note={entry.staged} /> : null}
 					</CardContent>
 				</Card>
@@ -978,15 +949,22 @@ function StringsHost({
 	);
 }
 
-/** Home 2: a Reconciliation Report row — the same block, inlined beneath it. */
+/**
+ * Home 2: the Reconciliation Report. Rows are open — closing them would put
+ * back the click round one was rejected for. The cost is a longer page, which
+ * is the trade this variant round is asking about.
+ */
 function ReportHost({
 	variant,
+	locale,
 	state,
+	onPickLocale,
 }: {
 	variant: Variant;
+	locale: LocaleCode;
 	state: EditorState;
+	onPickLocale: (next: LocaleCode) => void;
 }) {
-	const [open, setOpen] = useState<string | null>("part_count");
 	const rows = KEYS.filter((entry) => REPORT_ROWS[entry.key]);
 	const groups = REPORT_GROUP_ORDER.filter((group) =>
 		rows.some((entry) => REPORT_ROWS[entry.key] === group),
@@ -997,73 +975,37 @@ function ReportHost({
 			<div className="border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
 				Reconciliation Report ·{" "}
 				<span className="font-mono">develop @ 19a07bc</span> · ingested today.
-				Rows persist after disposition; the editor opens inline beneath a row,
-				never in a drawer.
+				Every row is already editable — the report is a worklist, so opening one
+				should not be a step.
 			</div>
+			{variant === "F" ? (
+				<LanguageBar locale={locale} onPick={onPickLocale} state={state} />
+			) : null}
 			{groups.map((group) => (
 				<div key={group} className="flex flex-col gap-1.5">
 					<span className="font-medium text-[11px] text-muted-foreground uppercase tracking-wide">
 						{group}
 					</span>
 					<div className="flex flex-col divide-y border">
+						{variant === "E" ? <GridHeader /> : null}
 						{rows
 							.filter((entry) => REPORT_ROWS[entry.key] === group)
-							.map((entry) => {
-								const isOpen = open === entry.key;
-								return (
-									<div key={entry.key} className="flex flex-col">
-										<button
-											type="button"
-											onClick={() => setOpen(isOpen ? null : entry.key)}
-											className={cn(
-												"flex items-center gap-2 px-2.5 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-												isOpen && "bg-muted/40",
-											)}
-										>
-											{isOpen ? (
-												<ChevronDown
-													aria-hidden="true"
-													className="size-3 shrink-0 text-muted-foreground"
-												/>
-											) : (
-												<ChevronRight
-													aria-hidden="true"
-													className="size-3 shrink-0 text-muted-foreground"
-												/>
-											)}
-											<span className="min-w-0 flex-1 truncate font-mono text-xs">
-												{entry.key}
-											</span>
-											<span className="flex shrink-0 flex-wrap gap-1">
-												{TARGETS.map((locale) => {
-													const value = state.readValue(entry, locale);
-													return (
-														<span
-															key={locale}
-															title={`${LOCALE_LABEL[locale]} — ${STATE_LABEL[value.state]}`}
-															className={cn(
-																"inline-flex items-center gap-1 border px-1 font-mono text-[10px]",
-																STATE_TONE[value.state],
-															)}
-														>
-															<StateDot state={value.state} />
-															{locale}
-														</span>
-													);
-												})}
-											</span>
-										</button>
-										{isOpen ? (
-											<div className="border-t bg-muted/10 px-2.5 py-3">
-												<Block variant={variant} entry={entry} state={state} />
-												{entry.staged ? (
-													<StagedNote note={entry.staged} />
-												) : null}
-											</div>
-										) : null}
+							.map((entry) =>
+								variant === "E" ? (
+									<VariantERow key={entry.key} entry={entry} state={state} />
+								) : variant === "F" ? (
+									<VariantFRow
+										key={entry.key}
+										entry={entry}
+										locale={locale}
+										state={state}
+									/>
+								) : (
+									<div key={entry.key} className="px-2.5 py-2.5">
+										<VariantD entry={entry} state={state} />
 									</div>
-								);
-							})}
+								),
+							)}
 					</div>
 				</div>
 			))}
@@ -1079,25 +1021,23 @@ function StagedNote({ note }: { note: string }) {
 	);
 }
 
-// ──────────────────────────────────────────────────────────────────── route
+// ────────────────────────────────────────────────────────────────── route
 
 function PrototypeEditorRoute() {
-	const { variant, context } = Route.useSearch();
+	const { variant, context, locale } = Route.useSearch();
 	const navigate = Route.useNavigate();
 	const state = useEditorState();
 	const current = (
-		["A", "B", "C"].includes(variant) ? variant : "A"
+		["D", "E", "F"].includes(variant) ? variant : "D"
 	) as Variant;
+
+	const Host = context === "report" ? ReportHost : StringsHost;
 
 	return (
 		<ProjectShell projectId="prototype" title="Brickit">
 			<PageHeader
 				title={context === "report" ? "Reconciliation Report" : "Strings"}
-				description={
-					context === "report"
-						? "The per-key editor inlined under a report row — the second home it has to work in."
-						: "The per-key editor as the main body of Strings, across six Locales of the real Brickit catalog."
-				}
+				description="Every value is a live field. Tab walks them, ⌘↵ saves and jumps to the next one still waiting, Esc reverts."
 				action={
 					<div className="flex items-center gap-1">
 						{(
@@ -1111,7 +1051,9 @@ function PrototypeEditorRoute() {
 								size="xs"
 								variant={context === value ? "secondary" : "ghost"}
 								onClick={() =>
-									navigate({ search: { variant: current, context: value } })
+									navigate({
+										search: { variant: current, context: value, locale },
+									})
 								}
 							>
 								{label}
@@ -1124,16 +1066,21 @@ function PrototypeEditorRoute() {
 					</div>
 				}
 			/>
-			{context === "report" ? (
-				<ReportHost variant={current} state={state} />
-			) : (
-				<StringsHost variant={current} state={state} />
-			)}
+			<Host
+				variant={current}
+				locale={locale}
+				state={state}
+				onPickLocale={(next) =>
+					navigate({ search: { variant: current, context, locale: next } })
+				}
+			/>
 			<div className="h-16" />
 			<PrototypeVariantSwitcher
 				variants={VARIANTS}
 				current={current}
-				onChange={(key) => navigate({ search: { variant: key, context } })}
+				onChange={(key) =>
+					navigate({ search: { variant: key, context, locale } })
+				}
 			/>
 		</ProjectShell>
 	);
