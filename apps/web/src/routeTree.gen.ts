@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ProjectsRouteImport } from './routes/projects'
 import { Route as PrototypeEditorRouteImport } from './routes/prototype-editor'
+import { Route as PrototypeIcuRouteImport } from './routes/prototype-icu'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
 import { Route as ProjectsNewRouteImport } from './routes/projects.new'
@@ -47,6 +48,11 @@ const ProjectsRoute = ProjectsRouteImport.update({
 const PrototypeEditorRoute = PrototypeEditorRouteImport.update({
   id: '/prototype-editor',
   path: '/prototype-editor',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PrototypeIcuRoute = PrototypeIcuRouteImport.update({
+  id: '/prototype-icu',
+  path: '/prototype-icu',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignInRoute = SignInRouteImport.update({
@@ -139,6 +145,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof DashboardRoute
   '/projects': typeof ProjectsRouteWithChildren
   '/prototype-editor': typeof PrototypeEditorRoute
+  '/prototype-icu': typeof PrototypeIcuRoute
   '/sign-in': typeof SignInRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
@@ -160,6 +167,7 @@ export interface FileRoutesByTo {
   '/dashboard': typeof DashboardRoute
   '/projects': typeof ProjectsRouteWithChildren
   '/prototype-editor': typeof PrototypeEditorRoute
+  '/prototype-icu': typeof PrototypeIcuRoute
   '/sign-in': typeof SignInRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
@@ -181,6 +189,7 @@ export interface FileRoutesById {
   '/dashboard': typeof DashboardRoute
   '/projects': typeof ProjectsRouteWithChildren
   '/prototype-editor': typeof PrototypeEditorRoute
+  '/prototype-icu': typeof PrototypeIcuRoute
   '/sign-in': typeof SignInRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
@@ -204,6 +213,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/projects'
     | '/prototype-editor'
+    | '/prototype-icu'
     | '/sign-in'
     | '/projects/$projectId'
     | '/projects/new'
@@ -225,6 +235,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/projects'
     | '/prototype-editor'
+    | '/prototype-icu'
     | '/sign-in'
     | '/projects/$projectId'
     | '/projects/new'
@@ -245,6 +256,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/projects'
     | '/prototype-editor'
+    | '/prototype-icu'
     | '/sign-in'
     | '/projects/$projectId'
     | '/projects/new'
@@ -267,6 +279,7 @@ export interface RootRouteChildren {
   DashboardRoute: typeof DashboardRoute
   ProjectsRoute: typeof ProjectsRouteWithChildren
   PrototypeEditorRoute: typeof PrototypeEditorRoute
+  PrototypeIcuRoute: typeof PrototypeIcuRoute
   SignInRoute: typeof SignInRoute
 }
 
@@ -298,6 +311,13 @@ declare module '@tanstack/react-router' {
       path: '/prototype-editor'
       fullPath: '/prototype-editor'
       preLoaderRoute: typeof PrototypeEditorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/prototype-icu': {
+      id: '/prototype-icu'
+      path: '/prototype-icu'
+      fullPath: '/prototype-icu'
+      preLoaderRoute: typeof PrototypeIcuRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sign-in': {
@@ -487,6 +507,7 @@ const rootRouteChildren: RootRouteChildren = {
   DashboardRoute: DashboardRoute,
   ProjectsRoute: ProjectsRouteWithChildren,
   PrototypeEditorRoute: PrototypeEditorRoute,
+  PrototypeIcuRoute: PrototypeIcuRoute,
   SignInRoute: SignInRoute,
 }
 export const routeTree = rootRouteImport
