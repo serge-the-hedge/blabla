@@ -1,4 +1,4 @@
-// PROTOTYPE ONLY — throwaway. Three variants of the compound-ICU editing block,
+// PROTOTYPE ONLY — throwaway. Four variants of the compound-ICU editing block,
 // at /prototype-icu?variant=. Answers "Decide how compound ICU shapes are
 // edited" (#26). Delete with the branch that holds it.
 //
@@ -34,13 +34,15 @@
 //
 // J — Segments: the message is its parts in reading order, each block expanded.
 // K — Sentence: the message stays one sentence; blocks are chips that open.
+// M — Sentence, live: the block is ordinary inline text standing in for every
+//     arm at once, with a closed six-item menu for adding one.
 // L — Outcomes: no decomposition at all — raw ICU beside what it renders.
 
 import { Button } from "@blabla/ui/components/button";
 import { Textarea } from "@blabla/ui/components/textarea";
 import { cn } from "@blabla/ui/lib/utils";
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
 	PageHeader,
 	ProjectShell,
@@ -50,6 +52,7 @@ import {
 	type Arm,
 	armFields,
 	CLDR_REQUIRED,
+	editEveryArm,
 	hasNesting,
 	isCompound,
 	isDegenerate,
@@ -58,8 +61,10 @@ import {
 	LOCALE_LABEL,
 	LOCALES,
 	type LocaleCode,
+	mapRange,
 	missingOther,
 	newArm,
+	openSlots,
 	parseMessage,
 	REFERENCE,
 	renderAt,
@@ -79,6 +84,7 @@ export const Route = createFileRoute("/prototype-icu")({
 const VARIANTS = [
 	{ key: "J", name: "Segments — the message as its parts" },
 	{ key: "K", name: "Sentence — chips that open in place" },
+	{ key: "M", name: "Sentence, live — one edit lands on every case" },
 	{ key: "L", name: "Outcomes — raw ICU beside what it renders" },
 ];
 
@@ -573,6 +579,447 @@ function SentenceRow({
 	);
 }
 
+// ────────────────────────────────────────────────── M — the sentence, live
+//
+// K with the chip taken away. The block is ordinary text inline in the
+// sentence, and you type into it — but it is one arm standing in for all of
+// them, so an edit lands on EVERY arm through a character alignment. Select
+// "pockets" and every arm's word for pockets is selected too, shown highlighted
+// in the strip below. Type, and all of them change at once.
+//
+// Three things had to be true for this to work at all:
+//
+//   1. Arms of one block are near-identical, so aligning them character by
+//      character is meaningful rather than a guess. Measured: in Russian
+//      `part_count` the five arms share every character except the ending.
+//   2. You must still be able to reach one arm alone, because the whole reason
+//      Russian has five is that the endings differ. So each arm is its own
+//      field in the strip — literally select it individually.
+//   3. Adding an arm has a closed vocabulary. gen_l10n accepts nine tokens, of
+//      which "=0"/"zero", "=1"/"one" and "=2"/"two" are aliases, so a block
+//      has at most SIX arms and the menu can list all of them, honestly
+//      labelled — including "German never chooses it — it would be dead".
+//
+// The representative shows the arm body verbatim, placeholders and all. It has
+// to: an edit is mapped by character offset, and rendering `{count}` as "2"
+// would make the offsets lie.
+
+function ArmStripLine({
+	arm,
+	locale,
+	representative,
+	selection,
+	priorRepBody,
+	onChange,
+	onRemove,
+}: {
+	arm: Arm;
+	locale: LocaleCode;
+	representative: boolean;
+	/** Live selection in the representative, or null. */
+	selection: [number, number] | null;
+	priorRepBody: string;
+	onChange: (next: string) => void;
+	onRemove: (() => void) | null;
+}) {
+	const exact = arm.category === "zero" || arm.category === "two";
+	// Where the representative's selection lands in THIS arm.
+	const mapped =
+		selection && !representative
+			? mapRange(priorRepBody, arm.body, selection[0], selection[1])
+			: selection && representative
+				? selection
+				: null;
+	const lit = mapped && mapped[1] > mapped[0];
+
+	return (
+		<div className="group flex items-baseline gap-2">
+			<span
+				className={cn(
+					"w-11 shrink-0 pl-2 text-right",
+					MONO,
+					exact
+						? "text-amber-600/70 dark:text-amber-500/70"
+						: CLDR_REQUIRED[locale].includes(arm.category)
+							? "text-muted-foreground/60"
+							: "text-muted-foreground/40",
+				)}
+			>
+				{ARM_LABEL(arm.category, locale)}
+			</span>
+
+			{/* The highlight sits in a mirror behind a transparent field, so the
+			    selection can be shown without taking the caret away. */}
+			<div className="relative min-w-0 flex-1">
+				<div
+					aria-hidden="true"
+					className="pointer-events-none absolute inset-0 whitespace-pre-wrap px-2 py-1 text-[13px] text-transparent leading-relaxed"
+				>
+					{lit && mapped ? (
+						<>
+							{arm.body.slice(0, mapped[0])}
+							<mark className="rounded-[2px] bg-amber-300/50 text-transparent dark:bg-amber-500/40">
+								{arm.body.slice(mapped[0], mapped[1])}
+							</mark>
+							{arm.body.slice(mapped[1])}
+						</>
+					) : null}
+				</div>
+				<Textarea
+					aria-label={`${LOCALE_LABEL[locale]} ${arm.category}`}
+					className={cn(
+						FIELD,
+						"relative bg-transparent",
+						representative && "text-foreground",
+					)}
+					dir="auto"
+					spellCheck
+					value={arm.body}
+					onChange={(event) => onChange(event.target.value)}
+				/>
+			</div>
+
+			{onRemove ? (
+				<button
+					type="button"
+					className={cn(
+						MONO,
+						"shrink-0 px-1 text-muted-foreground/0 transition-colors hover:text-destructive group-hover:text-muted-foreground/40",
+					)}
+					onClick={onRemove}
+					title={`Remove the ${arm.category} arm`}
+				>
+					×
+				</button>
+			) : null}
+		</div>
+	);
+}
+
+/** Notion-ish: type to filter a closed six-item vocabulary, Enter to insert. */
+function AddArmMenu({
+	arms,
+	locale,
+	onAdd,
+}: {
+	arms: Arm[];
+	locale: LocaleCode;
+	onAdd: (category: string) => void;
+}) {
+	const [open, setOpen] = useState(false);
+	const [query, setQuery] = useState("");
+	const [cursor, setCursor] = useState(0);
+	const queryRef = useRef<HTMLInputElement>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: prototype
+	useEffect(() => {
+		if (open) queryRef.current?.focus();
+	}, [open]);
+	const available = openSlots(arms);
+	const shown = available.filter(
+		(slot) =>
+			!query ||
+			slot.category.includes(query.toLowerCase()) ||
+			ARM_LABEL(slot.category, locale).includes(query),
+	);
+
+	if (!available.length) {
+		return (
+			<p className={cn(MONO, "py-1 pl-14 text-muted-foreground/30")}>
+				all six cases present
+			</p>
+		);
+	}
+
+	if (!open) {
+		return (
+			<button
+				type="button"
+				className={cn(
+					MONO,
+					"rounded px-1 py-1 text-left text-muted-foreground/40 transition-colors hover:bg-muted/50 hover:text-muted-foreground",
+				)}
+				onClick={() => {
+					setOpen(true);
+					setQuery("");
+					setCursor(0);
+				}}
+			>
+				<span className="pl-13">+ add a case</span>
+			</button>
+		);
+	}
+
+	return (
+		<div className="ml-13 w-[26rem] rounded-md border bg-popover p-1 shadow-md">
+			<input
+				ref={queryRef}
+				className={cn(
+					MONO,
+					"w-full bg-transparent px-2 py-1 outline-none placeholder:text-muted-foreground/40",
+				)}
+				placeholder="add a case…"
+				value={query}
+				onChange={(event) => {
+					setQuery(event.target.value);
+					setCursor(0);
+				}}
+				onBlur={() => setOpen(false)}
+				onKeyDown={(event) => {
+					if (event.key === "Escape") setOpen(false);
+					if (event.key === "ArrowDown") {
+						event.preventDefault();
+						setCursor((prior) => Math.min(prior + 1, shown.length - 1));
+					}
+					if (event.key === "ArrowUp") {
+						event.preventDefault();
+						setCursor((prior) => Math.max(prior - 1, 0));
+					}
+					if (event.key === "Enter" && shown[cursor]) {
+						event.preventDefault();
+						onAdd(shown[cursor].category);
+						setOpen(false);
+					}
+				}}
+			/>
+			{shown.map((slot, index) => (
+				<button
+					key={slot.category}
+					type="button"
+					className={cn(
+						"flex w-full items-baseline gap-2 rounded px-2 py-1 text-left",
+						index === cursor ? "bg-muted" : "",
+					)}
+					onMouseDown={(event) => {
+						event.preventDefault();
+						onAdd(slot.category);
+						setOpen(false);
+					}}
+					onMouseEnter={() => setCursor(index)}
+				>
+					<span
+						className={cn(
+							MONO,
+							"w-11 shrink-0 text-right",
+							slot.category === "zero" || slot.category === "two"
+								? "text-amber-600/70 dark:text-amber-500/70"
+								: "text-muted-foreground/70",
+						)}
+					>
+						{ARM_LABEL(slot.category, locale)}
+					</span>
+					<span
+						className={cn(
+							"text-[12px]",
+							slot.dead(locale)
+								? "text-muted-foreground/40 italic"
+								: "text-muted-foreground",
+						)}
+					>
+						{slot.blurb(locale)}
+					</span>
+				</button>
+			))}
+		</div>
+	);
+}
+
+function LiveSentenceRow({
+	entry,
+	locale,
+	drafts,
+}: {
+	entry: KeyEntry;
+	locale: LocaleCode;
+	drafts: Drafts;
+}) {
+	const value = drafts.value(entry, locale);
+	const segments = parseMessage(value);
+	const nested = hasNesting(segments);
+	const raw = drafts.isRaw(entry, locale) || nested;
+	const [active, setActive] = useState<number | null>(null);
+	const [selection, setSelection] = useState<[number, number] | null>(null);
+
+	const write = (next: Segment[]) => drafts.set(entry, locale, serialize(next));
+
+	if (raw) {
+		return (
+			<div className="flex flex-col gap-0.5">
+				<RawField
+					value={value}
+					onChange={(next) => drafts.set(entry, locale, next)}
+				/>
+				<EscapeToggle
+					raw
+					forced={nested ? "nested" : undefined}
+					onToggle={() => drafts.toggleRaw(entry, locale)}
+				/>
+			</div>
+		);
+	}
+
+	const openBlock = active === null ? null : segments[active];
+
+	return (
+		<div className="flex flex-col gap-1">
+			<div className="flex flex-wrap items-baseline px-2 py-1 text-[13px] leading-relaxed">
+				{segments.map((segment, index) => {
+					if (segment.kind === "text") {
+						return (
+							<input
+								// biome-ignore lint/suspicious/noArrayIndexKey: prototype
+								key={index}
+								aria-label="Literal text"
+								className="field-sizing-content min-w-4 rounded border-0 bg-transparent px-0.5 text-[13px] leading-relaxed outline-none hover:bg-muted/40 focus:bg-muted/60"
+								dir="auto"
+								value={segment.text}
+								onFocus={() => {
+									setActive(null);
+									setSelection(null);
+								}}
+								onChange={(event) =>
+									write(
+										segments.map((item, position) =>
+											position === index
+												? { kind: "text", text: event.target.value }
+												: item,
+										),
+									)
+								}
+							/>
+						);
+					}
+
+					// The arm that stands in for the block inline. `other` always
+					// exists — gen-l10n will not build without it — so it is the one
+					// arm guaranteed to be there to represent the rest.
+					const rep =
+						segment.arms.find((arm) => arm.category === "other") ??
+						segment.arms[0];
+					if (!rep) return null;
+
+					return (
+						<input
+							// biome-ignore lint/suspicious/noArrayIndexKey: prototype
+							key={index}
+							aria-label={`${LOCALE_LABEL[locale]} — ${segment.arg}, all ${segment.arms.length} cases`}
+							className={cn(
+								"field-sizing-content min-w-4 rounded border-0 bg-transparent px-0.5 text-[13px] leading-relaxed outline-none",
+								"underline decoration-amber-500/40 decoration-dotted underline-offset-4",
+								active === index ? "bg-muted/60" : "hover:bg-muted/40",
+							)}
+							dir="auto"
+							value={rep.body}
+							onFocus={() => setActive(index)}
+							onSelect={(event) => {
+								const field = event.currentTarget;
+								setActive(index);
+								setSelection([
+									field.selectionStart ?? 0,
+									field.selectionEnd ?? 0,
+								]);
+							}}
+							onChange={(event) => {
+								const next = event.target.value;
+								write(
+									segments.map((item, position) =>
+										position !== index || item.kind === "text"
+											? item
+											: {
+													...item,
+													arms: editEveryArm(
+														item.arms,
+														rep.category,
+														rep.body,
+														next,
+													),
+												},
+									),
+								);
+							}}
+						/>
+					);
+				})}
+			</div>
+
+			{openBlock && openBlock.kind !== "text" && active !== null ? (
+				<div className="ml-2 flex flex-col border-muted-foreground/20 border-l pl-2">
+					<span className={cn(MONO, "pb-0.5 pl-2 text-muted-foreground/50")}>
+						{openBlock.arg} · editing above changes every case
+					</span>
+					{openBlock.arms.map((arm) => (
+						<ArmStripLine
+							key={arm.category}
+							arm={arm}
+							locale={locale}
+							representative={
+								arm.category ===
+								(openBlock.arms.find((a) => a.category === "other")?.category ??
+									openBlock.arms[0]?.category)
+							}
+							selection={selection}
+							priorRepBody={
+								(
+									openBlock.arms.find((a) => a.category === "other") ??
+									openBlock.arms[0]
+								)?.body ?? ""
+							}
+							onChange={(next) =>
+								write(withArm(segments, active, arm.category, next))
+							}
+							onRemove={
+								arm.category === "other"
+									? null
+									: () =>
+											write(
+												segments.map((item, position) =>
+													position !== active || item.kind === "text"
+														? item
+														: {
+																...item,
+																arms: item.arms.filter(
+																	(candidate) =>
+																		candidate.category !== arm.category,
+																),
+															},
+												),
+											)
+							}
+						/>
+					))}
+					<AddArmMenu
+						arms={openBlock.arms}
+						locale={locale}
+						onAdd={(category) =>
+							write(
+								withArm(
+									segments,
+									active,
+									category,
+									(
+										openBlock.arms.find((a) => a.category === "other") ??
+										openBlock.arms[0]
+									)?.body ?? "",
+								),
+							)
+						}
+					/>
+				</div>
+			) : null}
+
+			<OtherWarning args={missingOther(segments)} />
+			<div className="flex items-center gap-2 pl-1">
+				<EscapeToggle
+					raw={false}
+					onToggle={() => drafts.toggleRaw(entry, locale)}
+				/>
+				<span className={cn(MONO, "text-muted-foreground/30")}>
+					dotted underline = every case at once · select to see where it lands
+				</span>
+			</div>
+		</div>
+	);
+}
+
 // ───────────────────────────────────────────────────────── L — the outcomes
 //
 // No decomposition at all. The ICU string stays one raw field — and beside it,
@@ -691,6 +1138,13 @@ function KeyCard({
 								/>
 							) : variant === "K" ? (
 								<SentenceRow
+									key={`${entry.key}-${locale}`}
+									entry={entry}
+									locale={locale}
+									drafts={drafts}
+								/>
+							) : variant === "M" ? (
+								<LiveSentenceRow
 									key={`${entry.key}-${locale}`}
 									entry={entry}
 									locale={locale}

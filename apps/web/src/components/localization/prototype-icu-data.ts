@@ -404,3 +404,234 @@ export function zeroArmOverrides(
 		return (without?.body ?? "").trim() !== zero.body.trim();
 	});
 }
+
+// ──────────────────────────────────────────────────────── the arm vocabulary
+//
+// A plural block has at most SIX arms, ever. gen_l10n's `pluralCases` accepts
+// exactly "=0", "=1", "=2", "zero", "one", "two", "few", "many", "other" — and
+// the first three are aliases of the next three, so they land on the same Dart
+// argument. `=3` is a hard build error, verified against 3.44.6:
+//
+//   The plural cases must be one of "=0", "=1", "=2", "zero", "one", "two",
+//   "few", "many", or "other. 3 is not a valid plural case.
+//
+// A closed six-item vocabulary is why an "add a case" menu can list the whole
+// universe rather than guessing at it.
+
+export type Slot = {
+	category: string;
+	/** What it does, in this language. */
+	blurb: (locale: LocaleCode) => string;
+	/** Compiles, but the language's rule will never choose it. */
+	dead: (locale: LocaleCode) => boolean;
+};
+
+const SAMPLE: Record<LocaleCode, Record<string, string>> = {
+	en: { one: "1", other: "0, 2, 3, 4…" },
+	de: { one: "1", other: "0, 2, 3, 4…" },
+	es: { one: "1", other: "0, 2, 3, 4…" },
+	fr: { one: "0, 1", other: "2, 3, 4…" },
+	ru: {
+		one: "1, 21, 31…",
+		few: "2, 3, 4, 22…",
+		many: "0, 5, 6…, 11…",
+		other: "fractions",
+	},
+	zh: { other: "every count" },
+};
+
+export const PLURAL_SLOTS: Slot[] = [
+	{
+		category: "zero",
+		blurb: () => "exactly 0 — overrides the language's own rule",
+		dead: () => false,
+	},
+	{
+		category: "one",
+		blurb: (locale) =>
+			CLDR_REQUIRED[locale].includes("one")
+				? `${LOCALE_LABEL[locale]} chooses it for ${SAMPLE[locale].one}, and exactly 1 always`
+				: "exactly 1 — overrides the language's own rule",
+		dead: () => false,
+	},
+	{
+		category: "two",
+		blurb: () => "exactly 2 — overrides the language's own rule",
+		dead: () => false,
+	},
+	{
+		category: "few",
+		blurb: (locale) =>
+			CLDR_REQUIRED[locale].includes("few")
+				? `${LOCALE_LABEL[locale]} chooses it for ${SAMPLE[locale].few}`
+				: `${LOCALE_LABEL[locale]} never chooses it — it would be dead`,
+		dead: (locale) => !CLDR_REQUIRED[locale].includes("few"),
+	},
+	{
+		category: "many",
+		blurb: (locale) =>
+			CLDR_REQUIRED[locale].includes("many")
+				? `${LOCALE_LABEL[locale]} chooses it for ${SAMPLE[locale].many}`
+				: `${LOCALE_LABEL[locale]} never chooses it — it would be dead`,
+		dead: (locale) => !CLDR_REQUIRED[locale].includes("many"),
+	},
+	{
+		category: "other",
+		blurb: (locale) => `the fallback — ${SAMPLE[locale].other}`,
+		dead: () => false,
+	},
+];
+
+/** Slots this block does not have yet. The menu never invents anything else. */
+export const openSlots = (arms: Arm[]): Slot[] =>
+	PLURAL_SLOTS.filter(
+		(slot) => !arms.some((arm) => arm.category === slot.category),
+	);
+
+// ──────────────────────────────────────────────────── aligning arms to arms
+//
+// Arms of one block are near-identical strings. Character-level alignment lets
+// a selection in one arm point at "the same place" in all the others, so one
+// edit can land everywhere at once without the translator retyping five
+// near-identical sentences.
+
+type Block = {
+	aStart: number;
+	aEnd: number;
+	bStart: number;
+	bEnd: number;
+	equal: boolean;
+};
+
+function alignBlocks(a: string, b: string): Block[] {
+	// lcs[i][j] = length of the longest common subsequence of a[i:] and b[j:].
+	const lcs: number[][] = Array.from({ length: a.length + 1 }, () =>
+		new Array<number>(b.length + 1).fill(0),
+	);
+	for (let i = a.length - 1; i >= 0; i -= 1) {
+		for (let j = b.length - 1; j >= 0; j -= 1) {
+			lcs[i][j] =
+				a[i] === b[j]
+					? lcs[i + 1][j + 1] + 1
+					: Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+		}
+	}
+
+	const blocks: Block[] = [];
+	const push = (block: Block) => {
+		const last = blocks.at(-1);
+		if (last && last.equal === block.equal) {
+			last.aEnd = block.aEnd;
+			last.bEnd = block.bEnd;
+		} else blocks.push(block);
+	};
+
+	let i = 0;
+	let j = 0;
+	while (i < a.length && j < b.length) {
+		if (a[i] === b[j]) {
+			push({ aStart: i, aEnd: i + 1, bStart: j, bEnd: j + 1, equal: true });
+			i += 1;
+			j += 1;
+		} else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+			push({ aStart: i, aEnd: i + 1, bStart: j, bEnd: j, equal: false });
+			i += 1;
+		} else {
+			push({ aStart: i, aEnd: i, bStart: j, bEnd: j + 1, equal: false });
+			j += 1;
+		}
+	}
+	if (i < a.length || j < b.length) {
+		push({
+			aStart: i,
+			aEnd: a.length,
+			bStart: j,
+			bEnd: b.length,
+			equal: false,
+		});
+	}
+	return blocks;
+}
+
+/**
+ * Where a range of `from` lands in `to`. Inside matching runs the mapping is
+ * exact; across a differing run it widens to the whole run, so selecting a word
+ * that is spelled differently in another arm selects that arm's whole spelling
+ * rather than a fragment of it.
+ */
+export function mapRange(
+	from: string,
+	to: string,
+	start: number,
+	end: number,
+): [number, number] {
+	if (from === to) return [start, end];
+	const blocks = alignBlocks(from, to);
+	const edge = (index: number, side: "start" | "end"): number => {
+		for (const block of blocks) {
+			if (index < block.aStart) continue;
+			if (index > block.aEnd) continue;
+			if (block.equal) return block.bStart + (index - block.aStart);
+			return side === "start" ? block.bStart : block.bEnd;
+		}
+		return side === "start" ? 0 : to.length;
+	};
+	const mapped: [number, number] = [edge(start, "start"), edge(end, "end")];
+	return mapped[1] < mapped[0] ? [mapped[0], mapped[0]] : mapped;
+}
+
+/** The single edit that turns `prior` into `next`: replace [start,end) with `text`. */
+export function inferEdit(
+	prior: string,
+	next: string,
+): { start: number; end: number; text: string } {
+	let head = 0;
+	while (
+		head < prior.length &&
+		head < next.length &&
+		prior[head] === next[head]
+	)
+		head += 1;
+	let tail = 0;
+	while (
+		tail < prior.length - head &&
+		tail < next.length - head &&
+		prior[prior.length - 1 - tail] === next[next.length - 1 - tail]
+	)
+		tail += 1;
+	return {
+		start: head,
+		end: prior.length - tail,
+		text: next.slice(head, next.length - tail),
+	};
+}
+
+/**
+ * Apply one edit made in the representative arm to every other arm of the
+ * block, through the alignment. This is the whole point of the variant: the
+ * arms of a plural differ by a word, so an edit to the shared part of the
+ * sentence should not have to be made five times.
+ */
+export function editEveryArm(
+	arms: Arm[],
+	representative: string,
+	prior: string,
+	next: string,
+): Arm[] {
+	const edit = inferEdit(prior, next);
+	const insertion = edit.start === edit.end;
+	return arms.map((arm) => {
+		if (arm.category === representative) return { ...arm, body: next };
+		const [start, end] = mapRange(prior, arm.body, edit.start, edit.end);
+		// A pure insertion is a CARET, not a range. Widening it over a differing
+		// run — which is what a selection wants — would swallow that run instead
+		// of typing beside it: appending to Russian `деталей` would rewrite the
+		// `one` arm's `деталь` as `детал…`, eating the ending that is the entire
+		// reason the arm exists. Collapse to the right edge instead.
+		const [from, to] = insertion ? [end, end] : [start, end];
+		return {
+			...arm,
+			body: arm.body.slice(0, from) + edit.text + arm.body.slice(to),
+		};
+	});
+}
