@@ -38,7 +38,10 @@ export function createBackend(): Backend {
 export async function authenticatedBackend(
 	t: Backend,
 	userId: string,
-	sessionDurationMs = 60_000,
+	// Real-catalog integration tests may legitimately run for more than a
+	// minute on CI. Keep authentication outside their 120-second test budget so
+	// a slow runner cannot turn a product assertion into an auth failure.
+	sessionDurationMs = 5 * 60_000,
 ) {
 	const timestamp = Date.now();
 	const authUser = await t.mutation(components.betterAuth.adapter.create, {

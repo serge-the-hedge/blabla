@@ -42,6 +42,8 @@ import type * as privateData from "../privateData.js";
 import type * as projects from "../projects.js";
 import type * as rateLimits from "../rateLimits.js";
 import type * as reconciliationReports from "../reconciliationReports.js";
+import type * as releaseRecordModel from "../releaseRecordModel.js";
+import type * as releaseRecords from "../releaseRecords.js";
 import type * as restoreProposals from "../restoreProposals.js";
 import type * as screens from "../screens.js";
 import type * as snapshots from "../snapshots.js";
@@ -92,6 +94,8 @@ declare const fullApi: ApiFromModules<{
   projects: typeof projects;
   rateLimits: typeof rateLimits;
   reconciliationReports: typeof reconciliationReports;
+  releaseRecordModel: typeof releaseRecordModel;
+  releaseRecords: typeof releaseRecords;
   restoreProposals: typeof restoreProposals;
   screens: typeof screens;
   snapshots: typeof snapshots;

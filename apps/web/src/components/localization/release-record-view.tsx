@@ -1,0 +1,351 @@
+import { Button } from "@blabla/ui/components/button";
+import { Card, CardContent } from "@blabla/ui/components/card";
+import { Skeleton } from "@blabla/ui/components/skeleton";
+import { cn } from "@blabla/ui/lib/utils";
+import type { FunctionReturnType } from "convex/server";
+import {
+	CircleSlash,
+	GitCommitHorizontal,
+	LoaderCircle,
+	PackageCheck,
+	ShieldAlert,
+} from "lucide-react";
+import type { ReactNode } from "react";
+
+import type { api } from "@/lib/convex-api";
+import {
+	releaseHistoryStatus,
+	releasePresentationFor,
+	releaseProgressFor,
+} from "@/lib/release-presentation";
+
+const NUMBER_FORMAT = new Intl.NumberFormat();
+const DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
+	month: "short",
+	day: "numeric",
+	hour: "2-digit",
+	minute: "2-digit",
+});
+
+type ReleaseRead = FunctionReturnType<typeof api.releaseRecords.current>;
+type AvailableRelease = Extract<ReleaseRead, { kind: "available" }>;
+export type ReleaseSummary = NonNullable<AvailableRelease["current"]>;
+export type ReleaseEvidence = FunctionReturnType<
+	typeof api.releaseRecords.evidence
+>["page"][number];
+export type EvidenceStatus =
+	| "LoadingFirstPage"
+	| "CanLoadMore"
+	| "LoadingMore"
+	| "Exhausted";
+
+function localeSpread(
+	record: ReleaseSummary,
+	kind: "blockedCount" | "needsDecisionCount",
+) {
+	return record.localeSummaries
+		.filter((locale) => locale[kind] > 0)
+		.map((locale) => `${locale.localeCode} ${locale[kind]}`)
+		.join(", ");
+}
+
+function AssessmentRow({
+	icon: Icon,
+	count,
+	title,
+	spread,
+	explanation,
+	destructive,
+}: {
+	icon: typeof ShieldAlert;
+	count: number;
+	title: string;
+	spread: string;
+	explanation: string;
+	destructive?: boolean;
+}) {
+	if (count === 0) return null;
+	return (
+		<div className="flex items-start gap-2 py-2 first:pt-0 last:pb-0">
+			<Icon
+				aria-hidden="true"
+				className={cn(
+					"mt-0.5 size-4 shrink-0",
+					destructive ? "text-destructive" : "text-muted-foreground",
+				)}
+			/>
+			<div className="flex min-w-0 flex-col gap-0.5">
+				<span className="text-sm">
+					<span className="font-medium tabular-nums">
+						{NUMBER_FORMAT.format(count)}
+					</span>{" "}
+					{title}{" "}
+					{spread ? (
+						<span className="text-muted-foreground">— {spread}</span>
+					) : null}
+				</span>
+				<span className="text-muted-foreground text-xs">{explanation}</span>
+			</div>
+		</div>
+	);
+}
+
+function BaselineLine({ record }: { record: ReleaseSummary }) {
+	return (
+		<div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground text-xs">
+			<span className="inline-flex items-center gap-1 font-mono">
+				<GitCommitHorizontal aria-hidden="true" className="size-3.5" />
+				{record.commit.slice(0, 12)}
+			</span>
+			<span>
+				{NUMBER_FORMAT.format(record.deltaKeyCount)} delta key
+				{record.deltaKeyCount === 1 ? "" : "s"} ·{" "}
+				{NUMBER_FORMAT.format(record.scopeValueCount)} target values
+			</span>
+		</div>
+	);
+}
+
+export function PreparingCard({ record }: { record: ReleaseSummary }) {
+	const progress = releaseProgressFor(record.progress);
+	return (
+		<Card size="sm" className="max-w-3xl">
+			<CardContent className="flex flex-col gap-3">
+				<div className="flex items-start gap-2">
+					<LoaderCircle
+						aria-hidden="true"
+						className="mt-0.5 size-4 animate-spin text-muted-foreground"
+					/>
+					<div className="flex flex-col gap-0.5">
+						<span className="font-medium text-sm">
+							Preparing Release Record
+						</span>
+						<span className="text-muted-foreground text-xs">
+							{NUMBER_FORMAT.format(progress)} of{" "}
+							{NUMBER_FORMAT.format(record.progress.expectedKeyCount)} catalog
+							keys assessed. You can leave this page; progress is durable.
+						</span>
+					</div>
+				</div>
+				<div className="h-1 overflow-hidden rounded-full bg-muted">
+					<div
+						className="h-full bg-foreground/45 transition-[width] duration-300"
+						style={{
+							width: `${record.progress.expectedKeyCount === 0 ? 100 : (progress / record.progress.expectedKeyCount) * 100}%`,
+						}}
+					/>
+				</div>
+			</CardContent>
+		</Card>
+	);
+}
+
+export function EvidenceLedger({
+	evidence,
+	status,
+	onLoadMore,
+}: {
+	evidence: ReleaseEvidence[];
+	status: EvidenceStatus;
+	onLoadMore: () => void;
+}) {
+	if (status === "LoadingFirstPage") {
+		return <Skeleton className="h-4 w-64" />;
+	}
+	return (
+		<div className="flex flex-col gap-2 pt-1">
+			<div className="flex flex-col gap-1">
+				{evidence.map((item) => (
+					<span key={item._id} className="text-xs">
+						<span className="font-mono">{item.messageId}</span>{" "}
+						<span className="font-mono text-muted-foreground">
+							{item.localeCode}
+						</span>{" "}
+						<span className="text-muted-foreground">
+							—{" "}
+							{item.kind === "intentional_blank"
+								? item.reason
+								: "confirmed as Source wording"}
+						</span>
+					</span>
+				))}
+			</div>
+			{status === "CanLoadMore" || status === "LoadingMore" ? (
+				<div>
+					<Button
+						variant="outline"
+						size="xs"
+						disabled={status === "LoadingMore"}
+						onClick={onLoadMore}
+					>
+						{status === "LoadingMore" ? (
+							<LoaderCircle aria-hidden="true" className="animate-spin" />
+						) : null}
+						Show more evidence
+					</Button>
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+export function ReleaseRecordView({
+	record,
+	history,
+	evidence,
+	evidenceStatus,
+	onLoadMoreEvidence,
+	workAction,
+}: {
+	record: ReleaseSummary;
+	history: ReleaseSummary[] | undefined;
+	evidence: ReleaseEvidence[];
+	evidenceStatus: EvidenceStatus;
+	onLoadMoreEvidence: () => void;
+	workAction?: ReactNode;
+}) {
+	const presentation = releasePresentationFor(record.posture);
+	const hasEvidence =
+		record.intentionalBlankCount + record.sourceIdenticalCount > 0;
+	return (
+		<div className="flex flex-col gap-4">
+			<div className="flex flex-col gap-1">
+				<span
+					className={cn(
+						"font-medium text-sm",
+						presentation.posture === "blocked"
+							? "text-destructive"
+							: presentation.posture === "needsDecisions"
+								? "text-amber-600 dark:text-amber-500"
+								: "text-emerald-600 dark:text-emerald-500",
+					)}
+				>
+					{presentation.label}
+				</span>
+				<BaselineLine record={record} />
+			</div>
+
+			<Card size="sm" className="max-w-3xl">
+				<CardContent className="flex flex-col gap-3">
+					<span className="font-medium text-sm">{presentation.heading}</span>
+					{presentation.needsWork ? (
+						<div className="divide-y">
+							<AssessmentRow
+								icon={ShieldAlert}
+								count={record.blockedCount}
+								title="invalid for the contract"
+								spread={localeSpread(record, "blockedCount")}
+								explanation="Cannot be released and cannot be waived. Fix the value or its Source Contract."
+								destructive
+							/>
+							<AssessmentRow
+								icon={CircleSlash}
+								count={record.needsDecisionCount}
+								title="values still needing a decision"
+								spread={localeSpread(record, "needsDecisionCount")}
+								explanation="Translate, deliberately use the Source wording, record an intentional blank, or revisit a semantic Source change."
+							/>
+						</div>
+					) : (
+						<div className="flex items-start gap-2 text-sm">
+							<PackageCheck
+								aria-hidden="true"
+								className="mt-0.5 size-4 text-emerald-600 dark:text-emerald-500"
+							/>
+							<p className="text-muted-foreground text-xs">
+								No Contract failures or unresolved decisions remain. Bundle
+								construction will arrive in the next Release slice.
+							</p>
+						</div>
+					)}
+					{presentation.needsWork && workAction ? (
+						<div>{workAction}</div>
+					) : null}
+				</CardContent>
+			</Card>
+
+			<Card size="sm" className="max-w-3xl">
+				<CardContent className="flex flex-col gap-2">
+					<span className="font-medium text-sm">
+						{presentation.needsWork
+							? "What this release is assessing"
+							: "What this release would ship"}
+					</span>
+					<p className="text-muted-foreground text-xs">
+						{NUMBER_FORMAT.format(record.scopeValueCount)} target{" "}
+						{presentation.needsWork ? "slots" : "values"} across{" "}
+						{NUMBER_FORMAT.format(record.deltaKeyCount)} complete delta keys.
+					</p>
+					<ul className="flex flex-col gap-1 text-muted-foreground text-xs">
+						<li>
+							<span className="text-foreground tabular-nums">
+								{NUMBER_FORMAT.format(record.sourceIdenticalCount)}
+							</span>{" "}
+							deliberately identical to the Source wording
+						</li>
+						<li>
+							<span className="text-foreground tabular-nums">
+								{NUMBER_FORMAT.format(record.intentionalBlankCount)}
+							</span>{" "}
+							deliberately empty, each with a recorded reason
+						</li>
+						<li>
+							<span className="text-foreground tabular-nums">
+								{NUMBER_FORMAT.format(record.unconfirmedImportCount)}
+							</span>{" "}
+							untouched imports are stated but do not gate this release
+						</li>
+					</ul>
+					{hasEvidence ? (
+						<>
+							<span className="pt-1 font-medium text-xs">
+								Recorded evidence
+							</span>
+							<EvidenceLedger
+								evidence={evidence}
+								status={evidenceStatus}
+								onLoadMore={onLoadMoreEvidence}
+							/>
+						</>
+					) : null}
+				</CardContent>
+			</Card>
+
+			<Card size="sm" className="max-w-3xl">
+				<CardContent className="flex flex-col gap-2">
+					<span className="font-medium text-sm">Earlier records</span>
+					{history === undefined ? (
+						<Skeleton className="h-4 w-56" />
+					) : history.length === 0 ? (
+						<p className="text-muted-foreground text-xs">
+							This is the first Release Record for the project.
+						</p>
+					) : (
+						<ul className="flex flex-col gap-1">
+							{history.map((item) => (
+								<li
+									key={item.recordId}
+									className="flex flex-wrap items-baseline gap-x-2 text-xs"
+								>
+									<span className="w-28 text-muted-foreground">
+										{DATE_FORMAT.format(item.createdAt)}
+									</span>
+									<span className="font-mono">{item.commit.slice(0, 10)}</span>
+									<span
+										className={cn(
+											item.posture === "blocked"
+												? "text-destructive"
+												: "text-muted-foreground",
+										)}
+									>
+										{releaseHistoryStatus(item)}
+									</span>
+								</li>
+							))}
+						</ul>
+					)}
+				</CardContent>
+			</Card>
+		</div>
+	);
+}

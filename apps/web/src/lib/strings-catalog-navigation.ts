@@ -4,6 +4,9 @@ export type StringsCatalogNavigationState = {
 	query: string;
 	key?: string;
 	scope?: CatalogValueScope;
+	/** A durable Work Hand-off narrows the catalog to this exact ordered key
+	 * membership. Search and Catalog Scopes are then applied as an AND. */
+	handoffMessageIds?: readonly string[];
 };
 
 export type CatalogValueScope = "waiting" | "unconfirmedImport" | "stale";
@@ -135,8 +138,12 @@ export function navigateStringsDigests(
 } {
 	const keys = navigation.keys ?? [];
 	const query = (state.query ?? "").trim().toLowerCase();
+	const handoff = state.handoffMessageIds
+		? new Set(state.handoffMessageIds)
+		: undefined;
 	const matchingDigests = keys.filter(
 		(digest) =>
+			(handoff === undefined || handoff.has(digest.messageId)) &&
 			matchesDigestScope(digest, state.scope) &&
 			(query.length === 0 || matchesDigestQuery(digest, query)),
 	);

@@ -692,12 +692,14 @@ async function patchEnvelopeCounts(
 			: { ordinaryImportCounts: counts.ordinaryImportCounts }),
 	};
 	if (envelope.kind === "active") {
+		const revision = (envelope.state.revision ?? 0) + 1;
 		envelope.state.rowCount = patch.rowCount;
 		envelope.state.byteLength = patch.byteLength;
+		envelope.state.revision = revision;
 		if (patch.ordinaryImportCounts) {
 			envelope.state.ordinaryImportCounts = patch.ordinaryImportCounts;
 		}
-		await ctx.db.patch(envelope.state._id, patch);
+		await ctx.db.patch(envelope.state._id, { ...patch, revision });
 		return;
 	}
 	envelope.staging.rowCount = patch.rowCount;
@@ -1039,6 +1041,7 @@ export async function recomputeNavigationRows(
 		await ctx.db.insert("catalogWorkspaceNavigationStates", {
 			projectId: input.projectId,
 			projectionId: projection._id,
+			revision: 0,
 			rowCount: 0,
 			byteLength: 0,
 			status: "staging",
@@ -1068,6 +1071,7 @@ export async function recomputeNavigationRows(
 		await ctx.db.insert("catalogWorkspaceNavigationStates", {
 			projectId: input.projectId,
 			projectionId: projection._id,
+			revision: 0,
 			rowCount: 0,
 			byteLength: 0,
 			status: "staging",
@@ -1369,6 +1373,7 @@ export const startNavigationIndexBackfill = mutation({
 			await ctx.db.insert("catalogWorkspaceNavigationStates", {
 				projectId: args.projectId,
 				projectionId: projection._id,
+				revision: 0,
 				rowCount: 0,
 				byteLength: 0,
 				status: "staging",
@@ -1496,6 +1501,7 @@ export const backfillNavigationIndexStep = internalMutation({
 				await ctx.db.insert("catalogWorkspaceNavigationStates", {
 					projectId: args.projectId,
 					projectionId: projection._id,
+					revision: 0,
 					rowCount: 0,
 					byteLength: 0,
 					status: "staging",
@@ -1779,6 +1785,7 @@ export async function activateNavigationGeneration(
 	const state = await navigationStateFor(ctx, input.projectId);
 	if (state && state.projectionId === input.projectionId) {
 		await ctx.db.patch(state._id, {
+			revision: (state.revision ?? 0) + 1,
 			rowCount: staging.rowCount,
 			byteLength: staging.byteLength,
 			status: "ready",
@@ -1800,6 +1807,7 @@ export async function activateNavigationGeneration(
 		await ctx.db.insert("catalogWorkspaceNavigationStates", {
 			projectId: input.projectId,
 			projectionId: input.projectionId,
+			revision: 0,
 			rowCount: staging.rowCount,
 			byteLength: staging.byteLength,
 			status: "ready",
