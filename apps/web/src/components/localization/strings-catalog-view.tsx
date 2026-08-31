@@ -960,6 +960,7 @@ function CatalogScopeStrip({
 	ordinaryImports,
 	projectionId,
 	onStartOrdinaryImportRun,
+	workHandoff,
 }: {
 	counts: NonNullable<StringsNavigationRead["valueStateCounts"]>;
 	navigationState: StringsCatalogNavigationState;
@@ -970,6 +971,7 @@ function CatalogScopeStrip({
 		expectedProjectionId: string,
 		policy: "ordinary-v1",
 	) => void;
+	workHandoff?: { keyCount: number; onClear: () => void };
 }) {
 	return (
 		<nav
@@ -978,6 +980,18 @@ function CatalogScopeStrip({
 			aria-live="polite"
 		>
 			<span className="mr-1 text-[11px] text-muted-foreground">Focus</span>
+			{workHandoff ? (
+				<Button
+					type="button"
+					size="xs"
+					variant="secondary"
+					onClick={workHandoff.onClear}
+					aria-label="Clear Release work hand-off"
+				>
+					Release work · {NUMBER_FORMAT.format(workHandoff.keyCount)}
+					<X aria-hidden="true" />
+				</Button>
+			) : null}
 			{CATALOG_SCOPE_DEFINITIONS.map(({ scope, label, countKey }) => {
 				const active = navigationState.scope === scope;
 				const count = counts[countKey];
@@ -1449,6 +1463,7 @@ function StringsCatalogNavigator({
 	ordinaryImports,
 	onStartOrdinaryImportRun,
 	onStartNavigationBackfill,
+	workHandoff,
 }: {
 	navigation: StringsNavigationRead;
 	navigationState: StringsCatalogNavigationState;
@@ -1462,6 +1477,7 @@ function StringsCatalogNavigator({
 		policy: "ordinary-v1",
 	) => void;
 	onStartNavigationBackfill?: () => void;
+	workHandoff?: { keyCount: number; onClear: () => void };
 }) {
 	// Search and Catalog Scopes stay local over the compact digests: typing
 	// never executes a server query, only the visible window hydrates.
@@ -1472,8 +1488,15 @@ function StringsCatalogNavigator({
 				query: deferredQuery,
 				key: navigationState.key,
 				scope: navigationState.scope,
+				handoffMessageIds: navigationState.handoffMessageIds,
 			}),
-		[navigation, deferredQuery, navigationState.key, navigationState.scope],
+		[
+			navigation,
+			deferredQuery,
+			navigationState.key,
+			navigationState.scope,
+			navigationState.handoffMessageIds,
+		],
 	);
 	const projectionId = navigation.projectionId ?? "";
 	const keyCount = navigation.keyCount ?? matching.matchingDigests.length;
@@ -1554,6 +1577,7 @@ function StringsCatalogNavigator({
 					ordinaryImports={ordinaryImports}
 					projectionId={projectionId}
 					onStartOrdinaryImportRun={onStartOrdinaryImportRun}
+					workHandoff={workHandoff}
 				/>
 			) : null}
 			<CatalogSearch
@@ -1594,6 +1618,7 @@ export function StringsCatalogView({
 	ordinaryImports,
 	onStartOrdinaryImportRun,
 	onStartNavigationBackfill,
+	workHandoff,
 }: {
 	navigation: StringsNavigationRead | undefined;
 	navigationState: StringsCatalogNavigationState;
@@ -1608,6 +1633,7 @@ export function StringsCatalogView({
 		policy: "ordinary-v1",
 	) => void;
 	onStartNavigationBackfill?: () => void;
+	workHandoff?: { keyCount: number; onClear: () => void };
 }) {
 	if (navigation === undefined) return <StringsCatalogLoadingRows rows={1} />;
 	if (navigation.kind === "noBaseline")
@@ -1631,6 +1657,7 @@ export function StringsCatalogView({
 			ordinaryImports={ordinaryImports}
 			onStartOrdinaryImportRun={onStartOrdinaryImportRun}
 			onStartNavigationBackfill={onStartNavigationBackfill}
+			workHandoff={workHandoff}
 		/>
 	);
 }

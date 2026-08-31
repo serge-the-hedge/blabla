@@ -102,6 +102,17 @@ describe("navigateStringsDigests", () => {
 		]);
 	});
 
+	test("combines a frozen hand-off with search and scope without changing Catalog Order", () => {
+		const result = navigateStringsDigests(navigation, {
+			query: "title",
+			scope: "waiting",
+			handoffMessageIds: ["приветствие", "billing_title"],
+		});
+		expect(result.matchingDigests.map((digest) => digest.messageId)).toEqual([
+			"billing_title",
+		]);
+	});
+
 	test("preserves Catalog Order and targets permalinks inside the result", () => {
 		const result = navigateStringsDigests(navigation, {
 			query: "",

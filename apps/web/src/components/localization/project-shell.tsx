@@ -19,6 +19,7 @@ import {
 	type LucideIcon,
 	Menu,
 	MessageSquareText,
+	PackageCheck,
 	Users,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -45,6 +46,11 @@ const navGroups: NavGroup[] = [
 				label: "Translation tasks",
 				to: "/projects/$projectId/proposals",
 				icon: Bot,
+			},
+			{
+				label: "Release",
+				to: "/projects/$projectId/release",
+				icon: PackageCheck,
 			},
 		],
 	},
