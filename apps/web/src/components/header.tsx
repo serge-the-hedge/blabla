@@ -39,12 +39,18 @@ export default function Header() {
 
 	return (
 		<header className="sticky top-0 z-30 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-			<div className="flex h-12 items-center justify-between gap-4 px-4">
+			<div className="flex h-12 items-center justify-between gap-2 px-3 sm:gap-4 sm:px-4">
 				<div className="flex items-center gap-6">
-					<Link to="/" className="outline-none focus-visible:opacity-80">
+					<Link
+						to="/"
+						className="rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					>
 						<BrandWordmark />
 					</Link>
-					<nav className="flex items-center gap-1 text-sm">
+					<nav
+						aria-label="Main"
+						className="hidden items-center gap-1 text-sm sm:flex"
+					>
 						{links.map(({ to, label }) => {
 							const active =
 								to === "/"
@@ -55,7 +61,7 @@ export default function Header() {
 									key={to}
 									to={to}
 									className={cn(
-										"rounded-md px-2.5 py-1 font-medium text-xs transition-colors",
+										"rounded-md px-2.5 py-1 font-medium text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
 										active
 											? "bg-accent text-accent-foreground"
 											: "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -75,8 +81,9 @@ export default function Header() {
 					</Authenticated>
 					<Unauthenticated>
 						<Link
-							to="/dashboard"
-							className="rounded-md border bg-background px-2.5 py-1 font-medium text-xs hover:bg-muted"
+							to="/sign-in"
+							search={{ mode: "sign-in", redirect: "/projects" }}
+							className="rounded-md border bg-background px-2.5 py-1 font-medium text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
 						>
 							Sign in
 						</Link>

@@ -4,7 +4,12 @@ import type { Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
 import { getAnyUserByEmail, getAnyUserById, requireUser } from "./auth";
-import { normalizeLocaleCode, now, slugify } from "./lib";
+import {
+	DEFAULT_INTEGRATION_BRANCH,
+	normalizeLocaleCode,
+	now,
+	slugify,
+} from "./lib";
 import {
 	assertProjectExists,
 	requireOwner,
@@ -17,6 +22,27 @@ const roleValidator = v.union(
 	v.literal("viewer"),
 );
 type Role = "owner" | "editor" | "viewer";
+
+function normalizeCliVersion(value: string) {
+	const version = value.trim();
+	if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "CLI version must use semantic version form, for example 1.2.3.",
+		});
+	}
+	return version;
+}
+
+function normalizeCliProtocol(value: number) {
+	if (!Number.isSafeInteger(value) || value < 1 || value > 1000) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "CLI protocol must be a whole number between 1 and 1000.",
+		});
+	}
+	return value;
+}
 
 function normalizeEmail(email: string) {
 	const emailLower = email.trim().toLowerCase();
@@ -188,6 +214,7 @@ export const create = mutation({
 		const projectId = await ctx.db.insert("projects", {
 			name: args.name.trim(),
 			slug,
+			integrationBranch: DEFAULT_INTEGRATION_BRANCH,
 			createdByUserId: user.id,
 			createdAt: timestamp,
 			updatedAt: timestamp,
@@ -219,11 +246,19 @@ export const update = mutation({
 		projectId: v.id("projects"),
 		name: v.string(),
 		slug: v.optional(v.string()),
+		minimumCliVersion: v.optional(v.string()),
+		minimumCliProtocol: v.optional(v.number()),
 	},
 	handler: async (ctx, args) => {
 		await requireOwner(ctx, args.projectId);
 		await assertProjectExists(ctx, args.projectId);
-		const patch: { name: string; slug?: string; updatedAt: number } = {
+		const patch: {
+			name: string;
+			slug?: string;
+			minimumCliVersion?: string;
+			minimumCliProtocol?: number;
+			updatedAt: number;
+		} = {
 			name: args.name.trim(),
 			updatedAt: now(),
 		};
@@ -237,6 +272,12 @@ export const update = mutation({
 			}
 			await ensureUniqueProjectSlug(ctx, slug, args.projectId);
 			patch.slug = slug;
+		}
+		if (args.minimumCliVersion !== undefined) {
+			patch.minimumCliVersion = normalizeCliVersion(args.minimumCliVersion);
+		}
+		if (args.minimumCliProtocol !== undefined) {
+			patch.minimumCliProtocol = normalizeCliProtocol(args.minimumCliProtocol);
 		}
 		await ctx.db.patch(args.projectId, patch);
 		return null;

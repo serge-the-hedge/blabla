@@ -15,6 +15,12 @@
 			"!**/.nx",
 			"!**/dev-dist",
 			"!**/.zed",
+			"!**/.agents",
+			"!**/.claude",
+			"!**/skills-lock.json",
+			"!**/.codex",
+			"!**/.cursor",
+			"!**/.pi",
 			"!**/.vscode",
 			"!**/routeTree.gen.ts",
 			"!**/src-tauri",
@@ -26,7 +32,8 @@
 			"!**/.svelte-kit",
 			"!**/wrangler.jsonc",
 			"!**/.source",
-			"!**/convex/_generated"
+			"!**/convex/_generated",
+			"!packages/backend/fixtures"
 		]
 	},
 	"formatter": {
@@ -37,7 +44,7 @@
 	"linter": {
 		"enabled": true,
 		"rules": {
-			"recommended": true,
+			"preset": "recommended",
 			"correctness": {
 				"useExhaustiveDependencies": "info"
 			},

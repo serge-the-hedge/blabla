@@ -1,5 +1,8 @@
 import { env } from "@blabla/env/web";
-import { ConvexBetterAuthProvider } from "@convex-dev/better-auth/react";
+import {
+	type AuthClient,
+	ConvexBetterAuthProvider,
+} from "@convex-dev/better-auth/react";
 import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { ConvexReactClient } from "convex/react";
 import ReactDOM from "react-dom/client";
@@ -21,7 +24,14 @@ const router = createRouter({
 	context: {},
 	Wrap: function WrapComponent({ children }: { children: React.ReactNode }) {
 		return (
-			<ConvexBetterAuthProvider client={convex} authClient={authClient}>
+			// Cast works around an upstream type regression where the provider's
+			// `AuthClient` type rejects `createAuthClient` results on
+			// better-auth >= 1.6.20. Runtime behavior is unaffected.
+			// https://github.com/get-convex/better-auth/issues/393
+			<ConvexBetterAuthProvider
+				client={convex}
+				authClient={authClient as unknown as AuthClient}
+			>
 				{children}
 			</ConvexBetterAuthProvider>
 		);

@@ -1,0 +1,12 @@
+name: blabla_cli
+version: 0.1.0
+description: Developer-owned Repository Adapter for Blabla localization delivery.
+publish_to: none
+environment:
+  sdk: ^3.12.0
+
+dependencies:
+  crypto: ^3.0.6
+
+dev_dependencies:
+  test: ^1.26.3

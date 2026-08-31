@@ -11,6 +11,7 @@ const scopeValidator = v.union(
 	v.literal("search"),
 	v.literal("propose"),
 	v.literal("export"),
+	v.literal("snapshot-submission"),
 );
 
 const sha256K = [

@@ -30,7 +30,7 @@ import {
 } from "convex/react";
 import { ArrowUpRight, FolderKanban, Plus } from "lucide-react";
 
-import SignInForm from "@/components/sign-in-form";
+import AuthRedirect from "@/components/auth-redirect";
 import { api } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects")({
@@ -50,15 +50,13 @@ function ProjectsHeader() {
 			<div className="flex flex-col gap-1">
 				<h1 className="font-semibold text-2xl tracking-tight">Projects</h1>
 				<p className="text-muted-foreground text-sm">
-					Localization workspaces and review queues.
+					Repository-backed catalogs, translation work, and delivery.
 				</p>
 			</div>
-			<Link to="/projects/new">
-				<Button>
-					<Plus data-icon="inline-start" />
-					New project
-				</Button>
-			</Link>
+			<Button nativeButton={false} render={<Link to="/projects/new" />}>
+				<Plus data-icon="inline-start" />
+				New project
+			</Button>
 		</div>
 	);
 }
@@ -91,16 +89,15 @@ function ProjectsContent() {
 						</EmptyMedia>
 						<EmptyTitle>No projects yet</EmptyTitle>
 						<EmptyDescription>
-							Create a project to start managing strings, locales, and reviews.
+							Create a project, connect its catalogs, and establish the first
+							accepted baseline.
 						</EmptyDescription>
 					</EmptyHeader>
 					<EmptyContent>
-						<Link to="/projects/new">
-							<Button>
-								<Plus data-icon="inline-start" />
-								Create project
-							</Button>
-						</Link>
+						<Button nativeButton={false} render={<Link to="/projects/new" />}>
+							<Plus data-icon="inline-start" />
+							Create project
+						</Button>
 					</EmptyContent>
 				</Empty>
 			) : (
@@ -110,7 +107,7 @@ function ProjectsContent() {
 							key={project._id}
 							to="/projects/$projectId/strings"
 							params={{ projectId: project._id }}
-							search={{ tag: undefined }}
+							search={{}}
 							className="group outline-none focus-visible:ring-2 focus-visible:ring-ring"
 						>
 							<Card className="h-full transition-colors group-hover:bg-muted/40">
@@ -152,7 +149,7 @@ function ProjectsRoute() {
 				{pathname === "/projects" ? <ProjectsContent /> : <Outlet />}
 			</Authenticated>
 			<Unauthenticated>
-				<SignInForm onSwitchToSignUp={() => undefined} />
+				<AuthRedirect />
 			</Unauthenticated>
 			<AuthLoading>
 				<div className="mx-auto max-w-5xl px-6 py-8">

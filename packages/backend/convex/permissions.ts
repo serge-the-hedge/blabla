@@ -1,15 +1,47 @@
-import { ConvexError } from "convex/values";
+import { ConvexError, v } from "convex/values";
 
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
+import { hasMinimumRole } from "./accessControl";
 import { requireUser } from "./auth";
 import type { Role } from "./lib";
 
-const roleRank: Record<Role, number> = {
-	viewer: 0,
-	editor: 1,
-	owner: 2,
+export type RepositoryAdapterActor = {
+	kind: "repositoryAdapter";
+	id: string;
 };
+
+export const repositoryAdapterActorValidator = v.object({
+	kind: v.literal("repositoryAdapter"),
+	id: v.string(),
+});
+
+/** Authorizes either the signed-in editor path or a previously authenticated
+ * Repository Adapter token. Internal staging mutations use this seam so the
+ * HTTP transport does not impersonate a browser user. */
+export async function authorizeProjectIngestion(
+	ctx: QueryCtx | MutationCtx,
+	projectId: Id<"projects">,
+	actor?: RepositoryAdapterActor,
+) {
+	if (!actor) {
+		const { userId } = await requireEditor(ctx, projectId);
+		return { kind: "user" as const, id: userId };
+	}
+	const token = await ctx.db.get(actor.id as Id<"apiTokens">);
+	if (
+		!token ||
+		token.projectId !== projectId ||
+		token.revokedAt !== undefined ||
+		!token.scopes.includes("snapshot-submission")
+	) {
+		throw new ConvexError({
+			code: "UNAUTHORIZED",
+			message: "Invalid or insufficient snapshot-submission token.",
+		});
+	}
+	return actor;
+}
 
 export async function getMembership(
 	ctx: QueryCtx | MutationCtx,
@@ -32,7 +64,7 @@ export async function requireProjectRole(
 	const user = await requireUser(ctx);
 	await assertProjectExists(ctx, projectId);
 	const member = await getMembership(ctx, projectId, user.id);
-	if (!member || roleRank[member.role] < roleRank[minimumRole]) {
+	if (!member || !hasMinimumRole(member.role, minimumRole)) {
 		throw new ConvexError({
 			code: "FORBIDDEN",
 			message: "Insufficient project permissions.",

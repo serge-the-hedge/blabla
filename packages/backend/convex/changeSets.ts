@@ -9,6 +9,14 @@ import {
 	query,
 } from "./_generated/server";
 import { requireUser } from "./auth";
+import {
+	assertBoundedChangeSetSize,
+	assertChangeItemReferencesProject,
+	assertNoPendingItems,
+	isAcceptedForApply,
+	MAX_CHANGE_SET_ITEMS,
+	parseTagMetadataPayload,
+} from "./changeSetValidation";
 import { summarizeItems } from "./diffs";
 import { buildReviewUrl, makeSearchText, now, slugify, toArbKey } from "./lib";
 import { requireEditor, requireViewer } from "./permissions";
@@ -37,10 +45,6 @@ type SourceMissingReason =
 	| "no_project_source_locale"
 	| "source_locale_missing"
 	| "source_value_missing";
-
-function isApplicableItem(item: { status: string }) {
-	return item.status === "pending" || item.status === "accepted";
-}
 
 function isSupportedApplyKind(item: { kind: string }) {
 	return item.kind === "translation_value" || item.kind === "key_metadata";
@@ -155,11 +159,20 @@ async function hydrateReviewItem(ctx: ReviewCtx, item: Doc<"changeSetItems">) {
 	};
 }
 
-async function refreshSummary(ctx: MutationCtx, changeSetId: Id<"changeSets">) {
+async function getBoundedChangeSetItems(
+	ctx: ReviewCtx,
+	changeSetId: Id<"changeSets">,
+) {
 	const items = await ctx.db
 		.query("changeSetItems")
 		.withIndex("by_changeSet", (q) => q.eq("changeSetId", changeSetId))
-		.collect();
+		.take(MAX_CHANGE_SET_ITEMS + 1);
+	assertBoundedChangeSetSize(items.length);
+	return items;
+}
+
+async function refreshSummary(ctx: MutationCtx, changeSetId: Id<"changeSets">) {
+	const items = await getBoundedChangeSetItems(ctx, changeSetId);
 	await ctx.db.patch(changeSetId, {
 		summary: summarizeItems(items),
 		updatedAt: now(),
@@ -200,19 +213,38 @@ async function findOrCreateTags(
 	return Array.from(new Set(tagIds));
 }
 
+async function validateChangeItemTarget(
+	ctx: ReviewCtx,
+	projectId: Id<"projects">,
+	item: {
+		kind: string;
+		keyId?: Id<"translationKeys">;
+		localeId?: Id<"locales">;
+		nextValue: string | null;
+	},
+) {
+	const [key, locale] = await Promise.all([
+		item.keyId ? ctx.db.get(item.keyId) : null,
+		item.localeId ? ctx.db.get(item.localeId) : null,
+	]);
+	assertChangeItemReferencesProject(projectId, item, key, locale);
+	return { key, locale };
+}
+
 async function applyTagMetadataChange(
 	ctx: MutationCtx,
+	projectId: Id<"projects">,
 	item: Doc<"changeSetItems">,
 ) {
-	if (!item.keyId || item.nextValue === null) return;
-	const key = await ctx.db.get(item.keyId);
-	if (!key || key.archivedAt !== undefined) return;
-	const payload = JSON.parse(item.nextValue) as { tagSlugs?: string[] };
-	const tagIdsToAdd = await findOrCreateTags(
-		ctx,
-		key.projectId,
-		payload.tagSlugs ?? [],
-	);
+	const { key } = await validateChangeItemTarget(ctx, projectId, item);
+	if (!key || !item.keyId) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Key metadata item target is missing.",
+		});
+	}
+	const payload = parseTagMetadataPayload(item.nextValue);
+	const tagIdsToAdd = await findOrCreateTags(ctx, projectId, payload.tagSlugs);
 	const tagIds = Array.from(new Set([...key.tagIds, ...tagIdsToAdd]));
 	const tags = await Promise.all(tagIds.map((tagId) => ctx.db.get(tagId)));
 	await ctx.db.patch(item.keyId, {
@@ -259,10 +291,7 @@ export const get = query({
 				message: "Change set not found.",
 			});
 		await requireViewer(ctx, changeSet.projectId);
-		const items = await ctx.db
-			.query("changeSetItems")
-			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
-			.collect();
+		const items = await getBoundedChangeSetItems(ctx, args.changeSetId);
 		const hydratedItems = await Promise.all(
 			items.map((item) => hydrateReviewItem(ctx, item)),
 		);
@@ -284,10 +313,7 @@ export const items = query({
 				message: "Change set not found.",
 			});
 		await requireViewer(ctx, changeSet.projectId);
-		return await ctx.db
-			.query("changeSetItems")
-			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
-			.collect();
+		return await getBoundedChangeSetItems(ctx, args.changeSetId);
 	},
 });
 
@@ -346,33 +372,13 @@ export const addItem = mutation({
 				message: "Change item field path is required.",
 			});
 		}
-		if (args.kind === "translation_value") {
-			if (
-				args.keyId === undefined ||
-				args.localeId === undefined ||
-				args.nextValue === null
-			) {
-				throw new ConvexError({
-					code: "VALIDATION",
-					message:
-						"Translation value items require keyId, localeId, and nextValue.",
-				});
-			}
-			const [key, locale] = await Promise.all([
-				ctx.db.get(args.keyId),
-				ctx.db.get(args.localeId),
-			]);
-			if (
-				!key ||
-				key.projectId !== changeSet.projectId ||
-				!locale ||
-				locale.projectId !== changeSet.projectId
-			) {
-				throw new ConvexError({
-					code: "VALIDATION",
-					message: "Change item references must belong to this project.",
-				});
-			}
+		await validateChangeItemTarget(ctx, changeSet.projectId, args);
+		const existingItems = await ctx.db
+			.query("changeSetItems")
+			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
+			.take(MAX_CHANGE_SET_ITEMS);
+		if (existingItems.length >= MAX_CHANGE_SET_ITEMS) {
+			assertBoundedChangeSetSize(existingItems.length + 1);
 		}
 		const liveValue = await getLiveValue(ctx, args.keyId, args.localeId);
 		const conflicted =
@@ -478,10 +484,7 @@ export const acceptUnmarkedItems = mutation({
 			});
 		await requireEditor(ctx, changeSet.projectId);
 		assertCanReview(changeSet);
-		const items = await ctx.db
-			.query("changeSetItems")
-			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
-			.collect();
+		const items = await getBoundedChangeSetItems(ctx, args.changeSetId);
 		const pendingItems = items.filter((item) => item.status === "pending");
 		await Promise.all(
 			pendingItems.map((item) =>
@@ -503,10 +506,7 @@ export const rejectUnmarkedItems = mutation({
 			});
 		await requireEditor(ctx, changeSet.projectId);
 		assertCanReview(changeSet);
-		const items = await ctx.db
-			.query("changeSetItems")
-			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
-			.collect();
+		const items = await getBoundedChangeSetItems(ctx, args.changeSetId);
 		const pendingItems = items.filter((item) => item.status === "pending");
 		await Promise.all(
 			pendingItems.map((item) =>
@@ -531,10 +531,7 @@ export const exportAcceptedByLocale = mutation({
 			});
 		await requireViewer(ctx, changeSet.projectId);
 		const project = await ctx.db.get(changeSet.projectId);
-		const items = await ctx.db
-			.query("changeSetItems")
-			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
-			.collect();
+		const items = await getBoundedChangeSetItems(ctx, args.changeSetId);
 		const acceptedItems = items.filter(
 			(item) =>
 				item.status === "accepted" &&
@@ -630,10 +627,7 @@ export const apply = mutation({
 			});
 		await requireEditor(ctx, changeSet.projectId);
 		assertNotTerminal(changeSet);
-		const items = await ctx.db
-			.query("changeSetItems")
-			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
-			.collect();
+		const items = await getBoundedChangeSetItems(ctx, args.changeSetId);
 
 		const existingConflicted = items.filter(
 			(item) => item.status === "conflicted",
@@ -641,8 +635,9 @@ export const apply = mutation({
 		if (existingConflicted > 0) {
 			return { conflicted: existingConflicted };
 		}
+		assertNoPendingItems(items);
 
-		const applicableItems = items.filter(isApplicableItem);
+		const applicableItems = items.filter(isAcceptedForApply);
 		if (applicableItems.length === 0) {
 			return { conflicted: 0 };
 		}
@@ -658,6 +653,7 @@ export const apply = mutation({
 
 		const newlyConflicted = [];
 		for (const item of applicableItems) {
+			await validateChangeItemTarget(ctx, changeSet.projectId, item);
 			const liveValue = await getLiveValue(ctx, item.keyId, item.localeId);
 			if (
 				item.baseVersion !== undefined &&
@@ -699,7 +695,7 @@ export const apply = mutation({
 				await ctx.db.patch(item._id, { status: "accepted" });
 			}
 			if (item.kind === "key_metadata") {
-				await applyTagMetadataChange(ctx, item);
+				await applyTagMetadataChange(ctx, changeSet.projectId, item);
 				await ctx.db.patch(item._id, { status: "accepted" });
 			}
 		}
@@ -725,10 +721,7 @@ export const reviewAndApply = mutation({
 		await requireEditor(ctx, changeSet.projectId);
 		assertCanReview(changeSet);
 
-		const items = await ctx.db
-			.query("changeSetItems")
-			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
-			.collect();
+		const items = await getBoundedChangeSetItems(ctx, args.changeSetId);
 		const rejected = items.filter((item) => item.status === "rejected").length;
 		const existingConflicted = items.filter(
 			(item) => item.status === "conflicted",
@@ -741,8 +734,9 @@ export const reviewAndApply = mutation({
 				rejected,
 			};
 		}
+		assertNoPendingItems(items);
 
-		const applicableItems = items.filter(isApplicableItem);
+		const applicableItems = items.filter(isAcceptedForApply);
 		if (applicableItems.length === 0) {
 			return {
 				status: "blocked" as const,
@@ -764,6 +758,7 @@ export const reviewAndApply = mutation({
 
 		const newlyConflicted = [];
 		for (const item of applicableItems) {
+			await validateChangeItemTarget(ctx, changeSet.projectId, item);
 			const liveValue = await getLiveValue(ctx, item.keyId, item.localeId);
 			if (
 				item.baseVersion !== undefined &&
@@ -810,7 +805,7 @@ export const reviewAndApply = mutation({
 				await ctx.db.patch(item._id, { status: "accepted" });
 			}
 			if (item.kind === "key_metadata") {
-				await applyTagMetadataChange(ctx, item);
+				await applyTagMetadataChange(ctx, changeSet.projectId, item);
 				await ctx.db.patch(item._id, { status: "accepted" });
 			}
 		}
@@ -849,6 +844,13 @@ export const createAgentChangeSet = internalMutation({
 		),
 	},
 	handler: async (ctx, args) => {
+		assertBoundedChangeSetSize(args.items.length);
+		for (const item of args.items) {
+			await validateChangeItemTarget(ctx, args.projectId, {
+				...item,
+				kind: "translation_value",
+			});
+		}
 		const changeSetId = await ctx.db.insert("changeSets", {
 			projectId: args.projectId,
 			title: args.title,
@@ -984,10 +986,7 @@ export const acceptItemsInGroup = mutation({
 			});
 		await requireEditor(ctx, changeSet.projectId);
 		assertCanReview(changeSet);
-		const items = await ctx.db
-			.query("changeSetItems")
-			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
-			.collect();
+		const items = await getBoundedChangeSetItems(ctx, args.changeSetId);
 		const targets = items.filter(
 			(item) =>
 				item.keyId === args.keyId &&
@@ -1015,10 +1014,7 @@ export const rejectItemsInGroup = mutation({
 			});
 		await requireEditor(ctx, changeSet.projectId);
 		assertCanReview(changeSet);
-		const items = await ctx.db
-			.query("changeSetItems")
-			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
-			.collect();
+		const items = await getBoundedChangeSetItems(ctx, args.changeSetId);
 		const targets = items.filter(
 			(item) => item.keyId === args.keyId && item.status !== "rejected",
 		);

@@ -21,12 +21,7 @@ import {
 	EmptyMedia,
 	EmptyTitle,
 } from "@blabla/ui/components/empty";
-import {
-	Field,
-	FieldDescription,
-	FieldGroup,
-	FieldLabel,
-} from "@blabla/ui/components/field";
+import { Field, FieldGroup, FieldLabel } from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
 import { Skeleton } from "@blabla/ui/components/skeleton";
 import { cn } from "@blabla/ui/lib/utils";
@@ -37,14 +32,28 @@ import type { FormEvent } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { ConfirmAction } from "@/components/confirm-action";
 import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
+import { blablaCommand } from "@/lib/blabla-command";
 import { api, convexId } from "@/lib/convex-api";
 
-const scopes = ["read", "search", "propose", "export"] as const;
+const scopes = [
+	"read",
+	"search",
+	"propose",
+	"export",
+	"snapshot-submission",
+] as const;
 type TokenScope = (typeof scopes)[number];
+const workspaceScopes: TokenScope[] = [
+	"read",
+	"search",
+	"propose",
+	"snapshot-submission",
+];
 type ApiToken = {
 	_id: string;
 	name: string;
@@ -66,16 +75,17 @@ function ApiTokensRoute() {
 	const tokens = useQuery(api.apiTokens.list, { projectId: convexProjectId });
 	const createToken = useMutation(api.apiTokens.create);
 	const revoke = useMutation(api.apiTokens.revoke);
-	const [name, setName] = useState("");
-	const [selectedScopes, setSelectedScopes] = useState<string[]>([
-		"read",
-		"search",
-		"propose",
-	]);
+	const [name, setName] = useState("brickit-workspace");
+	const [selectedScopes, setSelectedScopes] =
+		useState<string[]>(workspaceScopes);
+	const [showAdvancedScopes, setShowAdvancedScopes] = useState(false);
 	const [rawToken, setRawToken] = useState("");
+	const [isCreating, setIsCreating] = useState(false);
+	const [revokingId, setRevokingId] = useState<string>();
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
+		setIsCreating(true);
 		try {
 			const result = await createToken({
 				projectId: convexProjectId,
@@ -83,19 +93,52 @@ function ApiTokensRoute() {
 				scopes: selectedScopes as TokenScope[],
 			});
 			setRawToken(result.token);
-			setName("");
+			setName("brickit-workspace");
 			toast.success("Token created — copy it now");
 		} catch (error) {
 			toast.error(
 				error instanceof Error ? error.message : "Could not create token",
 			);
+		} finally {
+			setIsCreating(false);
 		}
 	}
 
 	async function copyToken() {
 		if (!rawToken) return;
-		await navigator.clipboard.writeText(rawToken);
-		toast.success("Token copied to clipboard");
+		try {
+			await navigator.clipboard.writeText(rawToken);
+			toast.success("Token copied to clipboard");
+		} catch {
+			toast.error("Could not copy the token. Select and copy it manually.");
+		}
+	}
+
+	async function copyConnectionCommand() {
+		if (!rawToken) return;
+		const command = blablaCommand(
+			`login --server ${env.VITE_CONVEX_SITE_URL} --token ${rawToken}`,
+		);
+		try {
+			await navigator.clipboard.writeText(command);
+			toast.success("Connection command copied");
+		} catch {
+			toast.error("Could not copy the command. Select and copy it manually.");
+		}
+	}
+
+	async function revokeToken(token: ApiToken) {
+		setRevokingId(token._id);
+		try {
+			await revoke({ tokenId: convexId<"apiTokens">(token._id) });
+			toast.success("Token revoked");
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Could not revoke token",
+			);
+		} finally {
+			setRevokingId(undefined);
+		}
 	}
 
 	function closeToken() {
@@ -106,15 +149,17 @@ function ApiTokensRoute() {
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader
 				title="API tokens"
-				description="Project-scoped credentials for external agents."
+				description="Project-scoped connections for the local adapter and external agents."
 			/>
 			<div className="flex flex-col gap-4">
 				<Card size="sm">
 					<CardHeader>
-						<CardTitle>Create token</CardTitle>
+						<CardTitle>Create workspace connection</CardTitle>
 						<CardDescription>
-							Use read, search, and propose for translation agents. Add export
-							only for release automation.
+							Create one connection for this project. It lets the local{" "}
+							<code>blabla sync</code> command submit source snapshots and lets{" "}
+							agents propose reviewable translations. It cannot publish changes
+							by itself.
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
@@ -124,54 +169,81 @@ function ApiTokensRoute() {
 									<FieldLabel htmlFor="token-name">Name</FieldLabel>
 									<Input
 										id="token-name"
+										name="tokenName"
+										autoComplete="off"
 										value={name}
 										onChange={(event) => setName(event.target.value)}
 										placeholder="agent-ci, translator-bot…"
 									/>
 								</Field>
 								<Field>
-									<FieldLabel>Scopes</FieldLabel>
-									<div className="flex flex-wrap gap-3 rounded-md border bg-muted/30 p-3">
-										{scopes.map((scope) => {
-											const id = `scope-${scope}`;
-											const checked = selectedScopes.includes(scope);
-											return (
-												<label
+									<FieldLabel>Permissions</FieldLabel>
+									<div className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 p-3">
+										<div className="flex flex-wrap items-center gap-1.5">
+											<span className="font-medium text-xs">
+												Workspace connection
+											</span>
+											{selectedScopes.map((scope) => (
+												<Badge
 													key={scope}
-													htmlFor={id}
-													className={cn(
-														"flex cursor-pointer items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-xs transition-colors",
-														checked
-															? "border-brand/40 bg-brand/5 text-foreground"
-															: "border-input text-muted-foreground hover:text-foreground",
-													)}
+													variant="secondary"
+													className="font-normal"
 												>
-													<Checkbox
-														id={id}
-														checked={checked}
-														onCheckedChange={(value) =>
-															setSelectedScopes((current) =>
-																value
-																	? [...current, scope]
-																	: current.filter((item) => item !== scope),
-															)
-														}
-													/>
-													<span className="capitalize">{scope}</span>
-												</label>
-											);
-										})}
+													{scope}
+												</Badge>
+											))}
+										</div>
+										<Button
+											type="button"
+											size="xs"
+											variant="ghost"
+											onClick={() => setShowAdvancedScopes((value) => !value)}
+										>
+											{showAdvancedScopes ? "Hide advanced" : "Customize"}
+										</Button>
 									</div>
-									<FieldDescription>
-										Pick the minimum scopes the integration needs.
-									</FieldDescription>
+									{showAdvancedScopes ? (
+										<div className="mt-3 flex flex-wrap gap-3 rounded-md border bg-muted/30 p-3">
+											{scopes.map((scope) => {
+												const id = `scope-${scope}`;
+												const checked = selectedScopes.includes(scope);
+												return (
+													<label
+														key={scope}
+														htmlFor={id}
+														className={cn(
+															"flex cursor-pointer items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-xs transition-colors",
+															checked
+																? "border-brand/40 bg-brand/5 text-foreground"
+																: "border-input text-muted-foreground hover:text-foreground",
+														)}
+													>
+														<Checkbox
+															id={id}
+															checked={checked}
+															onCheckedChange={(value) =>
+																setSelectedScopes((current) =>
+																	value
+																		? [...current, scope]
+																		: current.filter((item) => item !== scope),
+																)
+															}
+														/>
+														<span className="capitalize">{scope}</span>
+													</label>
+												);
+											})}
+										</div>
+									) : null}
 								</Field>
 								<Button
 									type="submit"
-									disabled={!name.trim() || selectedScopes.length === 0}
+									disabled={
+										!name.trim() || selectedScopes.length === 0 || isCreating
+									}
 								>
 									<Plus data-icon="inline-start" />
-									Create token
+									{isCreating ? "Creating…" : "Create connection"}
 								</Button>
 								{rawToken ? (
 									<div className="flex flex-col gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs">
@@ -204,6 +276,29 @@ function ApiTokensRoute() {
 										<pre className="overflow-x-auto rounded-md bg-background p-2 font-mono text-[11px]">
 											{rawToken}
 										</pre>
+										<div className="mt-2 flex flex-col gap-2 border-warning/30 border-t pt-2">
+											<span className="font-medium">
+												Connect this machine once
+											</span>
+											<code className="break-all rounded-md bg-background p-2 font-mono text-[11px]">
+												{blablaCommand(
+													`login --server ${env.VITE_CONVEX_SITE_URL} --token ${rawToken}`,
+												)}
+											</code>
+											<Button
+												type="button"
+												size="xs"
+												variant="outline"
+												onClick={copyConnectionCommand}
+											>
+												<Terminal data-icon="inline-start" />
+												Copy setup command
+											</Button>
+											<span className="text-muted-foreground">
+												This command contains the secret token. Run it locally;
+												do not paste it into chat or commit it.
+											</span>
+										</div>
 									</div>
 								) : null}
 							</FieldGroup>
@@ -213,9 +308,10 @@ function ApiTokensRoute() {
 
 				<Card size="sm">
 					<CardHeader>
-						<CardTitle>Agent handoff</CardTitle>
+						<CardTitle>Agent connection</CardTitle>
 						<CardDescription>
-							Give agents these stable details with the token value.
+							The same workspace connection can be handed to an agent through
+							your chat or used by the local sync command.
 						</CardDescription>
 					</CardHeader>
 					<CardContent className="flex flex-col gap-3">
@@ -243,8 +339,8 @@ function ApiTokensRoute() {
 							<KeyRound className="size-4" />
 							<AlertTitle>Reviewable changes only</AlertTitle>
 							<AlertDescription>
-								Agent submissions create open reviews. A human still approves
-								and applies them from the Reviews section.
+								Agent submissions create open tasks. A human still approves and
+								applies them from Translation tasks.
 							</AlertDescription>
 						</Alert>
 					</CardContent>
@@ -260,8 +356,8 @@ function ApiTokensRoute() {
 							</EmptyMedia>
 							<EmptyTitle>No tokens yet</EmptyTitle>
 							<EmptyDescription>
-								Create a scoped token to give external agents read or write
-								access.
+								Create a scoped connection for repository sync or reviewable
+								agent proposals.
 							</EmptyDescription>
 						</EmptyHeader>
 					</Empty>
@@ -289,26 +385,16 @@ function ApiTokensRoute() {
 											))}
 										</div>
 									</div>
-									<Button
-										size="sm"
-										variant="outline"
-										onClick={async () => {
-											try {
-												await revoke({
-													tokenId: convexId<"apiTokens">(token._id),
-												});
-												toast.success("Token revoked");
-											} catch (error) {
-												toast.error(
-													error instanceof Error
-														? error.message
-														: "Could not revoke token",
-												);
-											}
-										}}
-									>
-										Revoke
-									</Button>
+									<ConfirmAction
+										triggerLabel={
+											revokingId === token._id ? "Revoking…" : "Revoke"
+										}
+										title={`Revoke ${token.name}?`}
+										description="Any agent using this token will immediately lose access. This cannot be undone."
+										confirmLabel="Revoke token"
+										disabled={revokingId !== undefined}
+										onConfirm={() => revokeToken(token)}
+									/>
 								</div>
 							))}
 						</CardContent>

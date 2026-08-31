@@ -1,0 +1,52 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+
+  repository-adapter:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            artifact: blabla-macos-arm64
+          - os: ubuntu-latest
+            artifact: blabla-linux-x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+      - working-directory: cli
+        run: dart pub get
+      - working-directory: cli
+        run: dart format --output=none --set-exit-if-changed .
+      - working-directory: cli
+        run: dart analyze
+      - working-directory: cli
+        run: dart test
+      - working-directory: cli
+        run: mkdir -p dist
+      - working-directory: cli
+        run: dart compile exe bin/blabla.dart -o dist/${{ matrix.artifact }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: cli/dist/${{ matrix.artifact }}
+          if-no-files-found: error

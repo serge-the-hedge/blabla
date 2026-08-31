@@ -9,6 +9,8 @@ import type * as React from "react";
 
 function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
 	return (
+		// Vendored shadcn/ui component; role matches upstream source.
+		// biome-ignore lint/a11y/useSemanticElements: <fieldset> would change layout and semantics
 		<div
 			data-slot="input-group"
 			role="group"
@@ -48,6 +50,9 @@ function InputGroupAddon({
 	...props
 }: React.ComponentProps<"div"> & VariantProps<typeof inputGroupAddonVariants>) {
 	return (
+		// Vendored shadcn/ui component; role matches upstream source.
+		// biome-ignore lint/a11y/useSemanticElements: <fieldset> would change layout and semantics
+		// biome-ignore lint/a11y/useKeyWithClickEvents: click only redirects focus to the inner input
 		<div
 			{...props}
 			role="group"

@@ -42,6 +42,7 @@ function NewProjectRoute() {
 	const [slugTouched, setSlugTouched] = useState(false);
 	const [sourceLocaleCode, setSourceLocaleCode] = useState("en");
 	const [sourceLocaleLabel, setSourceLocaleLabel] = useState("English");
+	const [isSubmitting, setIsSubmitting] = useState(false);
 
 	function handleNameChange(value: string) {
 		setName(value);
@@ -50,6 +51,7 @@ function NewProjectRoute() {
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
+		setIsSubmitting(true);
 		try {
 			const projectId = await createProject({
 				name,
@@ -59,16 +61,18 @@ function NewProjectRoute() {
 			});
 			toast.success("Project created");
 			await navigate({
-				to: "/projects/$projectId/strings",
+				to: "/projects/$projectId/sync",
 				params: { projectId },
-				search: { tag: undefined },
+				search: {},
 			});
 		} catch (error) {
 			toast.error(
 				error instanceof Error
 					? `Could not create project: ${error.message}`
-					: "Could not create project",
+					: "Could not create project. Check the details and try again.",
 			);
+		} finally {
+			setIsSubmitting(false);
 		}
 	}
 
@@ -84,7 +88,8 @@ function NewProjectRoute() {
 				</Link>
 				<h1 className="font-semibold text-2xl tracking-tight">New project</h1>
 				<p className="text-muted-foreground text-sm">
-					Pick a name, slug, and source locale to get started.
+					Name the workspace and its source Locale. The next screen connects the
+					repository catalogs.
 				</p>
 			</div>
 			<Card>
@@ -149,14 +154,16 @@ function NewProjectRoute() {
 								</Field>
 							</div>
 							<div className="flex gap-2">
-								<Button type="submit" disabled={!name.trim()}>
-									Create project
+								<Button type="submit" disabled={!name.trim() || isSubmitting}>
+									{isSubmitting ? "Creating project…" : "Create project"}
 								</Button>
-								<Link to="/projects">
-									<Button type="button" variant="outline">
-										Cancel
-									</Button>
-								</Link>
+								<Button
+									nativeButton={false}
+									variant="outline"
+									render={<Link to="/projects" />}
+								>
+									Cancel
+								</Button>
 							</div>
 						</FieldGroup>
 					</form>

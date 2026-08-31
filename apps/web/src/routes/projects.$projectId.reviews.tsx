@@ -1,22 +1,25 @@
-import { createFileRoute, Outlet, useParams } from "@tanstack/react-router";
+import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 
-import { ProjectShell } from "@/components/localization/project-shell";
+import { LegacyRouteNotice } from "@/components/localization/legacy-route-notice";
 import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects/$projectId/reviews")({
-	component: ReviewsLayoutRoute,
+	component: ReviewsRetirementRoute,
 });
 
-function ReviewsLayoutRoute() {
+function ReviewsRetirementRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/reviews" });
 	const project = useQuery(api.projects.get, {
 		projectId: convexId<"projects">(projectId),
 	});
 
 	return (
-		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
-			<Outlet />
-		</ProjectShell>
+		<LegacyRouteNotice
+			projectId={projectId}
+			projectName={project?.name ?? "Project"}
+			title="Reviews"
+			area="Legacy Change Set review"
+		/>
 	);
 }

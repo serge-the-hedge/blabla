@@ -11,19 +11,13 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import {
 	ArrowRight,
-	FileJson,
+	GitBranch,
 	GitPullRequestArrow,
 	KeyRound,
 	Languages,
 	MessageSquareText,
-	Tags,
+	ShieldCheck,
 } from "lucide-react";
-import { useEffect, useState } from "react";
-import {
-	type AuthEndpointCheck,
-	checkAuthEndpoint,
-	getConnectionDiagnostics,
-} from "@/lib/connection-diagnostics";
 import { api } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/")({
@@ -33,55 +27,48 @@ export const Route = createFileRoute("/")({
 const featureItems = [
 	{
 		icon: MessageSquareText,
-		title: "Project-scoped strings",
+		title: "One working catalog",
 		description:
-			"Browse, filter, and edit copy across screens, tags, and locales without leaving the page.",
+			"Edit every accepted Locale beside its source, context, contract facts, and review state.",
 	},
 	{
 		icon: GitPullRequestArrow,
-		title: "Reviewable agent edits",
+		title: "Human-reviewed proposals",
 		description:
-			"Agents propose changes as patch sets. Inspect diffs, accept or reject per field, then apply.",
+			"Agents prepare candidate values; a human accepts, edits, or rejects every proposed change.",
 	},
 	{
-		icon: FileJson,
-		title: "JSON & Flutter ARB",
+		icon: GitBranch,
+		title: "Repository-backed sync",
 		description:
-			"Bootstrap from existing locale files or export selected slices for any release branch.",
+			"A read-only local command submits exact ARB evidence and keeps Git as the delivery boundary.",
 	},
 	{
 		icon: Languages,
-		title: "Locales & screens",
+		title: "Translation tasks",
 		description:
-			"Define your target locales and group strings by screen for tight, scoped translation work.",
+			"Prepare an existing Locale or a new one manually or with an agent in the same review flow.",
 	},
 	{
-		icon: Tags,
-		title: "Tags for slicing",
+		icon: ShieldCheck,
+		title: "Safe by default",
 		description:
-			"Tag once, filter and export forever. Batch-tag visible strings in a single action.",
+			"Stale source, Git, and workspace state is refused before a reviewed value can become current.",
 	},
 	{
 		icon: KeyRound,
-		title: "Scoped API tokens",
+		title: "One agent connection",
 		description:
-			"Hand agents and integrations read, search, propose, and export scopes — no broader access.",
+			"Give a project-scoped connection to your local adapter or chat agent without publication power.",
 	},
 ] as const;
 
-function StatusPill({ status }: { status: "ok" | "loading" | "error" }) {
-	const label =
-		status === "ok"
-			? "Connected"
-			: status === "loading"
-				? "Connecting…"
-				: "Offline";
+function StatusPill({ status }: { status: "ok" | "loading" }) {
+	const label = status === "ok" ? "Connected" : "Connecting…";
 	const dot =
 		status === "ok"
 			? "bg-success"
-			: status === "loading"
-				? "bg-warning animate-pulse"
-				: "bg-destructive";
+			: "bg-warning animate-pulse motion-reduce:animate-none";
 	return (
 		<span className="inline-flex items-center gap-2 rounded-full border bg-background/60 px-2.5 py-1 text-muted-foreground text-xs">
 			<span className={cn("size-2 rounded-full", dot)} aria-hidden />
@@ -92,31 +79,7 @@ function StatusPill({ status }: { status: "ok" | "loading" | "error" }) {
 
 function HomeComponent() {
 	const healthCheck = useQuery(api.healthCheck.get);
-	const [timedOut, setTimedOut] = useState(false);
-	const [authCheck, setAuthCheck] = useState<AuthEndpointCheck | null>(null);
-	const status: "ok" | "loading" | "error" =
-		healthCheck === "OK"
-			? "ok"
-			: healthCheck === undefined && !timedOut
-				? "loading"
-				: "error";
-	const diagnostics = getConnectionDiagnostics();
-
-	useEffect(() => {
-		if (healthCheck !== undefined) {
-			setTimedOut(false);
-			return;
-		}
-		const timeout = window.setTimeout(() => setTimedOut(true), 5000);
-		return () => window.clearTimeout(timeout);
-	}, [healthCheck]);
-
-	useEffect(() => {
-		if (!timedOut || authCheck) {
-			return;
-		}
-		void checkAuthEndpoint().then(setAuthCheck);
-	}, [timedOut, authCheck]);
+	const status: "ok" | "loading" = healthCheck === "OK" ? "ok" : "loading";
 
 	return (
 		<div className="h-full overflow-auto">
@@ -133,60 +96,23 @@ function HomeComponent() {
 							Translate together. Ship with confidence.
 						</h1>
 						<p className="max-w-2xl text-muted-foreground text-sm md:text-base">
-							blabla is a focused workspace for product strings — humans and
-							agents edit side by side, and every change goes through a clean
-							review queue.
+							Sync exact catalog evidence from Git, translate manually or with
+							an agent, review every candidate, and hand a clean local change
+							back to the repository.
 						</p>
 					</div>
-					{status === "error" ? (
-						<div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-destructive text-xs">
-							<div className="font-medium">
-								Backend connection is not ready.
-							</div>
-							{import.meta.env.DEV ? (
-								<dl className="mt-2 grid gap-1 text-muted-foreground">
-									<div className="grid gap-1 sm:grid-cols-[140px_1fr]">
-										<dt>App origin</dt>
-										<dd className="break-all font-mono">
-											{diagnostics.origin}
-										</dd>
-									</div>
-									<div className="grid gap-1 sm:grid-cols-[140px_1fr]">
-										<dt>Convex URL</dt>
-										<dd className="break-all font-mono">
-											{diagnostics.convexUrl}
-										</dd>
-									</div>
-									<div className="grid gap-1 sm:grid-cols-[140px_1fr]">
-										<dt>Auth URL</dt>
-										<dd className="break-all font-mono">
-											{diagnostics.convexSiteUrl}
-										</dd>
-									</div>
-									<div className="grid gap-1 sm:grid-cols-[140px_1fr]">
-										<dt>Auth check</dt>
-										<dd className="break-all font-mono">
-											{authCheck
-												? authCheck.ok
-													? "OK"
-													: (authCheck.message ?? "Failed")
-												: "Checking..."}
-										</dd>
-									</div>
-								</dl>
-							) : null}
-						</div>
-					) : null}
 					<div className="flex flex-wrap gap-2">
-						<Link to="/projects">
-							<Button>
-								Open projects
-								<ArrowRight data-icon="inline-end" />
-							</Button>
-						</Link>
-						<Link to="/projects/new">
-							<Button variant="outline">New project</Button>
-						</Link>
+						<Button nativeButton={false} render={<Link to="/projects" />}>
+							Open projects
+							<ArrowRight data-icon="inline-end" />
+						</Button>
+						<Button
+							nativeButton={false}
+							variant="outline"
+							render={<Link to="/projects/new" />}
+						>
+							New project
+						</Button>
 					</div>
 				</section>
 
