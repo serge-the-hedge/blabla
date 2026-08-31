@@ -27,7 +27,10 @@ import {
 	sourceChangeMap,
 	valueIdentity,
 } from "./catalogWorkspaceView";
-import { assertTargetValueContract } from "./contractTransforms";
+import {
+	assertSourceProposalValueContract,
+	assertTargetValueContract,
+} from "./contractTransforms";
 import { now, sha256Hex } from "./lib";
 import { requireEditor, requireViewer } from "./permissions";
 import {
@@ -243,6 +246,12 @@ async function classifyTarget(
 			message: "Release assessment lost a scoped Source or target value.",
 		});
 	}
+	if (input.digest.pendingSourceProposal && !input.sourceProposal) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message: "Release assessment lost a pending Source Proposal.",
+		});
+	}
 	const head = await ctx.db
 		.query("catalogWorkspaceValueHeads")
 		.withIndex("by_project_and_messageId_and_localeId", (q) =>
@@ -276,6 +285,17 @@ async function classifyTarget(
 	}> = [];
 	let contractInvalid = false;
 	try {
+		// Source Proposals are value-only: proving that the pending value keeps
+		// the persisted Source Contract makes that same contract authoritative
+		// for every target assessed below.
+		if (input.sourceProposal) {
+			assertSourceProposalValueContract({
+				messageId: input.digest.messageId,
+				localeCode: sourceRow.localeCode,
+				value: input.sourceProposal.sourceValue,
+				source: sourceRow,
+			});
+		}
 		assertTargetValueContract({
 			messageId: input.digest.messageId,
 			localeCode: targetRow.localeCode,
@@ -839,7 +859,10 @@ export const evidence = query({
 });
 
 export const handoff = query({
-	args: { recordId: v.id("releaseRecords") },
+	args: {
+		projectId: v.id("projects"),
+		recordId: v.id("releaseRecords"),
+	},
 	returns: v.object({
 		recordId: v.id("releaseRecords"),
 		status: v.union(v.literal("staging"), v.literal("published")),
@@ -849,13 +872,13 @@ export const handoff = query({
 	}),
 	handler: async (ctx, args) => {
 		const record = await ctx.db.get(args.recordId);
-		if (!record) {
+		if (!record || record.projectId !== args.projectId) {
 			throw new ConvexError({
 				code: "NOT_FOUND",
 				message: "Release Record not found.",
 			});
 		}
-		await requireViewer(ctx, record.projectId);
+		await requireViewer(ctx, args.projectId);
 		const handoff = await ctx.db.get(record.handoffId);
 		if (!handoff || handoff.projectId !== record.projectId) {
 			throw new ConvexError({

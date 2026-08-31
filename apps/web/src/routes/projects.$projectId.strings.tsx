@@ -80,7 +80,10 @@ function StringsRoute() {
 	const releaseHandoff = useQuery(
 		api.releaseRecords.handoff,
 		search.release
-			? { recordId: convexId<"releaseRecords">(search.release) }
+			? {
+					projectId: convexProjectId,
+					recordId: convexId<"releaseRecords">(search.release),
+				}
 			: "skip",
 	);
 	const [windowRequest, setWindowRequest] = useState<{
@@ -153,15 +156,19 @@ function StringsRoute() {
 	const startNavigationBackfill = useMutation(
 		api.catalogWorkspaceNavigation.startNavigationIndexBackfill,
 	);
+	const releaseHandoffMessageIds =
+		releaseHandoff?.status === "published"
+			? releaseHandoff.keys.map((key) => key.messageId)
+			: undefined;
+	const activeReleaseHandoffMessageIds =
+		releaseHandoffMessageIds && releaseHandoffMessageIds.length > 0
+			? releaseHandoffMessageIds
+			: undefined;
 	const navigationState: StringsCatalogNavigationState = {
 		query: search.q ?? "",
 		key: search.key,
 		scope: search.scope,
-		handoffMessageIds: search.release
-			? releaseHandoff?.status === "published"
-				? releaseHandoff.keys.map((key) => key.messageId)
-				: undefined
-			: undefined,
+		handoffMessageIds: activeReleaseHandoffMessageIds,
 	};
 	const onNavigationChange = useCallback(
 		(next: StringsCatalogNavigationState) => {
@@ -310,9 +317,9 @@ function StringsRoute() {
 				onStartOrdinaryImportRun={onStartOrdinaryImportRun}
 				onStartNavigationBackfill={onStartNavigationBackfill}
 				workHandoff={
-					search.release && releaseHandoff
+					search.release && activeReleaseHandoffMessageIds
 						? {
-								keyCount: releaseHandoff.keys.length,
+								keyCount: activeReleaseHandoffMessageIds.length,
 								onClear: onClearReleaseHandoff,
 							}
 						: undefined
