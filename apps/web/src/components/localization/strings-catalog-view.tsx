@@ -980,7 +980,7 @@ function CatalogScopeStrip({
 			aria-live="polite"
 		>
 			<span className="mr-1 text-[11px] text-muted-foreground">Focus</span>
-			{workHandoff ? (
+			{workHandoff && workHandoff.keyCount > 0 ? (
 				<Button
 					type="button"
 					size="xs"
