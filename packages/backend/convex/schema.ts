@@ -261,6 +261,7 @@ export default defineSchema({
 	})
 		.index("by_project", ["projectId"])
 		.index("by_user", ["userId"])
+		.index("by_project_role", ["projectId", "role"])
 		.index("by_project_user", ["projectId", "userId"]),
 
 	projectInvites: defineTable({
@@ -713,6 +714,11 @@ export default defineSchema({
 	})
 		.index("by_projection", ["projectionId"])
 		.index("by_projection_and_messageId", ["projectionId", "messageId"])
+		.index("by_projection_and_messageId_and_isSource", [
+			"projectionId",
+			"messageId",
+			"isSource",
+		])
 		// Catalog Order access lets the Navigation staging worker and the Window
 		// read walk one bounded catalogIndex range instead of scanning keys.
 		.index("by_projection_and_catalogIndex", ["projectionId", "catalogIndex"])
@@ -1198,6 +1204,8 @@ export default defineSchema({
 		restoredFromSnapshotId: v.optional(v.id("sourceSnapshots")),
 		gitValueFingerprint: v.optional(v.string()),
 		gitValueRevision: v.optional(v.number()),
+		repeatedGitContent: v.optional(v.boolean()),
+		repeatedGitContentVersion: v.optional(v.number()),
 		metadataTransforms,
 		sourceFingerprint: v.string(),
 		icuType: v.union(v.literal("plain"), v.literal("icu")),
@@ -1236,6 +1244,8 @@ export default defineSchema({
 		restoredFromSnapshotId: v.optional(v.id("sourceSnapshots")),
 		gitValueFingerprint: v.optional(v.string()),
 		gitValueRevision: v.optional(v.number()),
+		repeatedGitContent: v.optional(v.boolean()),
+		repeatedGitContentVersion: v.optional(v.number()),
 		metadataTransforms,
 		sourceFingerprint: v.string(),
 		icuType: v.union(v.literal("plain"), v.literal("icu")),

@@ -50,6 +50,7 @@ export type PortugueseMvpProof = {
  */
 export async function provePortugueseMvp(
 	brickitCheckout: string,
+	options: { flutterSdk?: string } = {},
 ): Promise<PortugueseMvpProof> {
 	const fixture = await DisposableBrickitCheckout.create(brickitCheckout);
 	const backend = createBackend();
@@ -87,6 +88,9 @@ export async function provePortugueseMvp(
 		);
 
 		const transportGuard = await fixture.guardRemoteGitCommands();
+		const flutterArguments = options.flutterSdk
+			? ["--flutter-sdk", options.flutterSdk]
+			: [];
 		const delivery = await runCommand(
 			"dart",
 			[
@@ -101,6 +105,7 @@ export async function provePortugueseMvp(
 				bridge.baseUrl.toString(),
 				"--token",
 				source.token,
+				...flutterArguments,
 			],
 			{
 				workingDirectory: cliDirectory(),
@@ -521,7 +526,9 @@ class DisposableBrickitCheckout {
 				"origin",
 				canonicalBrickitRemote,
 			]);
-			await fixture.git(["switch", "-c", "develop"]);
+			// A local clone preserves the source checkout's current branch. Reset the
+			// disposable integration branch whether it already exists or not.
+			await fixture.git(["switch", "-C", "develop"]);
 			await fixture.git(["config", "user.name", "Blabla MVP proof"]);
 			await fixture.git(["config", "user.email", "blabla@example.test"]);
 			return fixture;

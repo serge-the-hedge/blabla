@@ -1,12 +1,9 @@
-/**
- * @vitest-environment node
- */
-
 import { expect, test } from "vitest";
 
-import { provePortugueseMvp } from "../test/portugueseMvpProof";
+import { provePortugueseMvp } from "./portugueseMvpProof";
 
 const brickitCheckout = process.env.BRICKIT_CHECKOUT;
+const brickitFlutterSdk = process.env.BRICKIT_FLUTTER_SDK;
 const realCorpusTest = brickitCheckout === undefined ? test.skip : test;
 
 realCorpusTest(
@@ -17,7 +14,9 @@ realCorpusTest(
 				"BRICKIT_CHECKOUT is required for the real-corpus proof.",
 			);
 		}
-		const proof = await provePortugueseMvp(brickitCheckout);
+		const proof = await provePortugueseMvp(brickitCheckout, {
+			flutterSdk: brickitFlutterSdk,
+		});
 
 		expect(proof.sourceMessageCount).toBeGreaterThan(1_000);
 		expect(proof.artifactMessageCount).toBe(proof.sourceMessageCount);

@@ -453,10 +453,12 @@ async function currentSourceRowForProposal(
 	const row = projection
 		? await ctx.db
 				.query("catalogProjectionMessages")
-				.withIndex("by_projection_and_messageId", (q) =>
-					q.eq("projectionId", projection._id).eq("messageId", messageId),
+				.withIndex("by_projection_and_messageId_and_isSource", (q) =>
+					q
+						.eq("projectionId", projection._id)
+						.eq("messageId", messageId)
+						.eq("isSource", true),
 				)
-				.filter((q) => q.eq(q.field("isSource"), true))
 				.unique()
 		: null;
 	if (
@@ -794,12 +796,12 @@ export const sourceMessageForProposal = internalQuery({
 		const source = projection
 			? await ctx.db
 					.query("catalogProjectionMessages")
-					.withIndex("by_projection_and_messageId", (q) =>
+					.withIndex("by_projection_and_messageId_and_isSource", (q) =>
 						q
 							.eq("projectionId", projection._id)
-							.eq("messageId", args.messageId),
+							.eq("messageId", args.messageId)
+							.eq("isSource", true),
 					)
-					.filter((q) => q.eq(q.field("isSource"), true))
 					.unique()
 			: null;
 		if (

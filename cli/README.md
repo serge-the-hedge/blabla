@@ -147,7 +147,7 @@ branch behind. Run it from the repository root:
 
 ```sh
 BRICKIT_CHECKOUT=/path/to/brickit-flutter \
-bun --cwd packages/backend vitest run convex/portugueseMvp.integration.test.ts --reporter=verbose
+bun run --cwd packages/backend test:repository-proof --reporter=verbose
 ```
 
 The proof ingests the real English ARB as accepted Source Snapshot evidence,

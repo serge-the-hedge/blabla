@@ -2,11 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { IcuMessageSegmentEditor } from "./icu-message-segment-editor";
-import {
-	catalogWorkspaceCommitShortcut,
-	isCatalogWorkspaceFieldVisible,
-	StringsCatalogView,
-} from "./strings-catalog-view";
+import { StringsCatalogView } from "./strings-catalog-view";
 
 const navigationProps = {
 	navigationState: { query: "" },
@@ -16,7 +12,11 @@ const navigationProps = {
 
 import type { StringsCatalogKey } from "@/lib/strings-catalog";
 import type { StringsNavigationRead } from "@/lib/strings-catalog-navigation";
-import type { StringsWindowCards } from "@/lib/strings-window";
+import { catalogWorkspaceCommitShortcut } from "@/lib/strings-catalog-presentation";
+import {
+	isCatalogWorkspaceFieldVisible,
+	type StringsWindowCards,
+} from "@/lib/strings-window";
 
 /** A test Catalog fixture drives both sides of the windowed seam: the
  * compact Navigation digests and the hydrated card map a loaded Window
@@ -119,6 +119,70 @@ describe("StringsCatalogView", () => {
 
 		expect(markup).toContain("No Baseline Catalog yet");
 		expect(markup).toContain("accepted Baseline Snapshot");
+	});
+
+	test("lets an editor explicitly prepare an incomplete catalog index", () => {
+		const markup = renderToStaticMarkup(
+			<StringsCatalogView
+				navigation={{
+					kind: "incomplete",
+					canEdit: true,
+					status: "missing",
+					progress: {
+						rowCount: 0,
+						expectedRowCount: 1_434,
+						byteLength: 0,
+					},
+				}}
+				hydratedCards={new Map()}
+				onWindowMessageIdsChange={() => {}}
+				onStartNavigationBackfill={() => {}}
+				{...navigationProps}
+			/>,
+		);
+
+		expect(markup).toContain("Prepare this catalog for fast browsing");
+		expect(markup).toContain("0 of 1,434 keys prepared");
+		expect(markup).toContain("Prepare catalog");
+	});
+
+	test("explains incomplete catalog preparation to viewers", () => {
+		const markup = renderToStaticMarkup(
+			<StringsCatalogView
+				navigation={{
+					kind: "incomplete",
+					canEdit: false,
+					status: "staging",
+				}}
+				hydratedCards={new Map()}
+				onWindowMessageIdsChange={() => {}}
+				{...navigationProps}
+			/>,
+		);
+
+		expect(markup).toContain("An editor needs to finish this preparation");
+		expect(markup).not.toContain("Resume preparation</button>");
+	});
+
+	test("shows automatic preparation as busy instead of asking for another click", () => {
+		const markup = renderToStaticMarkup(
+			<StringsCatalogView
+				navigation={{
+					kind: "incomplete",
+					canEdit: true,
+					status: "staging",
+					stepPending: true,
+				}}
+				hydratedCards={new Map()}
+				onWindowMessageIdsChange={() => {}}
+				onStartNavigationBackfill={() => {}}
+				{...navigationProps}
+			/>,
+		);
+
+		expect(markup).toContain("Preparing catalog");
+		expect(markup).toContain("disabled");
+		expect(markup).not.toContain("Resume preparation");
 	});
 
 	test("renders source and target values in Catalog Order", () => {

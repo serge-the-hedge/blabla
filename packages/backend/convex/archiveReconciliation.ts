@@ -1186,6 +1186,12 @@ function archivedValueFromRow(
 		...(row.gitValueRevision === undefined
 			? {}
 			: { gitValueRevision: row.gitValueRevision }),
+		...(row.repeatedGitContent === undefined
+			? {}
+			: { repeatedGitContent: row.repeatedGitContent }),
+		...(row.repeatedGitContentVersion === undefined
+			? {}
+			: { repeatedGitContentVersion: row.repeatedGitContentVersion }),
 		...(row.metadataTransforms === undefined
 			? {}
 			: { metadataTransforms: [...row.metadataTransforms] }),

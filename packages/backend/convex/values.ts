@@ -8,6 +8,25 @@ import { now, statusForValue } from "./lib";
 import { requireEditor, requireViewer } from "./permissions";
 
 const MAX_TRANSLATIONS_PER_KEY = 50;
+const MAX_KEYS_PER_VALUE_READ = 50;
+const MAX_VALUES_PER_LOCALE_READ = 500;
+
+async function boundedValuesForKey(
+	ctx: QueryCtx | MutationCtx,
+	keyId: Id<"translationKeys">,
+) {
+	const values = await ctx.db
+		.query("translationValues")
+		.withIndex("by_key", (q) => q.eq("keyId", keyId))
+		.take(MAX_TRANSLATIONS_PER_KEY + 1);
+	if (values.length > MAX_TRANSLATIONS_PER_KEY) {
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message: `A key supports at most ${MAX_TRANSLATIONS_PER_KEY} Locale values.`,
+		});
+	}
+	return values;
+}
 
 async function getValue(
 	ctx: QueryCtx | MutationCtx,
@@ -117,16 +136,7 @@ export async function upsertTranslationValue(
 	});
 
 	if (project?.sourceLocaleId === args.localeId) {
-		const values = await ctx.db
-			.query("translationValues")
-			.withIndex("by_key", (q) => q.eq("keyId", args.keyId))
-			.take(MAX_TRANSLATIONS_PER_KEY + 1);
-		if (values.length > MAX_TRANSLATIONS_PER_KEY) {
-			throw new ConvexError({
-				code: "LIMIT_EXCEEDED",
-				message: `Source updates support at most ${MAX_TRANSLATIONS_PER_KEY} translations per key.`,
-			});
-		}
+		const values = await boundedValuesForKey(ctx, args.keyId);
 		await Promise.all(
 			values
 				.filter(
@@ -156,10 +166,7 @@ export const listForKey = query({
 				message: "Translation key not found.",
 			});
 		await requireViewer(ctx, key.projectId);
-		return await ctx.db
-			.query("translationValues")
-			.withIndex("by_key", (q) => q.eq("keyId", args.keyId))
-			.collect();
+		return await boundedValuesForKey(ctx, args.keyId);
 	},
 });
 
@@ -167,8 +174,15 @@ export const listForKeys = query({
 	args: { keyIds: v.array(v.id("translationKeys")) },
 	handler: async (ctx, args) => {
 		if (args.keyIds.length === 0) return [];
+		const uniqueKeyIds = Array.from(new Set(args.keyIds));
+		if (uniqueKeyIds.length > MAX_KEYS_PER_VALUE_READ) {
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message: `Read at most ${MAX_KEYS_PER_VALUE_READ} translation keys at once.`,
+			});
+		}
 		const keys = await Promise.all(
-			args.keyIds.map((keyId) => ctx.db.get(keyId)),
+			uniqueKeyIds.map((keyId) => ctx.db.get(keyId)),
 		);
 		const projectId = keys.find((key) => key !== null)?.projectId;
 		if (!projectId)
@@ -183,14 +197,8 @@ export const listForKeys = query({
 			});
 		}
 		await requireViewer(ctx, projectId);
-		const uniqueKeyIds = Array.from(new Set(args.keyIds));
 		const valuesByKey = await Promise.all(
-			uniqueKeyIds.map((keyId) =>
-				ctx.db
-					.query("translationValues")
-					.withIndex("by_key", (q) => q.eq("keyId", keyId))
-					.collect(),
-			),
+			uniqueKeyIds.map((keyId) => boundedValuesForKey(ctx, keyId)),
 		);
 		return valuesByKey.flat();
 	},
@@ -211,24 +219,31 @@ export const listForLocale = query({
 	},
 	handler: async (ctx, args) => {
 		await requireViewer(ctx, args.projectId);
-		if (args.status) {
-			const status = args.status;
-			return await ctx.db
-				.query("translationValues")
-				.withIndex("by_project_locale_status", (q) =>
-					q
-						.eq("projectId", args.projectId)
-						.eq("localeId", args.localeId)
-						.eq("status", status),
-				)
-				.collect();
+		const status = args.status;
+		const values = status
+			? await ctx.db
+					.query("translationValues")
+					.withIndex("by_project_locale_status", (q) =>
+						q
+							.eq("projectId", args.projectId)
+							.eq("localeId", args.localeId)
+							.eq("status", status),
+					)
+					.take(MAX_VALUES_PER_LOCALE_READ + 1)
+			: await ctx.db
+					.query("translationValues")
+					.withIndex("by_project_locale", (q) =>
+						q.eq("projectId", args.projectId).eq("localeId", args.localeId),
+					)
+					.take(MAX_VALUES_PER_LOCALE_READ + 1);
+		if (values.length > MAX_VALUES_PER_LOCALE_READ) {
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message:
+					"This legacy Locale read is too large; use the bounded Catalog Workspace Navigation read.",
+			});
 		}
-		return await ctx.db
-			.query("translationValues")
-			.withIndex("by_project_locale", (q) =>
-				q.eq("projectId", args.projectId).eq("localeId", args.localeId),
-			)
-			.collect();
+		return values;
 	},
 });
 

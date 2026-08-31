@@ -324,10 +324,12 @@ async function currentLocaleProposalTarget(
 		project && projection
 			? await ctx.db
 					.query("catalogProjectionMessages")
-					.withIndex("by_projection_and_messageId", (q) =>
-						q.eq("projectionId", projection._id).eq("messageId", messageId),
+					.withIndex("by_projection_and_messageId_and_isSource", (q) =>
+						q
+							.eq("projectionId", projection._id)
+							.eq("messageId", messageId)
+							.eq("isSource", true),
 					)
-					.filter((q) => q.eq(q.field("isSource"), true))
 					.unique()
 			: null;
 	if (

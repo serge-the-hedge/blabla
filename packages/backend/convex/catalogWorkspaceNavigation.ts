@@ -1939,6 +1939,8 @@ export const navigationReadValidator = v.union(
 		repository: v.string(),
 		commit: v.string(),
 		snapshotId: v.union(v.null(), v.id("sourceSnapshots")),
+		canEdit: v.boolean(),
+		stepPending: v.boolean(),
 		status: v.union(
 			v.literal("missing"),
 			v.literal("staging"),
@@ -1984,6 +1986,8 @@ export type CatalogWorkspaceNavigationRead =
 			repository: string;
 			commit: string;
 			snapshotId: Id<"sourceSnapshots"> | null;
+			canEdit: boolean;
+			stepPending: boolean;
 			status: "missing" | "staging" | "verifying" | "ready" | "failed";
 			failure: {
 				code?: string;
@@ -2049,6 +2053,8 @@ export const navigation = query({
 			return {
 				kind: "incomplete",
 				...navigationReadIdentity(projection),
+				canEdit: hasMinimumRole(member.role, "editor"),
+				stepPending: counted?.backfillStepPending ?? false,
 				progress: {
 					rowCount: counted?.rowCount ?? 0,
 					expectedRowCount: projection.expectedKeyCount,

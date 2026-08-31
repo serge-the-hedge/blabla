@@ -159,7 +159,7 @@ export const bind = mutation({
 			.withIndex("by_project_catalogPath", (q) =>
 				q.eq("projectId", locale.projectId).eq("catalogPath", catalogPath),
 			)
-			.collect();
+			.take(2);
 		const claimant = claimants.find(
 			(candidate) => candidate._id !== args.localeId,
 		);
@@ -226,7 +226,7 @@ export const correctSetupBinding = mutation({
 			.withIndex("by_project_catalogPath", (q) =>
 				q.eq("projectId", locale.projectId).eq("catalogPath", catalogPath),
 			)
-			.collect();
+			.take(2);
 		const pathConflict = claimants.find(
 			(candidate) => candidate._id !== locale._id,
 		);

@@ -138,6 +138,9 @@ function StringsRoute() {
 	const startOrdinaryImportRun = useMutation(
 		api.ordinaryImportRuns.startOrdinaryImportRun,
 	);
+	const startNavigationBackfill = useMutation(
+		api.catalogWorkspaceNavigation.startNavigationIndexBackfill,
+	);
 	const navigationState: StringsCatalogNavigationState = {
 		query: search.q ?? "",
 		key: search.key,
@@ -208,6 +211,18 @@ function StringsRoute() {
 		},
 		[convexProjectId, startOrdinaryImportRun],
 	);
+	const onStartNavigationBackfill = useCallback(async () => {
+		try {
+			await startNavigationBackfill({ projectId: convexProjectId });
+			toast.success("Catalog preparation started.");
+		} catch (cause) {
+			toast.error(
+				cause instanceof Error
+					? cause.message
+					: "Could not prepare the catalog.",
+			);
+		}
+	}, [convexProjectId, startNavigationBackfill]);
 
 	if (navigation === undefined) {
 		return (
@@ -263,6 +278,7 @@ function StringsRoute() {
 					navigation?.kind === "ready" ? navigation.ordinaryImports : undefined
 				}
 				onStartOrdinaryImportRun={onStartOrdinaryImportRun}
+				onStartNavigationBackfill={onStartNavigationBackfill}
 			/>
 		</ProjectShell>
 	);

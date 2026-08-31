@@ -1807,12 +1807,13 @@ async function stageProjection(
 			projectionId,
 			identity.actor,
 		);
-		const previousUnboundLocaleFiles = previous.previousSnapshotId
-			? await ctx.runQuery(internal.snapshots.unboundLocaleFilesFor, {
-					snapshotId: previous.previousSnapshotId,
-					actor: identity.actor,
-				})
-			: [];
+		const previousUnboundLocaleFiles: UnboundLocaleFile[] =
+			previous.previousSnapshotId
+				? await ctx.runQuery(internal.snapshots.unboundLocaleFilesFor, {
+						snapshotId: previous.previousSnapshotId,
+						actor: identity.actor,
+					})
+				: [];
 		if (previous.previousProjectionId !== priorArchiveState.projectionId) {
 			throw new ConvexError({
 				code: "CONFLICT",
@@ -2791,7 +2792,10 @@ export const catalogText = action({
 		localeCode: v.string(),
 	},
 	handler: async (ctx, args): Promise<string> => {
-		const storageId = await ctx.runQuery(internal.snapshots.storageIdFor, args);
+		const storageId: Id<"_storage"> = await ctx.runQuery(
+			internal.snapshots.storageIdFor,
+			args,
+		);
 		const blob = await ctx.storage.get(storageId);
 		if (!blob) {
 			throw new ConvexError({

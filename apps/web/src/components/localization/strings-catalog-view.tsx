@@ -76,6 +76,7 @@ import {
 } from "@/lib/strings-catalog-presentation";
 import {
 	collectStringsWindowMessageIds,
+	isCatalogWorkspaceFieldVisible,
 	quantizeStringsWindowBounds,
 	StringsCardMeasurementCache,
 	type StringsWindowCards,
@@ -145,18 +146,6 @@ type WorkspaceFocusRequest = {
 } & CatalogWorkspaceFocusIntent;
 type MoveCatalogWorkspaceFocus = (request: WorkspaceFocusRequest) => boolean;
 
-export function isCatalogWorkspaceFieldVisible(input: {
-	fieldTop: number;
-	fieldBottom: number;
-	viewportTop: number;
-	viewportBottom: number;
-}): boolean {
-	return (
-		input.fieldTop >= input.viewportTop &&
-		input.fieldBottom <= input.viewportBottom
-	);
-}
-
 type EditableCatalogWorkspaceValue = CatalogWorkspaceValue & {
 	localeId: string;
 	gitValueFingerprint: string;
@@ -209,8 +198,6 @@ function isEditableCatalogWorkspaceValue(
 		value.expectedSourceFingerprint !== undefined
 	);
 }
-
-export { catalogWorkspaceCommitShortcut };
 
 /**
  * A value's own line. The Locale sits in a narrow gutter and the value takes
@@ -1461,6 +1448,7 @@ function StringsCatalogNavigator({
 	onWindowMessageIdsChange,
 	ordinaryImports,
 	onStartOrdinaryImportRun,
+	onStartNavigationBackfill,
 }: {
 	navigation: StringsNavigationRead;
 	navigationState: StringsCatalogNavigationState;
@@ -1473,6 +1461,7 @@ function StringsCatalogNavigator({
 		expectedProjectionId: string,
 		policy: "ordinary-v1",
 	) => void;
+	onStartNavigationBackfill?: () => void;
 }) {
 	// Search and Catalog Scopes stay local over the compact digests: typing
 	// never executes a server query, only the visible window hydrates.
@@ -1491,20 +1480,61 @@ function StringsCatalogNavigator({
 
 	if (navigation.kind === "incomplete") {
 		const failed = navigation.status === "failed";
+		const preparing =
+			(navigation.status === "staging" || navigation.status === "verifying") &&
+			navigation.stepPending === true;
+		const progress = navigation.progress;
+		const progressLabel = progress
+			? `${NUMBER_FORMAT.format(progress.rowCount)} of ${NUMBER_FORMAT.format(progress.expectedRowCount)} keys prepared`
+			: undefined;
 		return (
-			<div className="flex flex-col gap-3">
-				<p
-					className="text-muted-foreground text-xs"
-					role={failed ? "alert" : "status"}
-				>
-					{failed
-						? "The catalog index could not be prepared."
-						: "Preparing the catalog index…"}
-				</p>
+			<div className="flex flex-col gap-4">
+				<div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border bg-muted/20 p-3">
+					<div className="flex min-w-0 flex-col gap-1">
+						<p
+							className="font-medium text-sm"
+							role={failed ? "alert" : "status"}
+						>
+							{failed
+								? "Catalog preparation stopped"
+								: navigation.status === "missing"
+									? "Prepare this catalog for fast browsing"
+									: "Catalog preparation is in progress"}
+						</p>
+						<p className="text-muted-foreground text-xs">
+							{progressLabel ??
+								"Blabla will build a compact index without loading every value into the page."}
+						</p>
+					</div>
+					{navigation.canEdit && onStartNavigationBackfill ? (
+						<Button
+							disabled={preparing}
+							size="sm"
+							onClick={onStartNavigationBackfill}
+						>
+							{preparing ? (
+								<LoaderCircle
+									className="animate-spin"
+									data-icon="inline-start"
+								/>
+							) : null}
+							{failed
+								? "Retry preparation"
+								: navigation.status === "missing"
+									? "Prepare catalog"
+									: preparing
+										? "Preparing catalog"
+										: "Resume preparation"}
+						</Button>
+					) : (
+						<p className="text-muted-foreground text-xs">
+							An editor needs to finish this preparation.
+						</p>
+					)}
+				</div>
 				{failed && navigation.failure?.message ? (
 					<p className="text-destructive text-xs" role="alert">
-						{navigation.failure.message} A developer can retry the Navigation
-						backfill.
+						{navigation.failure.message}
 					</p>
 				) : null}
 				<StringsCatalogLoadingRows />
@@ -1563,6 +1593,7 @@ export function StringsCatalogView({
 	onWindowMessageIdsChange,
 	ordinaryImports,
 	onStartOrdinaryImportRun,
+	onStartNavigationBackfill,
 }: {
 	navigation: StringsNavigationRead | undefined;
 	navigationState: StringsCatalogNavigationState;
@@ -1576,6 +1607,7 @@ export function StringsCatalogView({
 		expectedProjectionId: string,
 		policy: "ordinary-v1",
 	) => void;
+	onStartNavigationBackfill?: () => void;
 }) {
 	if (navigation === undefined) return <StringsCatalogLoadingRows rows={1} />;
 	if (navigation.kind === "noBaseline")
@@ -1598,6 +1630,7 @@ export function StringsCatalogView({
 			onWindowMessageIdsChange={onWindowMessageIdsChange}
 			ordinaryImports={ordinaryImports}
 			onStartOrdinaryImportRun={onStartOrdinaryImportRun}
+			onStartNavigationBackfill={onStartNavigationBackfill}
 		/>
 	);
 }

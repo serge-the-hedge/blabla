@@ -209,6 +209,7 @@ describe("Catalog Workspace Navigation read", () => {
 		});
 		expect(read.kind).toBe("incomplete");
 		if (read.kind !== "incomplete") throw new Error("unreachable");
+		expect(read.canEdit).toBe(true);
 		expect(read.progress).toMatchObject({ rowCount: 3, expectedRowCount: 3 });
 		expect(read.snapshotId).not.toBeNull();
 	});

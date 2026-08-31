@@ -10,6 +10,20 @@ export const STRINGS_WINDOW_STRIDE = 8;
  * MAX_CATALOG_WORKSPACE_WINDOW_KEYS. */
 export const WINDOW_KEY_CAP = 32;
 
+/** A focused field should move only when it has actually left the viewport;
+ * partial clipping is enough to justify restoring it after a reactive update. */
+export function isCatalogWorkspaceFieldVisible(input: {
+	fieldTop: number;
+	fieldBottom: number;
+	viewportTop: number;
+	viewportBottom: number;
+}): boolean {
+	return (
+		input.fieldTop >= input.viewportTop &&
+		input.fieldBottom <= input.viewportBottom
+	);
+}
+
 export type StringsWindowBounds = { start: number; end: number };
 
 /** Center one full, bounded Window around the visible rows and align its start

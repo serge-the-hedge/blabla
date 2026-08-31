@@ -85,8 +85,14 @@ export type StringsNavigationRead = {
 	kind: "noBaseline" | "incomplete" | "ready";
 	projectionId?: string;
 	canEdit?: boolean;
+	stepPending?: boolean;
 	keyCount?: number;
 	status?: "missing" | "staging" | "verifying" | "ready" | "failed";
+	progress?: {
+		rowCount: number;
+		expectedRowCount: number;
+		byteLength: number;
+	};
 	failure?: {
 		code?: string;
 		message: string;

@@ -9,6 +9,7 @@ const _sourceCatalogPath = 'packages/brickit_generated/lib/l10n/intl_en.arb';
 
 void main() {
   final brickitCheckout = Platform.environment['BRICKIT_CHECKOUT'];
+  final brickitFlutterSdk = Platform.environment['BRICKIT_FLUTTER_SDK'];
   test(
     'real Flutter generation produces one language-code Portuguese catalog',
     () async {
@@ -17,6 +18,7 @@ void main() {
       final artifact = await fixture.portugueseArtifact();
       final flutter = await FlutterToolchainResolver().resolve(
         fixture.checkout,
+        explicitSdk: brickitFlutterSdk,
       );
 
       final result = await RepositoryAdapter().deliver(
@@ -111,7 +113,9 @@ class _RealBrickitFixture {
       'origin',
       'https://github.com/brickit-app/brickit-flutter.git',
     ]);
-    await fixture.git(['switch', '-c', 'develop']);
+    // A local clone preserves the source checkout's current branch. Reset the
+    // disposable integration branch whether it already exists or not.
+    await fixture.git(['switch', '-C', 'develop']);
     await fixture.git(['config', 'user.name', 'Blabla acceptance test']);
     await fixture.git(['config', 'user.email', 'blabla@example.test']);
     return fixture;

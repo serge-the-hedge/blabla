@@ -65,9 +65,10 @@ async function assertCanChangeMemberRole(
 	}
 	const owners = await ctx.db
 		.query("projectMembers")
-		.withIndex("by_project", (q) => q.eq("projectId", member.projectId))
-		.filter((q) => q.eq(q.field("role"), "owner"))
-		.collect();
+		.withIndex("by_project_role", (q) =>
+			q.eq("projectId", member.projectId).eq("role", "owner"),
+		)
+		.take(2);
 	if (owners.length <= 1) {
 		throw new ConvexError({
 			code: "VALIDATION",
@@ -464,9 +465,10 @@ export const removeMember = mutation({
 		if (member.role === "owner") {
 			const owners = await ctx.db
 				.query("projectMembers")
-				.withIndex("by_project", (q) => q.eq("projectId", member.projectId))
-				.filter((q) => q.eq(q.field("role"), "owner"))
-				.collect();
+				.withIndex("by_project_role", (q) =>
+					q.eq("projectId", member.projectId).eq("role", "owner"),
+				)
+				.take(2);
 			if (owners.length <= 1) {
 				throw new ConvexError({
 					code: "VALIDATION",
