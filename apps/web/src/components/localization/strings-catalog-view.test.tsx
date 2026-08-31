@@ -395,6 +395,38 @@ describe("StringsCatalogView", () => {
 		expect(markup).toContain('aria-label="Clear Release work hand-off"');
 	});
 
+	test("does not present a zero-key Release hand-off as an active scope", () => {
+		const markup = renderToStaticMarkup(
+			<StringsCatalogView
+				{...navigationProps}
+				workHandoff={{ keyCount: 0, onClear: () => {} }}
+				{...windowedProps({
+					valueStateCounts: {
+						waiting: 0,
+						unconfirmedImport: 0,
+						stale: 0,
+						settled: 1,
+					},
+					keys: [
+						{
+							id: "ordinary_key",
+							source: {
+								localeCode: "en",
+								isSource: true,
+								value: "Ordinary",
+								materialized: false,
+							},
+							targets: [],
+						},
+					],
+				})}
+			/>,
+		);
+
+		expect(markup).not.toContain("Release work · 0");
+		expect(markup).not.toContain('aria-label="Clear Release work hand-off"');
+	});
+
 	test("offers one guarded action for ordinary imported values", () => {
 		const markup = renderToStaticMarkup(
 			<StringsCatalogView

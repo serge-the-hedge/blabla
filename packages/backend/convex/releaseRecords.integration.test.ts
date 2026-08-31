@@ -240,6 +240,7 @@ describe("Release Records", () => {
 			});
 		});
 		const stagingHandoff = await user.query(api.releaseRecords.handoff, {
+			projectId,
 			recordId: started.recordId,
 		});
 		expect(stagingHandoff).toEqual({
@@ -282,6 +283,7 @@ describe("Release Records", () => {
 			{ messageId: "greeting", localeCode: "de", kind: "source_identical" },
 		]);
 		const handoff = await user.query(api.releaseRecords.handoff, {
+			projectId,
 			recordId: started.recordId,
 		});
 		expect(handoff).toMatchObject({ status: "published", keys: [] });
@@ -345,6 +347,7 @@ describe("Release Records", () => {
 			recordId: started.recordId,
 		});
 		const stagingHandoff = await user.query(api.releaseRecords.handoff, {
+			projectId,
 			recordId: started.recordId,
 		});
 		expect(stagingHandoff.keys).toEqual([]);
@@ -358,9 +361,52 @@ describe("Release Records", () => {
 			blockedCount: 1,
 		});
 		const handoff = await user.query(api.releaseRecords.handoff, {
+			projectId,
 			recordId: started.recordId,
 		});
 		expect(handoff.keys).toEqual([{ catalogIndex: 0, messageId: "greeting" }]);
+	});
+
+	test("blocks a pending Source Proposal that no longer preserves its Source Contract", async () => {
+		const user = await authenticatedBackend(t, "release-source-contract");
+		const { projectId } = await createCatalog(user);
+		const workspace = await readWorkspaceKeyCards(user, projectId);
+		const source = workspace.keys[0]?.values.find((value) => value.isSource);
+		if (
+			!source?.localeId ||
+			source.gitValueFingerprint === undefined ||
+			source.gitValueRevision === undefined ||
+			source.workspaceRevision === undefined
+		) {
+			throw new Error("Expected Source Proposal concurrency tokens.");
+		}
+		await user.mutation(api.catalogWorkspace.commit, {
+			projectId,
+			messageId: "greeting",
+			localeId: source.localeId,
+			intent: { kind: "save", value: "Welcome" },
+			expectedGitValueFingerprint: source.gitValueFingerprint,
+			expectedGitValueRevision: source.gitValueRevision,
+			expectedWorkspaceRevision: source.workspaceRevision,
+		});
+		await t.run(async (ctx) => {
+			const head = await ctx.db
+				.query("catalogWorkspaceSourceProposalHeads")
+				.withIndex("by_project_and_messageId", (q) =>
+					q.eq("projectId", projectId).eq("messageId", "greeting"),
+				)
+				.unique();
+			if (!head) throw new Error("Expected a pending Source Proposal.");
+			// Model corrupt or legacy evidence that bypassed the current write
+			// invariant: Release must still refuse to call it shippable.
+			await ctx.db.patch(head._id, { sourceValue: "Count {count}" });
+		});
+
+		await expect(prepareAndFinish(user, projectId)).resolves.toMatchObject({
+			status: "ready",
+			posture: "blocked",
+			blockedCount: 1,
+		});
 	});
 
 	test("needs a decision for a missing scoped target while unconfirmed imports stay non-gating", async () => {
@@ -510,6 +556,9 @@ describe("Release Records", () => {
 		const owner = await authenticatedBackend(t, "release-owner");
 		const outsider = await authenticatedBackend(t, "release-outsider");
 		const { projectId, targetId } = await createCatalog(owner);
+		const otherProjectId = await createProject(owner, {
+			slug: "release-other-project",
+		});
 		await save(owner, projectId, targetId, "Hello");
 		const record = await prepareAndFinish(owner, projectId);
 
@@ -540,7 +589,14 @@ describe("Release Records", () => {
 			}),
 		).rejects.toThrow();
 		await expect(
+			owner.query(api.releaseRecords.handoff, {
+				projectId: otherProjectId,
+				recordId: record.recordId,
+			}),
+		).rejects.toThrow("Release Record not found");
+		await expect(
 			outsider.query(api.releaseRecords.handoff, {
+				projectId,
 				recordId: record.recordId,
 			}),
 		).rejects.toThrow();
