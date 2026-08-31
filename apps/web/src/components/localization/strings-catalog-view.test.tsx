@@ -363,6 +363,38 @@ describe("StringsCatalogView", () => {
 		expect(markup).toContain('aria-label="Show Unconfirmed scope (1)"');
 	});
 
+	test("shows a removable Release work hand-off beside local scopes", () => {
+		const markup = renderToStaticMarkup(
+			<StringsCatalogView
+				{...navigationProps}
+				workHandoff={{ keyCount: 12, onClear: () => {} }}
+				{...windowedProps({
+					valueStateCounts: {
+						waiting: 0,
+						unconfirmedImport: 0,
+						stale: 0,
+						settled: 1,
+					},
+					keys: [
+						{
+							id: "release_key",
+							source: {
+								localeCode: "en",
+								isSource: true,
+								value: "Release",
+								materialized: false,
+							},
+							targets: [],
+						},
+					],
+				})}
+			/>,
+		);
+
+		expect(markup).toContain("Release work · 12");
+		expect(markup).toContain('aria-label="Clear Release work hand-off"');
+	});
+
 	test("offers one guarded action for ordinary imported values", () => {
 		const markup = renderToStaticMarkup(
 			<StringsCatalogView

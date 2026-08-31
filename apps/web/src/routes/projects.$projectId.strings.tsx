@@ -37,7 +37,12 @@ import {
 	updateStringsWindowCardCache,
 } from "@/lib/strings-window";
 
-type StringsSearch = { q?: string; key?: string; scope?: CatalogValueScope };
+type StringsSearch = {
+	q?: string;
+	key?: string;
+	scope?: CatalogValueScope;
+	release?: string;
+};
 const EMPTY_STRINGS_WINDOW_CARDS: StringsWindowCards = new Map();
 const EMPTY_STRINGS_WINDOW_MESSAGE_IDS: string[] = [];
 
@@ -52,6 +57,7 @@ export const Route = createFileRoute("/projects/$projectId/strings")({
 		q: typeof search.q === "string" ? search.q : undefined,
 		key: typeof search.key === "string" ? search.key : undefined,
 		scope: isCatalogValueScope(search.scope) ? search.scope : undefined,
+		release: typeof search.release === "string" ? search.release : undefined,
 	}),
 	component: StringsRoute,
 });
@@ -71,6 +77,12 @@ function StringsRoute() {
 	const navigation = useQuery(api.catalogWorkspaceNavigation.navigation, {
 		projectId: convexProjectId,
 	});
+	const releaseHandoff = useQuery(
+		api.releaseRecords.handoff,
+		search.release
+			? { recordId: convexId<"releaseRecords">(search.release) }
+			: "skip",
+	);
 	const [windowRequest, setWindowRequest] = useState<{
 		projectionId: string | undefined;
 		messageIds: string[];
@@ -145,6 +157,11 @@ function StringsRoute() {
 		query: search.q ?? "",
 		key: search.key,
 		scope: search.scope,
+		handoffMessageIds: search.release
+			? releaseHandoff?.status === "published"
+				? releaseHandoff.keys.map((key) => key.messageId)
+				: undefined
+			: undefined,
 	};
 	const onNavigationChange = useCallback(
 		(next: StringsCatalogNavigationState) => {
@@ -167,6 +184,16 @@ function StringsRoute() {
 			search: {},
 		});
 	}, [navigate, projectId]);
+	const onClearReleaseHandoff = useCallback(() => {
+		void navigate({
+			search: (previous) => ({
+				...previous,
+				release: undefined,
+				key: undefined,
+			}),
+			replace: true,
+		});
+	}, [navigate]);
 	const onCommitValue = useCallback(
 		async (input: CatalogWorkspaceCommit) => {
 			try {
@@ -224,7 +251,10 @@ function StringsRoute() {
 		}
 	}, [convexProjectId, startNavigationBackfill]);
 
-	if (navigation === undefined) {
+	if (
+		navigation === undefined ||
+		(search.release && releaseHandoff === undefined)
+	) {
 		return (
 			<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 				<PageHeader
@@ -279,6 +309,14 @@ function StringsRoute() {
 				}
 				onStartOrdinaryImportRun={onStartOrdinaryImportRun}
 				onStartNavigationBackfill={onStartNavigationBackfill}
+				workHandoff={
+					search.release && releaseHandoff
+						? {
+								keyCount: releaseHandoff.keys.length,
+								onClear: onClearReleaseHandoff,
+							}
+						: undefined
+				}
 			/>
 		</ProjectShell>
 	);

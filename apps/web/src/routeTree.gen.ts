@@ -20,6 +20,7 @@ import { Route as ProjectsProjectIdExportRouteImport } from './routes/projects.$
 import { Route as ProjectsProjectIdImportRouteImport } from './routes/projects.$projectId.import'
 import { Route as ProjectsProjectIdLocalesRouteImport } from './routes/projects.$projectId.locales'
 import { Route as ProjectsProjectIdProposalsRouteImport } from './routes/projects.$projectId.proposals'
+import { Route as ProjectsProjectIdReleaseRouteImport } from './routes/projects.$projectId.release'
 import { Route as ProjectsProjectIdReviewsRouteImport } from './routes/projects.$projectId.reviews'
 import { Route as ProjectsProjectIdScreensRouteImport } from './routes/projects.$projectId.screens'
 import { Route as ProjectsProjectIdSettingsRouteImport } from './routes/projects.$projectId.settings'
@@ -90,6 +91,12 @@ const ProjectsProjectIdProposalsRoute =
   ProjectsProjectIdProposalsRouteImport.update({
     id: '/proposals',
     path: '/proposals',
+    getParentRoute: () => ProjectsProjectIdRoute,
+  } as any)
+const ProjectsProjectIdReleaseRoute =
+  ProjectsProjectIdReleaseRouteImport.update({
+    id: '/release',
+    path: '/release',
     getParentRoute: () => ProjectsProjectIdRoute,
   } as any)
 const ProjectsProjectIdReviewsRoute =
@@ -187,6 +194,7 @@ export interface FileRoutesByFullPath {
   '/projects/$projectId/import': typeof ProjectsProjectIdImportRoute
   '/projects/$projectId/locales': typeof ProjectsProjectIdLocalesRoute
   '/projects/$projectId/proposals': typeof ProjectsProjectIdProposalsRouteWithChildren
+  '/projects/$projectId/release': typeof ProjectsProjectIdReleaseRoute
   '/projects/$projectId/reviews': typeof ProjectsProjectIdReviewsRouteWithChildren
   '/projects/$projectId/screens': typeof ProjectsProjectIdScreensRoute
   '/projects/$projectId/settings': typeof ProjectsProjectIdSettingsRouteWithChildren
@@ -213,6 +221,7 @@ export interface FileRoutesByTo {
   '/projects/$projectId/export': typeof ProjectsProjectIdExportRoute
   '/projects/$projectId/import': typeof ProjectsProjectIdImportRoute
   '/projects/$projectId/locales': typeof ProjectsProjectIdLocalesRoute
+  '/projects/$projectId/release': typeof ProjectsProjectIdReleaseRoute
   '/projects/$projectId/screens': typeof ProjectsProjectIdScreensRoute
   '/projects/$projectId/settings': typeof ProjectsProjectIdSettingsRouteWithChildren
   '/projects/$projectId/strings': typeof ProjectsProjectIdStringsRoute
@@ -240,6 +249,7 @@ export interface FileRoutesById {
   '/projects/$projectId/import': typeof ProjectsProjectIdImportRoute
   '/projects/$projectId/locales': typeof ProjectsProjectIdLocalesRoute
   '/projects/$projectId/proposals': typeof ProjectsProjectIdProposalsRouteWithChildren
+  '/projects/$projectId/release': typeof ProjectsProjectIdReleaseRoute
   '/projects/$projectId/reviews': typeof ProjectsProjectIdReviewsRouteWithChildren
   '/projects/$projectId/screens': typeof ProjectsProjectIdScreensRoute
   '/projects/$projectId/settings': typeof ProjectsProjectIdSettingsRouteWithChildren
@@ -269,6 +279,7 @@ export interface FileRouteTypes {
     | '/projects/$projectId/import'
     | '/projects/$projectId/locales'
     | '/projects/$projectId/proposals'
+    | '/projects/$projectId/release'
     | '/projects/$projectId/reviews'
     | '/projects/$projectId/screens'
     | '/projects/$projectId/settings'
@@ -295,6 +306,7 @@ export interface FileRouteTypes {
     | '/projects/$projectId/export'
     | '/projects/$projectId/import'
     | '/projects/$projectId/locales'
+    | '/projects/$projectId/release'
     | '/projects/$projectId/screens'
     | '/projects/$projectId/settings'
     | '/projects/$projectId/strings'
@@ -321,6 +333,7 @@ export interface FileRouteTypes {
     | '/projects/$projectId/import'
     | '/projects/$projectId/locales'
     | '/projects/$projectId/proposals'
+    | '/projects/$projectId/release'
     | '/projects/$projectId/reviews'
     | '/projects/$projectId/screens'
     | '/projects/$projectId/settings'
@@ -422,6 +435,13 @@ declare module '@tanstack/react-router' {
       path: '/proposals'
       fullPath: '/projects/$projectId/proposals'
       preLoaderRoute: typeof ProjectsProjectIdProposalsRouteImport
+      parentRoute: typeof ProjectsProjectIdRoute
+    }
+    '/projects/$projectId/release': {
+      id: '/projects/$projectId/release'
+      path: '/release'
+      fullPath: '/projects/$projectId/release'
+      preLoaderRoute: typeof ProjectsProjectIdReleaseRouteImport
       parentRoute: typeof ProjectsProjectIdRoute
     }
     '/projects/$projectId/reviews': {
@@ -585,6 +605,7 @@ interface ProjectsProjectIdRouteChildren {
   ProjectsProjectIdImportRoute: typeof ProjectsProjectIdImportRoute
   ProjectsProjectIdLocalesRoute: typeof ProjectsProjectIdLocalesRoute
   ProjectsProjectIdProposalsRoute: typeof ProjectsProjectIdProposalsRouteWithChildren
+  ProjectsProjectIdReleaseRoute: typeof ProjectsProjectIdReleaseRoute
   ProjectsProjectIdReviewsRoute: typeof ProjectsProjectIdReviewsRouteWithChildren
   ProjectsProjectIdScreensRoute: typeof ProjectsProjectIdScreensRoute
   ProjectsProjectIdSettingsRoute: typeof ProjectsProjectIdSettingsRouteWithChildren
@@ -599,6 +620,7 @@ const ProjectsProjectIdRouteChildren: ProjectsProjectIdRouteChildren = {
   ProjectsProjectIdImportRoute: ProjectsProjectIdImportRoute,
   ProjectsProjectIdLocalesRoute: ProjectsProjectIdLocalesRoute,
   ProjectsProjectIdProposalsRoute: ProjectsProjectIdProposalsRouteWithChildren,
+  ProjectsProjectIdReleaseRoute: ProjectsProjectIdReleaseRoute,
   ProjectsProjectIdReviewsRoute: ProjectsProjectIdReviewsRouteWithChildren,
   ProjectsProjectIdScreensRoute: ProjectsProjectIdScreensRoute,
   ProjectsProjectIdSettingsRoute: ProjectsProjectIdSettingsRouteWithChildren,

@@ -1,6 +1,8 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+import { releaseAssessmentFields } from "./releaseRecordModel";
+
 const role = v.union(
 	v.literal("owner"),
 	v.literal("editor"),
@@ -215,6 +217,16 @@ const reconciliationReportFactKind = v.union(
 	v.literal("automatic_contract_transform"),
 	v.literal("new_target_value"),
 	v.literal("translation_residue"),
+);
+const releaseFindingKind = v.union(
+	v.literal("contract_invalid"),
+	v.literal("missing_value"),
+	v.literal("semantic_source_change"),
+);
+const releasePosture = v.union(
+	v.literal("blocked"),
+	v.literal("needsDecisions"),
+	v.literal("ready"),
 );
 const contractTransformCode = v.union(
 	v.literal("renamed_placeholder"),
@@ -937,6 +949,10 @@ export default defineSchema({
 	catalogWorkspaceNavigationStates: defineTable({
 		projectId: v.id("projects"),
 		projectionId: v.id("catalogProjections"),
+		// Monotonically advances whenever the active Navigation generation changes.
+		// Durable consumers such as Release Assessment capture it as an exact
+		// Workspace basis and fail closed if editing continues while they prepare.
+		revision: v.optional(v.number()),
 		rowCount: v.number(),
 		byteLength: v.number(),
 		status: v.optional(
@@ -1161,6 +1177,109 @@ export default defineSchema({
 	reconciliationWorkHandoffKeys: defineTable({
 		projectId: v.id("projects"),
 		handoffId: v.id("reconciliationWorkHandoffs"),
+		catalogIndex: v.number(),
+		messageId: v.string(),
+	}).index("by_handoff", ["handoffId"]),
+
+	// A Release Record is one immutable, durable assessment of an exact
+	// Baseline plus Workspace revision. Preparation is resumable; once ready,
+	// its normalized findings and evidence remain historical release truth.
+	releaseRecords: defineTable({
+		projectId: v.id("projects"),
+		projectionId: v.id("catalogProjections"),
+		snapshotId: v.id("sourceSnapshots"),
+		commit: v.string(),
+		navigationRevision: v.number(),
+		expectedKeyCount: v.number(),
+		handoffId: v.id("releaseWorkHandoffs"),
+		status: v.union(
+			v.literal("preparing"),
+			v.literal("ready"),
+			v.literal("superseded"),
+			v.literal("failed"),
+		),
+		posture: v.optional(releasePosture),
+		...releaseAssessmentFields,
+		startedBy: actor,
+		failure: v.optional(
+			v.object({
+				code: v.optional(v.string()),
+				message: v.string(),
+				failedAt: v.number(),
+			}),
+		),
+		createdAt: v.number(),
+		completedAt: v.optional(v.number()),
+	})
+		.index("by_project", ["projectId"])
+		.index("by_project_and_createdAt", ["projectId", "createdAt"])
+		.index("by_project_and_projection_and_navigationRevision", [
+			"projectId",
+			"projectionId",
+			"navigationRevision",
+		]),
+
+	// Preparation is the mutable, resumable side of a Release Record. Keeping
+	// it separate means progress writes do not invalidate immutable history.
+	releaseRecordPreparations: defineTable({
+		projectId: v.id("projects"),
+		recordId: v.id("releaseRecords"),
+		cursor: v.number(),
+		...releaseAssessmentFields,
+		stepPending: v.boolean(),
+		updatedAt: v.number(),
+	}).index("by_recordId", ["recordId"]),
+
+	releaseFindings: defineTable({
+		projectId: v.id("projects"),
+		recordId: v.id("releaseRecords"),
+		catalogIndex: v.number(),
+		messageId: v.string(),
+		localeId: v.id("locales"),
+		localeCode: v.string(),
+		kind: releaseFindingKind,
+		reasonCodes: v.optional(v.array(translationResidueCode)),
+	})
+		.index("by_record", ["recordId"])
+		.index("by_record_and_catalogIndex", ["recordId", "catalogIndex"]),
+
+	releaseEvidence: defineTable(
+		v.union(
+			v.object({
+				projectId: v.id("projects"),
+				recordId: v.id("releaseRecords"),
+				catalogIndex: v.number(),
+				messageId: v.string(),
+				localeId: v.id("locales"),
+				localeCode: v.string(),
+				kind: v.literal("intentional_blank"),
+				reason: v.string(),
+			}),
+			v.object({
+				projectId: v.id("projects"),
+				recordId: v.id("releaseRecords"),
+				catalogIndex: v.number(),
+				messageId: v.string(),
+				localeId: v.id("locales"),
+				localeCode: v.string(),
+				kind: v.literal("source_identical"),
+			}),
+		),
+	)
+		.index("by_record", ["recordId"])
+		.index("by_record_and_catalogIndex", ["recordId", "catalogIndex"]),
+
+	releaseWorkHandoffs: defineTable({
+		projectId: v.id("projects"),
+		recordId: v.optional(v.id("releaseRecords")),
+		status: v.union(v.literal("staging"), v.literal("published")),
+		keyCount: v.number(),
+		byteLength: v.number(),
+	}).index("by_record", ["recordId"]),
+
+	releaseWorkHandoffKeys: defineTable({
+		projectId: v.id("projects"),
+		handoffId: v.id("releaseWorkHandoffs"),
 		catalogIndex: v.number(),
 		messageId: v.string(),
 	}).index("by_handoff", ["handoffId"]),
