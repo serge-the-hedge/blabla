@@ -88,6 +88,90 @@ function preparationFor(
 		.unique();
 }
 
+type ReleaseTerminalCleanup = NonNullable<
+	Doc<"releaseRecordPreparations">["terminal"]
+>;
+
+async function queueTerminalCleanup(
+	ctx: MutationCtx,
+	record: Doc<"releaseRecords">,
+	preparation: Doc<"releaseRecordPreparations">,
+	terminal: ReleaseTerminalCleanup,
+) {
+	const updatedAt = now();
+	await ctx.db.patch(preparation._id, {
+		terminal,
+		stepPending: true,
+		updatedAt,
+	});
+	await ctx.scheduler.runAfter(0, internal.releaseRecords.processStep, {
+		recordId: record._id,
+	});
+	return { ...preparation, terminal, stepPending: true, updatedAt };
+}
+
+async function processTerminalCleanup(
+	ctx: MutationCtx,
+	record: Doc<"releaseRecords">,
+	preparation: Doc<"releaseRecordPreparations">,
+) {
+	const terminal = preparation.terminal;
+	if (!terminal) return null;
+	const [findings, evidence, handoffKeys] = await Promise.all([
+		ctx.db
+			.query("releaseFindings")
+			.withIndex("by_record", (q) => q.eq("recordId", record._id))
+			.take(MAX_RELEASE_ROWS_PER_STEP),
+		ctx.db
+			.query("releaseEvidence")
+			.withIndex("by_record", (q) => q.eq("recordId", record._id))
+			.take(MAX_RELEASE_ROWS_PER_STEP),
+		ctx.db
+			.query("releaseWorkHandoffKeys")
+			.withIndex("by_handoff", (q) => q.eq("handoffId", record.handoffId))
+			.take(MAX_RELEASE_ROWS_PER_STEP),
+	]);
+	for (const row of [...findings, ...evidence, ...handoffKeys]) {
+		await ctx.db.delete(row._id);
+	}
+	if (findings.length + evidence.length + handoffKeys.length > 0) {
+		const updatedAt = now();
+		await ctx.db.patch(preparation._id, { stepPending: true, updatedAt });
+		await ctx.scheduler.runAfter(0, internal.releaseRecords.processStep, {
+			recordId: record._id,
+		});
+		return releaseSummary(record, {
+			...preparation,
+			stepPending: true,
+			updatedAt,
+		});
+	}
+	await ctx.db.patch(record.handoffId, { keyCount: 0, byteLength: 0 });
+	await ctx.db.delete(preparation._id);
+	if (terminal.status === "failed") {
+		await ctx.db.patch(record._id, {
+			status: terminal.status,
+			failure: terminal.failure,
+			completedAt: terminal.completedAt,
+		});
+		return releaseSummary({
+			...record,
+			status: terminal.status,
+			failure: terminal.failure,
+			completedAt: terminal.completedAt,
+		});
+	}
+	await ctx.db.patch(record._id, {
+		status: terminal.status,
+		completedAt: terminal.completedAt,
+	});
+	return releaseSummary({
+		...record,
+		status: terminal.status,
+		completedAt: terminal.completedAt,
+	});
+}
+
 function assertPublishedEvidence(record: Doc<"releaseRecords">) {
 	if (record.status !== "ready") {
 		throw new ConvexError({
@@ -139,18 +223,18 @@ export const prepare = mutation({
 			.order("desc")
 			.take(1);
 		const reusable = sameBasis[0];
-		if (reusable && reusable.status !== "failed") {
-			const preparation =
-				reusable.status === "preparing"
-					? await preparationFor(ctx, reusable._id)
-					: null;
-			if (reusable.status === "preparing") {
-				if (!preparation) {
-					throw new ConvexError({
-						code: "INTEGRITY",
-						message: "Release Record lost its preparation state.",
-					});
-				}
+		if (reusable?.status === "ready") {
+			return releaseSummary(reusable);
+		}
+		if (reusable?.status === "preparing") {
+			const preparation = await preparationFor(ctx, reusable._id);
+			if (!preparation) {
+				throw new ConvexError({
+					code: "INTEGRITY",
+					message: "Release Record lost its preparation state.",
+				});
+			}
+			if (!preparation.terminal) {
 				await ctx.db.patch(preparation._id, {
 					stepPending: true,
 					updatedAt: now(),
@@ -158,8 +242,8 @@ export const prepare = mutation({
 				await ctx.scheduler.runAfter(0, internal.releaseRecords.processStep, {
 					recordId: reusable._id,
 				});
+				return releaseSummary(reusable, preparation);
 			}
-			return releaseSummary(reusable, preparation);
 		}
 		const preparing = await ctx.db
 			.query("releaseRecords")
@@ -169,12 +253,12 @@ export const prepare = mutation({
 		for (const record of preparing) {
 			if (record.status === "preparing") {
 				const preparation = await preparationFor(ctx, record._id);
-				if (preparation) await ctx.db.delete(preparation._id);
-				const completedAt = now();
-				await ctx.db.patch(record._id, {
-					status: "superseded",
-					completedAt,
-				});
+				if (preparation && !preparation.terminal) {
+					await queueTerminalCleanup(ctx, record, preparation, {
+						status: "superseded",
+						completedAt: now(),
+					});
+				}
 			}
 		}
 		const handoffId = await ctx.db.insert("releaseWorkHandoffs", {
@@ -369,6 +453,9 @@ export const processStep = internalMutation({
 				return releaseSummary(record, preparation);
 			}
 			await ctx.db.patch(preparation._id, { stepPending: false });
+			if (preparation.terminal) {
+				return await processTerminalCleanup(ctx, record, preparation);
+			}
 			const projection = await activeProjectionFor(ctx, record.projectId);
 			const navigation = projection
 				? await readyNavigationStateFor(ctx, {
@@ -383,17 +470,11 @@ export const processStep = internalMutation({
 				!navigation ||
 				(navigation.revision ?? 0) !== record.navigationRevision
 			) {
-				const completedAt = now();
-				await ctx.db.delete(preparation._id);
-				await ctx.db.patch(record._id, {
+				const cleanup = await queueTerminalCleanup(ctx, record, preparation, {
 					status: "superseded",
-					completedAt,
+					completedAt: now(),
 				});
-				return releaseSummary({
-					...record,
-					status: "superseded",
-					completedAt,
-				});
+				return releaseSummary(record, cleanup);
 			}
 			const rows = await ctx.db
 				.query("catalogWorkspaceNavigationRows")
@@ -605,15 +686,27 @@ export const processStep = internalMutation({
 		} catch (error) {
 			const record = await ctx.db.get(args.recordId);
 			if (!record) throw error;
-			const preparation = await preparationFor(ctx, record._id);
-			if (preparation) await ctx.db.delete(preparation._id);
 			const failure = releaseFailureFor(error);
-			await ctx.db.patch(record._id, {
+			const existing = await preparationFor(ctx, record._id);
+			const preparation =
+				existing ??
+				(await ctx.db.get(
+					await ctx.db.insert("releaseRecordPreparations", {
+						projectId: record.projectId,
+						recordId: record._id,
+						cursor: -1,
+						...emptyReleaseAssessment(),
+						stepPending: true,
+						updatedAt: failure.failedAt,
+					}),
+				));
+			if (!preparation) throw error;
+			const cleanup = await queueTerminalCleanup(ctx, record, preparation, {
 				status: "failed",
 				failure,
 				completedAt: failure.failedAt,
 			});
-			return releaseSummary({ ...record, status: "failed", failure });
+			return releaseSummary(record, cleanup);
 		}
 	},
 });
@@ -865,7 +958,11 @@ export const handoff = query({
 	},
 	returns: v.object({
 		recordId: v.id("releaseRecords"),
-		status: v.union(v.literal("staging"), v.literal("published")),
+		status: v.union(
+			v.literal("staging"),
+			v.literal("published"),
+			v.literal("stale"),
+		),
 		keys: v.array(
 			v.object({ catalogIndex: v.number(), messageId: v.string() }),
 		),
@@ -879,6 +976,23 @@ export const handoff = query({
 			});
 		}
 		await requireViewer(ctx, args.projectId);
+		const projection = await activeProjectionFor(ctx, record.projectId);
+		const navigation = projection
+			? await readyNavigationStateFor(ctx, {
+					projectId: record.projectId,
+					projectionId: projection._id,
+					expectedRowCount: projection.expectedKeyCount,
+				}).catch(() => null)
+			: null;
+		if (
+			(record.status !== "ready" && record.status !== "preparing") ||
+			!projection ||
+			projection._id !== record.projectionId ||
+			!navigation ||
+			(navigation.revision ?? 0) !== record.navigationRevision
+		) {
+			return { recordId: record._id, status: "stale" as const, keys: [] };
+		}
 		const handoff = await ctx.db.get(record.handoffId);
 		if (!handoff || handoff.projectId !== record.projectId) {
 			throw new ConvexError({
