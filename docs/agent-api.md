@@ -106,8 +106,9 @@ into task documents. This workflow needs only `read` and `propose` scopes. It
 never creates an active Locale Binding, writes to Git, opens a pull request, or
 changes the working catalog.
 
-1. Start or resume one complete task with `POST /translation-tasks` and target
-   `{ "kind": "newLocale", "localeCode": "pt" }`.
+1. Start or resume one complete task with `POST /translation-tasks`, target
+   `{ "kind": "newLocale", "localeCode": "pt" }`, and scope
+   `{ "kind": "completeCatalog" }`.
 2. Page its exact Source Snapshot template with
    `GET /translation-tasks/:id?cursor=...&limit=...`.
 3. Submit at most 16 `{ "messageId", "value" }` candidates at a time to
@@ -116,8 +117,8 @@ changes the working catalog.
 4. Review values from the task in
    `/projects/:projectId/proposals/:taskId`. It mounts the same new-Locale
    workbench as the lower-level Portuguese route. Agent values remain awaiting
-   review, corrections replace the current staged candidate, and only
-   human-applied values can finalize.
+   review; corrections append immutable candidate revisions while the newest
+   revision becomes current. Only human-applied values can finalize.
 
 The `/locale-proposals/pt` endpoints remain available as a lower-level
 compatibility interface for clients that need explicit fingerprints,
@@ -272,19 +273,22 @@ basis on the server:
 {
   "clientTaskKey": "checkout-de-polish-1",
   "target": { "kind": "existingLocale", "localeCode": "de" },
-  "messageIds": ["checkout.payButton", "checkout.total"]
+  "scope": {
+    "kind": "selectedMessages",
+    "messageIds": ["checkout.payButton", "checkout.total"]
+  }
 }
 ```
 
-The original top-level `"localeCode": "de"` request remains readable for
-compatibility. New clients should use the explicit target. A new-Locale task
-covers every message in the pinned Source Snapshot, so it deliberately accepts
-no message-id selection:
+The original top-level `"localeCode": "de"` and `"messageIds"` request remains
+readable for compatibility. New clients should use explicit target and scope.
+A new-Locale task covers every message in the pinned Source Snapshot:
 
 ```json
 {
   "clientTaskKey": "portuguese-complete-v1",
-  "target": { "kind": "newLocale", "localeCode": "pt" }
+  "target": { "kind": "newLocale", "localeCode": "pt" },
+  "scope": { "kind": "completeCatalog" }
 }
 ```
 
@@ -301,7 +305,9 @@ Returns a bounded page of the task (`limit` 1–16) and a `nextCursor`, which is
 `null` on the final page. Pass that cursor unchanged until it is `null`.
 Existing-Locale targets come from their frozen selection. New-Locale targets
 page the complete pinned Source template. Each target includes exact Source and
-current target text; a staged new-Locale target also returns `staged: true`.
+current human-applied target text. A new-Locale target also returns its current
+immutable candidate revision, when one exists. Private Snapshot, fingerprint,
+workspace, and Convex-id basis fields are not exposed.
 
 ### `POST /translation-tasks/:id/candidates`
 
@@ -316,13 +322,14 @@ basis facts:
 }
 ```
 
-An exact retry is safe and a correction replaces the current candidate. The
+An exact retry is safe. A correction appends an immutable revision and makes it
+the candidate's current revision. The
 server derives existing-Locale revision idempotency and new-Locale Source
 fingerprints from task-owned evidence. Candidates remain inert until an editor
 reviews them. Existing-Locale review is in Translation Tasks; new-Locale review
-is in the configured Locale Proposal workbench. Existing-Locale tasks can
-accept up to 16 exact current candidates atomically. Edited acceptance,
-rejection, and Intentional Blanks remain individual decisions.
+is in the configured Locale Proposal workbench mounted by the task route. Both
+task kinds can accept up to 16 exact current revisions atomically. Edited
+acceptance, rejection, and Intentional Blanks remain individual decisions.
 
 ### `POST /translation-proposals/:id/candidate-revisions`
 

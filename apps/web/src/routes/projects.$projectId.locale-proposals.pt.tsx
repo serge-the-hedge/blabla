@@ -28,7 +28,7 @@ import {
 	Sparkles,
 	X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
 	PageHeader,
@@ -83,6 +83,9 @@ export function PortugueseLocaleProposalWorkbench({
 	const reviewTaskValue = useMutation(
 		api.agentTranslationProposals.reviewTaskValue,
 	);
+	const acceptTaskCandidates = useMutation(
+		api.agentTranslationProposals.acceptTaskCandidates,
+	);
 	const finalizeForReview = useAction(api.localeProposals.finalizeForReview);
 	const finalizeTask = useAction(api.agentTranslationProposals.finalizeTask);
 	const artifactForReview = useAction(api.localeProposals.artifactForReview);
@@ -94,6 +97,11 @@ export function PortugueseLocaleProposalWorkbench({
 		activeProposalId
 			? {
 					proposalId: convexId<"localeProposals">(activeProposalId),
+					...(taskId
+						? {
+								taskId: convexId<"agentTranslationProposals">(taskId),
+							}
+						: {}),
 					cursor,
 					limit: 16,
 				}
@@ -105,12 +113,25 @@ export function PortugueseLocaleProposalWorkbench({
 	const [error, setError] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
 
+	// A different proposal is a different editing session, even though this
+	// effect only writes local state and the dependency is not read in its body.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset on proposal identity
+	useEffect(() => {
+		setCursor(0);
+		setDrafts({});
+		setBlankReasons({});
+		setBusy(null);
+		setError(null);
+		setNotice(null);
+	}, [activeProposalId]);
+
 	const dirtyItems = useMemo(() => {
 		if (!detail) return [];
 		return detail.messages.flatMap((message) => {
 			const draft = drafts[message.messageId];
-			if (draft === undefined || draft === (message.value?.value ?? ""))
-				return [];
+			const currentValue =
+				message.candidate?.value ?? message.value?.value ?? "";
+			if (draft === undefined || draft === currentValue) return [];
 			if (draft.trim().length === 0) return [];
 			return [
 				{
@@ -124,25 +145,34 @@ export function PortugueseLocaleProposalWorkbench({
 	const visibleAgentCandidates = useMemo(() => {
 		if (!detail) return [];
 		return detail.messages.filter((message) => {
-			const value = message.value?.value;
+			const taskCandidateValue = message.candidate?.value;
+			const legacyAgentValue =
+				!taskId && message.value?.updatedBy.kind === "agent"
+					? message.value.value
+					: undefined;
+			const value = taskCandidateValue ?? legacyAgentValue;
 			return (
-				message.review === null &&
-				message.value?.updatedBy.kind === "agent" &&
+				(message.candidate
+					? message.candidate.review === null
+					: message.review === null) &&
 				value !== undefined &&
 				value.length > 0 &&
 				(drafts[message.messageId] ?? value) === value
 			);
 		});
-	}, [detail, drafts]);
+	}, [detail, drafts, taskId]);
 	const visibleAgentBlanks = useMemo(
 		() =>
 			detail?.messages.some(
 				(message) =>
-					message.review === null &&
-					message.value?.updatedBy.kind === "agent" &&
-					message.value.value.length === 0,
+					(message.candidate?.review === null &&
+						message.candidate.value.length === 0) ||
+					(!taskId &&
+						message.review === null &&
+						message.value?.updatedBy.kind === "agent" &&
+						message.value.value.length === 0),
 			) ?? false,
-		[detail],
+		[detail, taskId],
 	);
 
 	const run = async (label: string, task: () => Promise<void>) => {
@@ -182,12 +212,17 @@ export function PortugueseLocaleProposalWorkbench({
 			);
 		});
 
-	const reviewValue = async (messageId: string, decision: ReviewDecision) => {
+	const reviewValue = async (
+		messageId: string,
+		candidateToken: string,
+		decision: ReviewDecision,
+	) => {
 		if (!activeProposalId) return;
 		if (taskId) {
 			await reviewTaskValue({
 				taskId: convexId<"agentTranslationProposals">(taskId),
 				messageId,
+				candidateToken,
 				decision,
 			});
 			return;
@@ -200,17 +235,38 @@ export function PortugueseLocaleProposalWorkbench({
 		});
 	};
 
-	const decide = (messageId: string, decision: ReviewDecision) =>
+	const decide = (
+		messageId: string,
+		candidateToken: string,
+		decision: ReviewDecision,
+	) =>
 		run(`review:${messageId}`, async () => {
-			await reviewValue(messageId, decision);
+			await reviewValue(messageId, candidateToken, decision);
 			setNotice("Human review recorded.");
 		});
 
 	const acceptVisibleAgentCandidates = () =>
 		run("accept-visible", async () => {
 			if (!activeProposalId || visibleAgentCandidates.length === 0) return;
-			for (const message of visibleAgentCandidates) {
-				await reviewValue(message.messageId, { kind: "accept" });
+			if (taskId) {
+				const candidateRevisionIds = visibleAgentCandidates.flatMap(
+					(message) =>
+						message.candidate ? [message.candidate.revisionId] : [],
+				);
+				if (candidateRevisionIds.length === 0) return;
+				await acceptTaskCandidates({
+					proposalId: convexId<"agentTranslationProposals">(taskId),
+					candidateRevisionIds: candidateRevisionIds.map((revisionId) =>
+						convexId<"agentTranslationCandidateRevisions">(revisionId),
+					),
+				});
+			} else {
+				for (const message of visibleAgentCandidates) {
+					if (!message.value) continue;
+					await reviewValue(message.messageId, message.value.reviewToken, {
+						kind: "accept",
+					});
+				}
 			}
 			const nextCursor = detail?.continueCursor;
 			if (
@@ -250,10 +306,19 @@ export function PortugueseLocaleProposalWorkbench({
 					],
 				});
 			}
-			await reviewValue(message.messageId, {
-				kind: "intentionalBlank",
-				reason,
-			});
+			if (taskId && message.candidate) {
+				await reviewValue(message.messageId, message.candidate.revisionId, {
+					kind: "intentionalBlank",
+					reason,
+				});
+			} else {
+				await reviewStagedValue({
+					projectId: convexProjectId,
+					proposalId: convexId<"localeProposals">(activeProposalId),
+					messageId: message.messageId,
+					decision: { kind: "intentionalBlank", reason },
+				});
+			}
 			setNotice("Intentional Blank recorded with human review.");
 		});
 
@@ -432,10 +497,18 @@ export function PortugueseLocaleProposalWorkbench({
 						</CardHeader>
 					</Card>
 					{detail.messages.map((message) => {
-						const value = message.value?.value ?? "";
+						const value =
+							message.candidate?.value ?? message.value?.value ?? "";
 						const draft = drafts[message.messageId] ?? value;
-						const reviewed = message.review !== null;
-						const agentOwned = message.value?.updatedBy.kind === "agent";
+						const reviewed = message.candidate
+							? message.candidate.review !== null
+							: message.review !== null;
+						const agentOwned =
+							message.candidate !== null ||
+							message.value?.updatedBy.kind === "agent";
+						const reviewToken = taskId
+							? message.candidate?.revisionId
+							: message.value?.reviewToken;
 						return (
 							<Card key={message.messageId}>
 								<CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -525,12 +598,14 @@ export function PortugueseLocaleProposalWorkbench({
 													</Button>
 												) : null}
 											</div>
-											{message.value ? (
+											{reviewToken ? (
 												<div className="flex flex-wrap gap-2">
 													<Button
 														size="sm"
 														onClick={() =>
-															void decide(message.messageId, { kind: "accept" })
+															void decide(message.messageId, reviewToken, {
+																kind: "accept",
+															})
 														}
 														disabled={
 															busy !== null ||
@@ -544,7 +619,7 @@ export function PortugueseLocaleProposalWorkbench({
 														size="sm"
 														variant="secondary"
 														onClick={() =>
-															void decide(message.messageId, {
+															void decide(message.messageId, reviewToken, {
 																kind: "acceptWithEdits",
 																value: draft,
 															})
@@ -563,7 +638,9 @@ export function PortugueseLocaleProposalWorkbench({
 														size="sm"
 														variant="outline"
 														onClick={() =>
-															void decide(message.messageId, { kind: "reject" })
+															void decide(message.messageId, reviewToken, {
+																kind: "reject",
+															})
 														}
 														disabled={
 															busy !== null ||

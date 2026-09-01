@@ -119,6 +119,9 @@ function ProposalDetailRoute() {
 	const reviewTaskValue = useMutation(
 		api.agentTranslationProposals.reviewTaskValue,
 	);
+	const reviewCandidate = useMutation(
+		api.agentTranslationProposals.reviewCandidate,
+	);
 	const acceptTaskCandidates = useMutation(
 		api.agentTranslationProposals.acceptTaskCandidates,
 	);
@@ -129,6 +132,9 @@ function ProposalDetailRoute() {
 	const [error, setError] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
 	const [isBatchAccepting, setIsBatchAccepting] = useState(false);
+	const [reviewingMessageId, setReviewingMessageId] = useState<string | null>(
+		null,
+	);
 	const [isFinalizing, setIsFinalizing] = useState(false);
 
 	if (detail === undefined) {
@@ -201,23 +207,37 @@ function ProposalDetailRoute() {
 	};
 	const decide = async (
 		messageId: string,
+		candidateToken: string,
 		decision:
 			| { kind: "accept" }
 			| { kind: "acceptWithEdits"; value: string }
 			| { kind: "reject"; reason?: string }
 			| { kind: "intentionalBlank"; reason: string },
 	) => {
+		if (isBatchAccepting || reviewingMessageId !== null) return;
 		setError(null);
 		setNotice(null);
+		setReviewingMessageId(messageId);
 		try {
-			await reviewTaskValue({
-				taskId: convexId<"agentTranslationProposals">(proposalId),
-				messageId,
-				decision,
-			});
+			if (proposal.taskScope) {
+				await reviewTaskValue({
+					taskId: convexId<"agentTranslationProposals">(proposalId),
+					messageId,
+					candidateToken,
+					decision,
+				});
+			} else {
+				await reviewCandidate({
+					candidateRevisionId:
+						convexId<"agentTranslationCandidateRevisions">(candidateToken),
+					decision,
+				});
+			}
 			setRejectArmed(null);
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : "Review failed.");
+		} finally {
+			setReviewingMessageId(null);
 		}
 	};
 	const blankReasonFor = (revisionId: string) =>
@@ -378,6 +398,7 @@ function ProposalDetailRoute() {
 					const review = reviews[0];
 					const draft = drafts[revision._id] ?? revision.value;
 					const isReviewed = review !== undefined;
+					const reviewBusy = isBatchAccepting || reviewingMessageId !== null;
 					return (
 						<Card key={candidate._id}>
 							<CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -418,7 +439,7 @@ function ProposalDetailRoute() {
 													[revision._id]: event.target.value,
 												}))
 											}
-											disabled={isReviewed || !canReview}
+											disabled={isReviewed || !canReview || reviewBusy}
 											rows={3}
 										/>
 										<WhitespaceFacts value={draft} />
@@ -432,7 +453,7 @@ function ProposalDetailRoute() {
 													[revision._id]: event.target.value,
 												}))
 											}
-											disabled={isReviewed || !canReview}
+											disabled={isReviewed || !canReview || reviewBusy}
 										/>
 									</div>
 								</div>
@@ -440,10 +461,15 @@ function ProposalDetailRoute() {
 									<Button
 										size="sm"
 										disabled={
-											isReviewed || !canReview || draft !== revision.value
+											isReviewed ||
+											!canReview ||
+											reviewBusy ||
+											draft !== revision.value
 										}
 										onClick={() =>
-											void decide(revision.messageId, { kind: "accept" })
+											void decide(revision.messageId, revision._id, {
+												kind: "accept",
+											})
 										}
 									>
 										<Check data-icon="inline-start" />
@@ -452,9 +478,14 @@ function ProposalDetailRoute() {
 									<Button
 										size="sm"
 										variant="secondary"
-										disabled={isReviewed || !canReview || draft.length === 0}
+										disabled={
+											isReviewed ||
+											!canReview ||
+											reviewBusy ||
+											draft.length === 0
+										}
 										onClick={() =>
-											void decide(revision.messageId, {
+											void decide(revision.messageId, revision._id, {
 												kind: "acceptWithEdits",
 												value: draft,
 											})
@@ -467,9 +498,11 @@ function ProposalDetailRoute() {
 											<Button
 												size="sm"
 												variant="destructive"
-												disabled={isReviewed || !canReview}
+												disabled={isReviewed || !canReview || reviewBusy}
 												onClick={() =>
-													void decide(revision.messageId, { kind: "reject" })
+													void decide(revision.messageId, revision._id, {
+														kind: "reject",
+													})
 												}
 											>
 												<X data-icon="inline-start" />
@@ -478,6 +511,7 @@ function ProposalDetailRoute() {
 											<Button
 												size="sm"
 												variant="ghost"
+												disabled={reviewBusy}
 												onClick={() => setRejectArmed(null)}
 											>
 												Keep
@@ -487,7 +521,7 @@ function ProposalDetailRoute() {
 										<Button
 											size="sm"
 											variant="outline"
-											disabled={isReviewed || !canReview}
+											disabled={isReviewed || !canReview || reviewBusy}
 											onClick={() => setRejectArmed(revision._id)}
 										>
 											Reject
@@ -499,10 +533,11 @@ function ProposalDetailRoute() {
 										disabled={
 											isReviewed ||
 											!canReview ||
+											reviewBusy ||
 											blankReasonFor(revision._id).length === 0
 										}
 										onClick={() =>
-											void decide(revision.messageId, {
+											void decide(revision.messageId, revision._id, {
 												kind: "intentionalBlank",
 												reason: blankReasonFor(revision._id),
 											})

@@ -17,7 +17,6 @@ import {
 	readProposalArtifact,
 	reviewProposalValues,
 	stageProposal,
-	stageTaskCandidates,
 	taskProposalPage,
 	templateProposal,
 } from "./localeProposals";
@@ -45,6 +44,7 @@ type RepositoryAdapterRateLimitName =
 
 const MAX_SNAPSHOT_FILES = 1_000;
 const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024;
+const MAX_TRANSLATION_TASK_PAGE_BYTES = 512 * 1024;
 
 const corsHeaders = {
 	"Access-Control-Allow-Origin": "*",
@@ -180,6 +180,33 @@ function translationTaskTarget(
 		return { kind: target.kind, localeCode };
 	}
 	throw new Error("target.kind must be existingLocale or newLocale.");
+}
+
+function translationTaskMessageIds(
+	body: Record<string, unknown>,
+	target: TranslationTaskTargetInput,
+): string[] {
+	const scope = body.scope;
+	if (scope === undefined) {
+		if (target.kind === "newLocale") return [];
+		if (!isStringArray(body.messageIds)) {
+			throw new Error("messageIds must be an array of strings.");
+		}
+		return body.messageIds;
+	}
+	if (!isRecord(scope)) throw new Error("scope must be an object.");
+	if (target.kind === "newLocale") {
+		if (scope.kind !== "completeCatalog") {
+			throw new Error("A new-Locale task needs completeCatalog scope.");
+		}
+		return [];
+	}
+	if (scope.kind !== "selectedMessages" || !isStringArray(scope.messageIds)) {
+		throw new Error(
+			"An existing-Locale task needs selectedMessages scope with messageIds.",
+		);
+	}
+	return scope.messageIds;
 }
 
 type SnapshotFileInput = { catalogPath: string; content: string };
@@ -1102,6 +1129,7 @@ http.route({
 		try {
 			const body = await jsonObject(request);
 			const target = translationTaskTarget(body);
+			const messageIds = translationTaskMessageIds(body, target);
 			const clientTaskKey = requiredJsonString(body, "clientTaskKey");
 			return agentJson(
 				await withAgent(
@@ -1111,10 +1139,6 @@ http.route({
 					"agentTranslationProposal",
 					async (token, actor) => {
 						if (target.kind === "existingLocale") {
-							const messageIds = body.messageIds;
-							if (!isStringArray(messageIds)) {
-								throw new Error("messageIds must be an array of strings.");
-							}
 							return await ctx.runMutation(
 								internalApi.agentTranslationProposals.createTaskForAgent,
 								{
@@ -1200,6 +1224,40 @@ http.route({
 							cursor,
 							limit,
 						});
+						const candidates = await ctx.runQuery(
+							internalApi.agentTranslationProposals
+								.newLocaleTaskCandidatesForAgent,
+							{
+								token,
+								taskId,
+								messageIds: page.messages.map((message) => message.messageId),
+							},
+						);
+						const candidateByMessageId = new Map(
+							candidates.map(
+								(candidate) => [candidate.messageId, candidate] as const,
+							),
+						);
+						const targets = [];
+						let targetBytes = 0;
+						for (const message of page.messages) {
+							const target = {
+								...message,
+								candidate: candidateByMessageId.get(message.messageId) ?? null,
+							};
+							const bytes = new TextEncoder().encode(
+								JSON.stringify(target),
+							).byteLength;
+							if (bytes > MAX_TRANSLATION_TASK_PAGE_BYTES) {
+								throw new ConvexError({
+									code: "LIMIT_EXCEEDED",
+									message: `Translation Task value “${message.messageId}” exceeds its page envelope.`,
+								});
+							}
+							if (targetBytes + bytes > MAX_TRANSLATION_TASK_PAGE_BYTES) break;
+							targets.push(target);
+							targetBytes += bytes;
+						}
 						return {
 							task: {
 								taskId: descriptor.taskId,
@@ -1209,8 +1267,11 @@ http.route({
 								targetCount: descriptor.targetCount,
 								candidateCount: descriptor.candidateCount,
 							},
-							targets: page.messages,
-							nextCursor: page.continueCursor,
+							targets,
+							nextCursor:
+								targets.length < page.messages.length
+									? cursor + targets.length
+									: page.continueCursor,
 						};
 					},
 				),
@@ -1246,22 +1307,89 @@ http.route({
 					request,
 					["read", "propose"],
 					"agentTranslationProposal",
-					async (token, actor) => {
+					async (token) => {
 						const descriptor = await ctx.runQuery(
 							internalApi.agentTranslationProposals.taskDescriptorForAgent,
 							{ token, taskId },
 						);
 						if (descriptor.kind === "newLocale") {
-							const summary = await stageTaskCandidates(ctx, actor, {
-								proposalId: descriptor.localeProposalId,
-								items: submitted,
+							const context = await ctx.runQuery(
+								internalApi.agentTranslationProposals
+									.newLocaleTaskSubmissionContext,
+								{
+									token,
+									taskId,
+									messageIds: submitted.map((item) => item.messageId),
+								},
+							);
+							const byMessageId = new Map(
+								context.map((item) => [item.messageId, item] as const),
+							);
+							const existingResults = new Map<
+								string,
+								{
+									candidateId: Id<"agentTranslationCandidates">;
+									revisionId: Id<"agentTranslationCandidateRevisions">;
+									revision: number;
+									status: "open";
+								}
+							>();
+							const items = (
+								await Promise.all(
+									submitted.map(async (item) => {
+										const target = byMessageId.get(item.messageId);
+										if (!target) {
+											throw new Error(`Unknown task key: ${item.messageId}.`);
+										}
+										if (target.currentCandidate?.value === item.value) {
+											existingResults.set(item.messageId, {
+												candidateId: target.currentCandidate.candidateId,
+												revisionId: target.currentCandidate.revisionId,
+												revision: target.currentCandidate.revision,
+												status: "open",
+											});
+											return null;
+										}
+										return {
+											messageId: item.messageId,
+											value: item.value,
+											clientRevisionKey: `task-v1:${await sha256Hex(`${taskId}\u0000${item.messageId}\u0000${item.value}\u0000${target.currentRevision}`)}`,
+											expectedCandidateRevision: target.currentRevision,
+											basis: target.basis,
+										};
+									}),
+								)
+							).filter((item) => item !== null);
+							const created =
+								items.length === 0
+									? null
+									: await ctx.runMutation(
+											internalApi.agentTranslationProposals.submitRevisions,
+											{ token, proposalId: taskId, items },
+										);
+							const createdResults = new Map(
+								items.map(
+									(item, index) =>
+										[item.messageId, created?.revisions[index]] as const,
+								),
+							);
+							const revisions = submitted.map((item) => {
+								const result =
+									existingResults.get(item.messageId) ??
+									createdResults.get(item.messageId);
+								if (!result) {
+									throw new Error(
+										`Candidate result missing: ${item.messageId}.`,
+									);
+								}
+								return result;
 							});
 							return {
+								revisions,
 								candidates: submitted.map((item) => ({
 									messageId: item.messageId,
 									status: "awaitingReview" as const,
 								})),
-								progress: summary.progress,
 							};
 						}
 						const context = await ctx.runQuery(
