@@ -17,6 +17,7 @@ import {
 	applyAgentTargetValue,
 	MAX_CATALOG_WORKSPACE_VALUE_HEADS,
 } from "./catalogWorkspace";
+import { readyNavigationStateFor } from "./catalogWorkspaceNavigation";
 import { assertTargetValueContract } from "./contractTransforms";
 import { type HumanActor, now, sha256Hex } from "./lib";
 import { requireEditor, requireViewer } from "./permissions";
@@ -39,6 +40,9 @@ const MAX_CONTEXT_LOCALES = 20;
 const MAX_CONTEXT_PAIRS = 128;
 const MAX_DISCOVERY_RESULTS = 50;
 const MAX_DISCOVERY_RESPONSE_BYTES = 512 * 1024;
+const MAX_WORK_QUEUE_ITEMS = 16;
+const MAX_WORK_QUEUE_SCAN_ROWS = 64;
+const MAX_WORK_QUEUE_RESPONSE_BYTES = 768 * 1024;
 const MAX_TASK_TARGETS = 32;
 const MAX_TASK_TITLE_BYTES = 256;
 
@@ -85,6 +89,25 @@ const reviewDecisionValidator = v.union(
 	v.object({ kind: v.literal("intentionalBlank"), reason: v.string() }),
 );
 
+const translationWorkReasonValidator = v.union(
+	v.literal("missing"),
+	v.literal("sourceIdentical"),
+	v.literal("sameKeyRepeat"),
+	v.literal("stale"),
+);
+
+export type TranslationWorkReason =
+	| "missing"
+	| "sourceIdentical"
+	| "sameKeyRepeat"
+	| "stale";
+
+type TranslationWorkCursor = {
+	projectionId: Id<"catalogProjections">;
+	catalogIndex: number;
+	targetIndex: number;
+};
+
 const taskBasisValidator = v.object({
 	kind: v.literal("catalogWorkspace"),
 	projectionId: v.id("catalogProjections"),
@@ -109,6 +132,20 @@ const taskTargetValidator = v.object({
 	targetCatalogPath: v.string(),
 	basis: taskBasisValidator,
 	createdAt: v.number(),
+});
+
+const translationWorkPageValidator = v.object({
+	projectionId: v.id("catalogProjections"),
+	items: v.array(
+		v.object({
+			messageId: v.string(),
+			localeCode: v.string(),
+			reasons: v.array(translationWorkReasonValidator),
+			sourceValue: v.string(),
+			targetValue: v.string(),
+		}),
+	),
+	nextCursor: v.union(v.string(), v.null()),
 });
 
 type ProposalTarget =
@@ -159,6 +196,100 @@ function assertNonNegativeInteger(value: number, name: string): void {
 			message: `${name} must be a non-negative integer.`,
 		});
 	}
+}
+
+const ALL_TRANSLATION_WORK_REASONS = [
+	"missing",
+	"sourceIdentical",
+	"sameKeyRepeat",
+	"stale",
+] as const satisfies readonly TranslationWorkReason[];
+
+function translationWorkReasons(
+	digest: Doc<"catalogWorkspaceNavigationRows">,
+	target: Doc<"catalogWorkspaceNavigationRows">["targets"][number],
+): TranslationWorkReason[] {
+	if (target.valueState === "waiting") return ["missing"];
+	if (target.valueState === "stale") return ["stale"];
+	if (target.confirmedGitContent || target.touched) return [];
+
+	const reasons: TranslationWorkReason[] = [];
+	if (
+		target.gitValueFingerprint !== undefined &&
+		target.gitValueFingerprint === digest.source.gitValueFingerprint
+	) {
+		reasons.push("sourceIdentical");
+	}
+	if (
+		target.valueFingerprint !== undefined &&
+		digest.targets.some(
+			(other) =>
+				other.localeId !== target.localeId &&
+				other.valueFingerprint === target.valueFingerprint,
+		)
+	) {
+		reasons.push("sameKeyRepeat");
+	}
+	return reasons;
+}
+
+function decodeTranslationWorkCursor(
+	cursor: string,
+): TranslationWorkCursor | null {
+	if (cursor.length === 0) return null;
+	const match = /^v1\.([^.]+)\.(\d+)\.(\d+)$/.exec(cursor);
+	if (!match) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Translation work pagination cursor is invalid.",
+		});
+	}
+	const catalogIndex = Number(match[2]);
+	const targetIndex = Number(match[3]);
+	if (
+		!Number.isSafeInteger(catalogIndex) ||
+		catalogIndex < 0 ||
+		!Number.isSafeInteger(targetIndex) ||
+		targetIndex < 0
+	) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Translation work pagination cursor is invalid.",
+		});
+	}
+	return {
+		projectionId: match[1] as Id<"catalogProjections">,
+		catalogIndex,
+		targetIndex,
+	};
+}
+
+function encodeTranslationWorkCursor(cursor: TranslationWorkCursor): string {
+	return `v1.${cursor.projectionId}.${cursor.catalogIndex}.${cursor.targetIndex}`;
+}
+
+function nextTranslationWorkCursor(
+	rows: readonly Doc<"catalogWorkspaceNavigationRows">[],
+	rowIndex: number,
+	targetIndex: number,
+	projectionId: Id<"catalogProjections">,
+): string | null {
+	const row = rows[rowIndex];
+	if (row && targetIndex + 1 < row.targets.length) {
+		return encodeTranslationWorkCursor({
+			projectionId,
+			catalogIndex: row.catalogIndex,
+			targetIndex: targetIndex + 1,
+		});
+	}
+	const nextRow = rows[rowIndex + 1];
+	return nextRow
+		? encodeTranslationWorkCursor({
+				projectionId,
+				catalogIndex: nextRow.catalogIndex,
+				targetIndex: 0,
+			})
+		: null;
 }
 
 async function authenticate(
@@ -975,6 +1106,188 @@ export const workspaceSearch = internalQuery({
 	},
 });
 
+/** Exhaustive, low-read discovery for translation work. The Navigation Index
+ * owns ordering and classification; this query scans only a bounded index
+ * window and hydrates full Source/target values for matches. The cursor pins
+ * the exact projection so a Baseline change cannot silently splice two runs. */
+export const workspaceWorkPage = internalQuery({
+	args: {
+		token: v.string(),
+		cursor: v.string(),
+		limit: v.number(),
+		localeCode: v.optional(v.string()),
+		reasons: v.optional(v.array(translationWorkReasonValidator)),
+		q: v.optional(v.string()),
+	},
+	returns: translationWorkPageValidator,
+	handler: async (ctx, args) => {
+		const token = await authenticate(ctx, args.token, "search");
+		if (
+			!Number.isSafeInteger(args.limit) ||
+			args.limit < 1 ||
+			args.limit > MAX_WORK_QUEUE_ITEMS
+		) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: `Translation work pages contain 1–${MAX_WORK_QUEUE_ITEMS} items.`,
+			});
+		}
+		const requestedReasons = args.reasons ?? [...ALL_TRANSLATION_WORK_REASONS];
+		const reasonSet = new Set<TranslationWorkReason>();
+		for (const reason of requestedReasons) {
+			if (reasonSet.has(reason)) {
+				throw new ConvexError({
+					code: "VALIDATION",
+					message: "Translation work reasons must be unique.",
+				});
+			}
+			reasonSet.add(reason);
+		}
+		if (reasonSet.size === 0) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "At least one translation work reason is required.",
+			});
+		}
+
+		const projection = await activeProjectionFor(ctx, token.projectId);
+		if (!projection) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "No active Baseline Catalog is available for this project.",
+			});
+		}
+		await readyNavigationStateFor(ctx, {
+			projectId: token.projectId,
+			projectionId: projection._id,
+			expectedRowCount: projection.expectedKeyCount,
+		});
+		const decodedCursor = decodeTranslationWorkCursor(args.cursor);
+		if (decodedCursor && decodedCursor.projectionId !== projection._id) {
+			throw new ConvexError({
+				code: "STALE_BASIS",
+				message:
+					"The Baseline changed while translation work was being paged; restart from the first page.",
+			});
+		}
+		const cursor: TranslationWorkCursor = decodedCursor ?? {
+			projectionId: projection._id,
+			catalogIndex: 0,
+			targetIndex: 0,
+		};
+		const rows = await ctx.db
+			.query("catalogWorkspaceNavigationRows")
+			.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
+				q
+					.eq("projectId", token.projectId)
+					.eq("projectionId", projection._id)
+					.gte("catalogIndex", cursor.catalogIndex),
+			)
+			.take(MAX_WORK_QUEUE_SCAN_ROWS + 1);
+		const pageRows = rows.slice(0, MAX_WORK_QUEUE_SCAN_ROWS);
+		const needle = args.q?.trim().toLocaleLowerCase() ?? "";
+		const items: Array<{
+			messageId: string;
+			localeCode: string;
+			reasons: TranslationWorkReason[];
+			sourceValue: string;
+			targetValue: string;
+		}> = [];
+
+		for (let rowIndex = 0; rowIndex < pageRows.length; rowIndex += 1) {
+			const row = pageRows[rowIndex];
+			if (!row) continue;
+			const targetStart =
+				row.catalogIndex === cursor.catalogIndex ? cursor.targetIndex : 0;
+			if (
+				targetStart >= row.targets.length &&
+				row.catalogIndex === cursor.catalogIndex
+			) {
+				throw new ConvexError({
+					code: "VALIDATION",
+					message: "Translation work pagination cursor is invalid.",
+				});
+			}
+			if (needle && !row.searchCorpus.some((value) => value.includes(needle))) {
+				continue;
+			}
+			for (
+				let targetIndex = targetStart;
+				targetIndex < row.targets.length;
+				targetIndex += 1
+			) {
+				const target = row.targets[targetIndex];
+				if (
+					!target ||
+					(args.localeCode && target.localeCode !== args.localeCode)
+				) {
+					continue;
+				}
+				const reasons = translationWorkReasons(row, target).filter((reason) =>
+					reasonSet.has(reason),
+				);
+				if (reasons.length === 0) continue;
+				const current = await currentWorkspaceTarget(
+					ctx,
+					token.projectId,
+					row.messageId,
+					target.localeId,
+				);
+				const item = {
+					messageId: row.messageId,
+					localeCode: target.localeCode,
+					reasons,
+					sourceValue: current.source.value,
+					targetValue: current.value,
+				};
+				if (byteLength([...items, item]) > MAX_WORK_QUEUE_RESPONSE_BYTES) {
+					if (items.length === 0) {
+						throw new ConvexError({
+							code: "LIMIT_EXCEEDED",
+							message:
+								"One translation work item exceeds the response envelope.",
+						});
+					}
+					return {
+						projectionId: projection._id,
+						items,
+						nextCursor: encodeTranslationWorkCursor({
+							projectionId: projection._id,
+							catalogIndex: row.catalogIndex,
+							targetIndex,
+						}),
+					};
+				}
+				items.push(item);
+				if (items.length === args.limit) {
+					return {
+						projectionId: projection._id,
+						items,
+						nextCursor: nextTranslationWorkCursor(
+							rows,
+							rowIndex,
+							targetIndex,
+							projection._id,
+						),
+					};
+				}
+			}
+		}
+		const overflow = rows[MAX_WORK_QUEUE_SCAN_ROWS];
+		return {
+			projectionId: projection._id,
+			items,
+			nextCursor: overflow
+				? encodeTranslationWorkCursor({
+						projectionId: projection._id,
+						catalogIndex: overflow.catalogIndex,
+						targetIndex: 0,
+					})
+				: null,
+		};
+	},
+});
+
 function assertBasisMatches(
 	input: CandidateRevisionInput,
 	current: Awaited<ReturnType<typeof currentWorkspaceTarget>>,
@@ -1639,6 +1952,123 @@ async function completedProposalStatus(
 	}
 	return accepted > 0 ? "accepted" : "rejected";
 }
+
+/** Accept a bounded set of exact candidates from one existing-Locale task in a
+ * single transaction. The batch is deliberately exact-only: edits, rejection,
+ * and Intentional Blanks remain individual human decisions. Any stale member
+ * aborts the whole batch, so the workbench never reports a partially accepted
+ * click. */
+export const acceptTaskCandidates = mutation({
+	args: {
+		proposalId: v.id("agentTranslationProposals"),
+		candidateRevisionIds: v.array(v.id("agentTranslationCandidateRevisions")),
+	},
+	returns: v.object({
+		accepted: v.number(),
+		status: v.union(
+			v.literal("open"),
+			v.literal("accepted"),
+			v.literal("rejected"),
+		),
+	}),
+	handler: async (ctx, args) => {
+		if (
+			args.candidateRevisionIds.length === 0 ||
+			args.candidateRevisionIds.length > MAX_SUBMISSION_ITEMS
+		) {
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message: `An exact-acceptance batch needs 1–${MAX_SUBMISSION_ITEMS} candidates.`,
+			});
+		}
+		if (
+			new Set(args.candidateRevisionIds).size !==
+			args.candidateRevisionIds.length
+		) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "An exact-acceptance batch repeats a candidate revision.",
+			});
+		}
+		const proposal = await ctx.db.get(args.proposalId);
+		if (
+			!proposal ||
+			proposal.taskScope === undefined ||
+			proposal.target.kind !== "catalogWorkspace"
+		) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Existing-Locale Translation Task not found.",
+			});
+		}
+		const { userId } = await requireEditor(ctx, proposal.projectId);
+		let accepted = 0;
+		for (const candidateRevisionId of args.candidateRevisionIds) {
+			const revision = await ctx.db.get(candidateRevisionId);
+			if (
+				!revision ||
+				revision.proposalId !== proposal._id ||
+				revision.localeId === undefined ||
+				revision.basis.kind !== "catalogWorkspace"
+			) {
+				throw new ConvexError({
+					code: "NOT_FOUND",
+					message: "Task candidate revision not found.",
+				});
+			}
+			const candidate = await ctx.db.get(revision.candidateId);
+			if (!candidate || candidate.latestRevisionId !== revision._id) {
+				throw new ConvexError({
+					code: "STALE_BASIS",
+					message: "Only current candidate revisions can be batch accepted.",
+				});
+			}
+			const existingReview = await ctx.db
+				.query("agentTranslationCandidateReviews")
+				.withIndex("by_revision", (q) => q.eq("revisionId", revision._id))
+				.unique();
+			if (existingReview) {
+				if (existingReview.decision.kind !== "accept") {
+					throw new ConvexError({
+						code: "BAD_STATE",
+						message:
+							"A task candidate already has a different review decision.",
+					});
+				}
+				continue;
+			}
+			const valueFingerprint = await sha256Hex(revision.value);
+			await applyAgentTargetValue(ctx, {
+				projectId: proposal.projectId,
+				messageId: revision.messageId,
+				localeId: revision.localeId,
+				value: revision.value,
+				expectedProjectionId: revision.basis.projectionId,
+				expectedSnapshotId: revision.basis.snapshotId,
+				expectedGitValueFingerprint: revision.basis.gitValueFingerprint,
+				expectedGitValueRevision: revision.basis.gitValueRevision,
+				expectedWorkspaceRevision: revision.basis.workspaceRevision,
+				expectedSourceFingerprint: revision.basis.sourceFingerprint,
+				actor: { kind: "user", id: userId },
+			});
+			await ctx.db.insert("agentTranslationCandidateReviews", {
+				projectId: proposal.projectId,
+				proposalId: proposal._id,
+				candidateId: candidate._id,
+				revisionId: revision._id,
+				decision: { kind: "accept" },
+				reviewer: { kind: "user", id: userId },
+				finalValue: revision.value,
+				finalValueFingerprint: valueFingerprint,
+				createdAt: now(),
+			});
+			accepted += 1;
+		}
+		const status = await completedProposalStatus(ctx, proposal._id);
+		await ctx.db.patch(proposal._id, { status, updatedAt: now() });
+		return { accepted, status };
+	},
+});
 
 export const reviewCandidate = mutation({
 	args: {

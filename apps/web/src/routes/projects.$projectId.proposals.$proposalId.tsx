@@ -61,6 +61,7 @@ function CandidateReviewContext({ revisionId }: { revisionId: string }) {
 						</Badge>
 					</div>
 					<p className="whitespace-pre-wrap text-sm">{context.source.value}</p>
+					<WhitespaceFacts value={context.source.value} />
 				</div>
 				<div className="rounded-md border bg-muted/20 p-3">
 					<div className="mb-1 flex flex-wrap items-center gap-2 font-medium text-muted-foreground text-xs uppercase tracking-wide">
@@ -75,6 +76,7 @@ function CandidateReviewContext({ revisionId }: { revisionId: string }) {
 					<p className="whitespace-pre-wrap text-sm">
 						{context.target.value || "No value yet"}
 					</p>
+					<WhitespaceFacts value={context.target.value} />
 					<code className="mt-2 block break-all text-[11px] text-muted-foreground">
 						{context.target.catalogPath}
 					</code>
@@ -91,6 +93,45 @@ function CandidateReviewContext({ revisionId }: { revisionId: string }) {
 				) : null}
 			</div>
 		</div>
+	);
+}
+
+function whitespaceLabel(value: string, edge: "leading" | "trailing") {
+	const whitespace =
+		edge === "leading"
+			? /^[\t ]+/.exec(value)?.[0]
+			: /[\t ]+$/.exec(value)?.[0];
+	if (!whitespace) return null;
+	const spaces = [...whitespace].filter(
+		(character) => character === " ",
+	).length;
+	const tabs = whitespace.length - spaces;
+	const parts = [
+		spaces > 0 ? `${spaces} space${spaces === 1 ? "" : "s"}` : null,
+		tabs > 0 ? `${tabs} tab${tabs === 1 ? "" : "s"}` : null,
+	].filter((part): part is string => part !== null);
+	return `${edge}: ${parts.join(", ")}`;
+}
+
+function WhitespaceFacts({ value }: { value: string }) {
+	const lineBreaks = value.match(/\n/g)?.length ?? 0;
+	const facts = [
+		whitespaceLabel(value, "leading"),
+		whitespaceLabel(value, "trailing"),
+		lineBreaks > 0
+			? `${lineBreaks} line break${lineBreaks === 1 ? "" : "s"}`
+			: null,
+	].filter((fact): fact is string => fact !== null);
+	if (facts.length === 0) return null;
+	return (
+		<fieldset className="mt-2 flex flex-wrap gap-1">
+			<legend className="sr-only">Whitespace facts</legend>
+			{facts.map((fact) => (
+				<Badge key={fact} variant="outline" className="font-mono normal-case">
+					{fact}
+				</Badge>
+			))}
+		</fieldset>
 	);
 }
 
@@ -115,10 +156,15 @@ function ProposalDetailRoute() {
 	const reviewCandidate = useMutation(
 		api.agentTranslationProposals.reviewCandidate,
 	);
+	const acceptTaskCandidates = useMutation(
+		api.agentTranslationProposals.acceptTaskCandidates,
+	);
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
 	const [blankReasons, setBlankReasons] = useState<Record<string, string>>({});
 	const [rejectArmed, setRejectArmed] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const [notice, setNotice] = useState<string | null>(null);
+	const [isBatchAccepting, setIsBatchAccepting] = useState(false);
 
 	if (detail === undefined) {
 		return (
@@ -141,6 +187,40 @@ function ProposalDetailRoute() {
 	const canReview =
 		proposal.status === "open" &&
 		(project?.role === "owner" || project?.role === "editor");
+	const exactBatchRevisionIds = detail.candidates
+		.flatMap(({ revision, reviews }) =>
+			revision &&
+			reviews.length === 0 &&
+			(drafts[revision._id] === undefined ||
+				drafts[revision._id] === revision.value) &&
+			(blankReasons[revision._id]?.trim().length ?? 0) === 0
+				? [revision._id]
+				: [],
+		)
+		.slice(0, 16);
+	const acceptExactBatch = async () => {
+		if (!canReview || exactBatchRevisionIds.length === 0 || isBatchAccepting) {
+			return;
+		}
+		setError(null);
+		setNotice(null);
+		setIsBatchAccepting(true);
+		try {
+			const result = await acceptTaskCandidates({
+				proposalId: convexId<"agentTranslationProposals">(proposal._id),
+				candidateRevisionIds: exactBatchRevisionIds.map((revisionId) =>
+					convexId<"agentTranslationCandidateRevisions">(revisionId),
+				),
+			});
+			setNotice(
+				`${result.accepted} exact candidate${result.accepted === 1 ? "" : "s"} accepted.`,
+			);
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : "Batch review failed.");
+		} finally {
+			setIsBatchAccepting(false);
+		}
+	};
 	const decide = async (
 		revisionId: string,
 		decision:
@@ -150,6 +230,7 @@ function ProposalDetailRoute() {
 			| { kind: "intentionalBlank"; reason: string },
 	) => {
 		setError(null);
+		setNotice(null);
 		try {
 			await reviewCandidate({
 				candidateRevisionId:
@@ -202,13 +283,33 @@ function ProposalDetailRoute() {
 					<AlertDescription>{error}</AlertDescription>
 				</Alert>
 			) : null}
+			{notice ? (
+				<Alert className="mb-4">
+					<AlertDescription>{notice}</AlertDescription>
+				</Alert>
+			) : null}
 			{taskScope && proposal.status === "open" ? (
 				<Alert className="mb-4">
-					<AlertDescription>
-						This task has a frozen {taskScope.localeCode} scope. Give an agent
-						with this project’s read/propose token the task id{" "}
-						<code className="break-all">{proposal._id}</code>. Agent candidates
-						remain inert until you decide them below.
+					<AlertDescription className="flex flex-wrap items-center gap-3">
+						<span className="min-w-0 flex-1">
+							This task has a frozen {taskScope.localeCode} scope. Give an agent
+							with this project’s read/propose token the task id{" "}
+							<code className="break-all">{proposal._id}</code>. Agent
+							candidates remain inert until you decide them below.
+						</span>
+						{exactBatchRevisionIds.length > 0 ? (
+							<Button
+								type="button"
+								size="sm"
+								disabled={!canReview || isBatchAccepting}
+								onClick={() => void acceptExactBatch()}
+							>
+								<Check data-icon="inline-start" />
+								{isBatchAccepting
+									? "Accepting…"
+									: `Accept next ${exactBatchRevisionIds.length} exact`}
+							</Button>
+						) : null}
 					</AlertDescription>
 				</Alert>
 			) : null}
@@ -271,6 +372,7 @@ function ProposalDetailRoute() {
 										<p className="whitespace-pre-wrap text-sm">
 											{revision.value}
 										</p>
+										<WhitespaceFacts value={revision.value} />
 									</div>
 									<div className="rounded-md border p-3">
 										<div className="mb-1 font-medium text-muted-foreground text-xs uppercase tracking-wide">
@@ -288,6 +390,7 @@ function ProposalDetailRoute() {
 											disabled={isReviewed || !canReview}
 											rows={3}
 										/>
+										<WhitespaceFacts value={draft} />
 										<Input
 											aria-label={`Reason for intentionally blank ${revision.messageId}`}
 											placeholder="Reason for an intentional blank"

@@ -49,6 +49,10 @@ intentionally one-time visible.
 1. Discover the project with `GET /projects/current`.
 2. Search the accepted Catalog Workspace with `GET /workspace/search`, using
    `q`, `localeCode`, and `limit` to keep the working set small.
+   For an exhaustive repair run, page `GET /workspace/work` instead; its
+   projection-pinned cursor covers missing, Source-identical, same-key repeated,
+   and stale target values without treating equal text on unrelated keys as a
+   problem.
    To audit imported baseline state, read the conservative human-confirmation
    plan with `GET /workspace/ordinary-confirmations`; this endpoint never
    confirms values itself.
@@ -176,6 +180,38 @@ tables. Query params are `q`, `localeCode`, and `limit` (maximum 50). Each
 result includes the message id, source facts, current target value, and the
 target `basis` needed by a candidate revision.
 
+### `GET /workspace/work`
+
+Pages the exhaustive translation work queue in Catalog Order. Query parameters
+are `cursor`, `limit` (maximum 16), optional `localeCode`, optional `q`, and one
+or more repeated `reason` parameters:
+
+- `missing`: the target has no decided value;
+- `sourceIdentical`: untouched imported target content equals Source;
+- `sameKeyRepeat`: two target Locales of the same key carry equal untouched
+  imported content;
+- `stale`: a previously confirmed value's Source Contract changed.
+
+Omitting `reason` includes all four. Each item contains exact Source and target
+strings plus every applicable reason. The opaque `nextCursor` is `null` at the
+end; pass a non-null cursor back unchanged. It is pinned to the active Catalog
+Projection, so a Baseline change returns `STALE_BASIS` instead of combining two
+catalog versions. The queue scans only a bounded Navigation Index range and
+hydrates full values only for matches.
+
+This is the discovery seam for claims such as “all missing translations.” Use
+`GET /workspace/search` for open-ended terminology and similar-key lookup. A
+queue item remains evidence of work to inspect, not permission to overwrite it;
+the agent still submits an inert Translation Task candidate for human review.
+
+For a complete repair run, page one `localeCode` at a time. Create one
+Translation Task from each non-empty page, use `POST /workspace/context` to read
+the same keys across the established Locales, and submit candidates to that
+task. Do not interleave human acceptance with the initial discovery pass. After
+review, restart the queue from its first page and require an empty result before
+claiming the selected reasons are exhausted; this catches work invalidated or
+introduced while the run was open.
+
 ### `GET /workspace/ordinary-confirmations`
 
 Returns the `ordinary-v1` batch-confirmation preview for the accepted Baseline.
@@ -266,7 +302,9 @@ The endpoint derives a deterministic idempotency key from the task, key, value,
 and expected revision. An exact retry is safe. Corrections create a new
 immutable candidate revision. Candidates remain inert until an editor accepts,
 edits and accepts, rejects, or records an Intentional Blank in Translation
-Tasks.
+Tasks. The task workbench can accept up to 16 current exact candidates in one
+atomic batch. Edited acceptance, rejection, and Intentional Blanks remain
+individual decisions.
 
 ### `POST /translation-proposals/:id/candidate-revisions`
 
