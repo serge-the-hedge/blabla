@@ -743,7 +743,7 @@ http.route({
 									captureByteLength: new TextEncoder().encode(captureContent)
 										.byteLength,
 									appliedCount: delivery.applied.length,
-									skipped: delivery.skipped,
+									skippedCount: delivery.skipped.length,
 								},
 							);
 						} catch (error) {
@@ -1117,26 +1117,65 @@ http.route({
 						const byMessageId = new Map(
 							context.map((item) => [item.messageId, item] as const),
 						);
-						const items = await Promise.all(
-							submitted.map(async (item) => {
-								const target = byMessageId.get(item.messageId);
-								if (!target) {
-									throw new Error(`Unknown task key: ${item.messageId}.`);
-								}
-								return {
-									messageId: item.messageId,
-									localeId: target.localeId,
-									value: item.value,
-									clientRevisionKey: `task-v1:${await sha256Hex(`${taskId}\u0000${item.messageId}\u0000${item.value}`)}`,
-									expectedCandidateRevision: target.currentRevision,
-									basis: target.basis,
-								};
-							}),
+						const existingResults = new Map<
+							string,
+							{
+								candidateId: Id<"agentTranslationCandidates">;
+								revisionId: Id<"agentTranslationCandidateRevisions">;
+								revision: number;
+								status: "open";
+							}
+						>();
+						const items = (
+							await Promise.all(
+								submitted.map(async (item) => {
+									const target = byMessageId.get(item.messageId);
+									if (!target) {
+										throw new Error(`Unknown task key: ${item.messageId}.`);
+									}
+									if (target.currentCandidate?.value === item.value) {
+										existingResults.set(item.messageId, {
+											candidateId: target.currentCandidate.candidateId,
+											revisionId: target.currentCandidate.revisionId,
+											revision: target.currentCandidate.revision,
+											status: "open",
+										});
+										return null;
+									}
+									return {
+										messageId: item.messageId,
+										localeId: target.localeId,
+										value: item.value,
+										clientRevisionKey: `task-v1:${await sha256Hex(`${taskId}\u0000${item.messageId}\u0000${item.value}\u0000${target.currentRevision}`)}`,
+										expectedCandidateRevision: target.currentRevision,
+										basis: target.basis,
+									};
+								}),
+							)
+						).filter((item) => item !== null);
+						const created =
+							items.length === 0
+								? null
+								: await ctx.runMutation(
+										internalApi.agentTranslationProposals.submitRevisions,
+										{ token, proposalId: taskId, items },
+									);
+						const createdResults = new Map(
+							items.map(
+								(item, index) =>
+									[item.messageId, created?.revisions[index]] as const,
+							),
 						);
-						return await ctx.runMutation(
-							internalApi.agentTranslationProposals.submitRevisions,
-							{ token, proposalId: taskId, items },
-						);
+						const revisions = submitted.map((item) => {
+							const result =
+								existingResults.get(item.messageId) ??
+								createdResults.get(item.messageId);
+							if (!result) {
+								throw new Error(`Candidate result missing: ${item.messageId}.`);
+							}
+							return result;
+						});
+						return { revisions };
 					},
 				),
 			);

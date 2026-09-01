@@ -750,6 +750,15 @@ export const taskSubmissionContext = internalQuery({
 			localeId: v.id("locales"),
 			basis: taskBasisValidator,
 			currentRevision: v.number(),
+			currentCandidate: v.union(
+				v.object({
+					candidateId: v.id("agentTranslationCandidates"),
+					revisionId: v.id("agentTranslationCandidateRevisions"),
+					revision: v.number(),
+					value: v.string(),
+				}),
+				v.null(),
+			),
 		}),
 	),
 	handler: async (ctx, args) => {
@@ -798,11 +807,29 @@ export const taskSubmissionContext = internalQuery({
 						.eq("localeId", target.localeId),
 				)
 				.unique();
+			const currentCandidate = candidate?.latestRevisionId
+				? await ctx.db.get(candidate.latestRevisionId)
+				: null;
+			if (candidate && !currentCandidate) {
+				throw new ConvexError({
+					code: "INTEGRITY",
+					message: "Translation Task candidate lost its current revision.",
+				});
+			}
 			result.push({
 				messageId,
 				localeId: target.localeId,
 				basis: target.basis,
 				currentRevision: candidate?.currentRevision ?? 0,
+				currentCandidate:
+					candidate && currentCandidate
+						? {
+								candidateId: candidate._id,
+								revisionId: currentCandidate._id,
+								revision: currentCandidate.revision,
+								value: currentCandidate.value,
+							}
+						: null,
 			});
 		}
 		return result;

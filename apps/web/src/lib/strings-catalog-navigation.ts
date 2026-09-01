@@ -110,6 +110,30 @@ export type StringsNavigationRead = {
 	keys?: readonly StringsNavigationDigest[];
 };
 
+/** Existing-locale tasks require one Locale target shared by every selected
+ * key. Preserve the first key's Locale order so the chooser remains stable. */
+export function translationTaskLocales(
+	digests: readonly StringsNavigationDigest[],
+	selectedMessageIds: ReadonlySet<string>,
+): Array<{ localeId: string; localeCode: string }> {
+	if (selectedMessageIds.size === 0) return [];
+	const selected = digests.filter((digest) =>
+		selectedMessageIds.has(digest.messageId),
+	);
+	if (selected.length !== selectedMessageIds.size) return [];
+	const [first, ...rest] = selected;
+	if (!first) return [];
+	return first.targets
+		.filter((target) =>
+			rest.every((digest) =>
+				digest.targets.some(
+					(candidate) => candidate.localeId === target.localeId,
+				),
+			),
+		)
+		.map(({ localeId, localeCode }) => ({ localeId, localeCode }));
+}
+
 function matchesDigestQuery(digest: StringsNavigationDigest, query: string) {
 	return digest.searchCorpus.some((corpusEntry) => corpusEntry.includes(query));
 }

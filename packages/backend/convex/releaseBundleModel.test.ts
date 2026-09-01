@@ -34,18 +34,22 @@ function bundle(
 
 describe("Release Bundle delivery tree", () => {
 	test("reproduces a no-op delivery byte for byte", () => {
+		const nonCanonicalGerman =
+			'{"@@locale":"de", "farewell":"Tschüss", "greeting":"Hallo"}\n';
 		const result = applyReleaseBundleToDeliveryTree(bundle([]), [
 			{ catalogPath: "en.arb", content: source },
-			{ catalogPath: "de.arb", content: german },
+			{ catalogPath: "de.arb", content: nonCanonicalGerman },
 		]);
 		expect(result.files).toEqual([
 			{ catalogPath: "en.arb", content: source },
-			{ catalogPath: "de.arb", content: german },
+			{ catalogPath: "de.arb", content: nonCanonicalGerman },
 		]);
 		expect(result.applied).toEqual([]);
 	});
 
 	test("applies a target change over target drift when Source is unchanged", () => {
+		const drifted =
+			'{"@@locale":"de", "farewell":"Tschüss", "greeting":"Servus"}\n';
 		const result = applyReleaseBundleToDeliveryTree(
 			bundle([
 				{
@@ -65,15 +69,46 @@ describe("Release Bundle delivery tree", () => {
 			]),
 			[
 				{ catalogPath: "en.arb", content: source },
-				{
-					catalogPath: "de.arb",
-					content: german.replace("Hallo", "Servus"),
-				},
+				{ catalogPath: "de.arb", content: drifted },
 			],
 		);
 		expect(result.applied).toEqual(["greeting"]);
 		expect(result.skipped).toEqual([]);
-		expect(result.files[1]?.content).toContain('"greeting": "Guten Tag"');
+		expect(result.files[1]?.content).toBe(
+			'{"@@locale":"de", "farewell":"Tschüss", "greeting":"Guten Tag"}\n',
+		);
+	});
+
+	test("inserts a missing target without reserializing neighbouring members", () => {
+		const result = applyReleaseBundleToDeliveryTree(
+			bundle([
+				{
+					catalogIndex: 1,
+					messageId: "greeting",
+					baselineSourceValue: "Hello",
+					values: [
+						{
+							localeCode: "de",
+							catalogPath: "de.arb",
+							isSource: false,
+							baselineValue: "",
+							value: "Guten Tag",
+						},
+					],
+				},
+			]),
+			[
+				{ catalogPath: "en.arb", content: source },
+				{
+					catalogPath: "de.arb",
+					content: '{\n\t"@@locale" : "de",\n\t"farewell" : "Tschüss"\n}',
+				},
+			],
+		);
+
+		expect(result.files[1]?.content).toBe(
+			'{\n\t"@@locale" : "de",\n\t"farewell" : "Tschüss",\n\t"greeting": "Guten Tag"\n}',
+		);
 	});
 
 	test("skips the whole key when Source moved in the delivery tree", () => {

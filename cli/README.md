@@ -89,9 +89,9 @@ blabla login --server https://your-blabla.example --token ...
 ```
 
 `BLABLA_API_URL` and `BLABLA_TOKEN` override the stored credentials, which is
-useful for CI and one-off invocations. The token needs `read` and `propose` for
-translation work and `export` for Release Bundle delivery. The default workspace
-connection includes all three plus snapshot submission.
+useful for CI and one-off invocations. The token needs `read`, `search`, and
+`propose` for translation work and `export` for Release Bundle delivery. The
+default workspace connection includes all four plus snapshot submission.
 
 From the same Brickit checkout, switch to the integration branch before
 delivery. The current project target is `develop`; the adapter refuses a

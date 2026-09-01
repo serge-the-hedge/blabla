@@ -149,11 +149,26 @@ class ReleaseRepositoryAdapter {
       );
     }
     await _ensureRelevantPathsAreClean(checkout, summary.catalogs);
-    await _ensureIndexIsClean(checkout);
     await _ensureCommitIdentity(checkout);
     final appliedOnto = await _git(checkout, ['rev-parse', 'HEAD']);
+    final commitDistance = await _git(checkout, [
+      'rev-list',
+      '--left-right',
+      '--count',
+      '${summary.releaseRecord.baselineCommit}...$appliedOnto',
+    ]);
     final branchName = 'blabla/release-${summary.releaseRecord.id}';
     await _ensureBranchDoesNotExist(checkout, branchName);
+    final generatedBefore = (await _gitLines(checkout, [
+      'ls-files',
+      '--',
+      '$_l10nDirectory/*.dart',
+    ])).toSet();
+    await _assertRegularLocalizationFiles(
+      checkout,
+      summary.catalogs,
+      generatedBefore,
+    );
 
     final staging = await StagingWorktree.create(
       _runner,
@@ -161,17 +176,20 @@ class ReleaseRepositoryAdapter {
       prefix: 'blabla-release-',
     );
     try {
+      await _assertRegularLocalizationFiles(
+        staging.root,
+        summary.catalogs,
+        generatedBefore,
+      );
       await _runGenerator(staging.root, request.flutter);
       if ((await _changedPaths(staging.root)).isNotEmpty) {
         throw RepositoryAdapterException(
           'Flutter localization output is already drifted in this checkout. Regenerate and commit it before delivering this release. ${request.flutter.description}',
         );
       }
-      final generatedBefore = (await _gitLines(staging.root, [
-        'ls-files',
-        '--',
-        '$_l10nDirectory/*.dart',
-      ])).toSet();
+      final signaturesBefore = await _generatedInterfaceSignatures(
+        staging.root,
+      );
       final inputFiles = await _readBoundCatalogs(
         staging.root,
         summary.catalogs,
@@ -192,6 +210,12 @@ class ReleaseRepositoryAdapter {
 
       await _writeDeliveryTree(staging.root, delivery.files);
       await _runGenerator(staging.root, request.flutter);
+      final signaturesAfter = await _generatedInterfaceSignatures(staging.root);
+      if (!_sameSet(signaturesBefore, signaturesAfter)) {
+        throw RepositoryAdapterException(
+          'Flutter generation changed the public localization interface. The release introduced a getter or method signature change and was not written.',
+        );
+      }
       final changedPaths = await _verifiedCandidatePaths(
         staging.root,
         summary,
@@ -205,7 +229,11 @@ class ReleaseRepositoryAdapter {
       );
 
       await _ensureRelevantPathsAreClean(checkout, summary.catalogs);
-      await _ensureIndexIsClean(checkout);
+      await _assertRegularLocalizationFiles(
+        checkout,
+        summary.catalogs,
+        generatedBefore,
+      );
       if (await _git(checkout, ['rev-parse', 'HEAD']) != appliedOnto) {
         throw RepositoryAdapterException(
           'The Brickit checkout advanced while the release was being prepared. Retry from the new integration-branch HEAD.',
@@ -221,6 +249,8 @@ class ReleaseRepositoryAdapter {
         'diff',
         '--cached',
         '--name-only',
+        '--',
+        ...changedPaths,
       ]);
       if (!_sameSet(stagedPaths.toSet(), changedPaths.toSet())) {
         throw RepositoryAdapterException(
@@ -229,8 +259,11 @@ class ReleaseRepositoryAdapter {
       }
       await _git(checkout, [
         'commit',
+        '--only',
         '-m',
         'fix(l10n): deliver reviewed translations\n\nBlabla-Release-Record: ${summary.releaseRecord.id}\nBlabla-Baseline-Commit: ${summary.releaseRecord.baselineCommit}\nBlabla-Applied-Onto: $appliedOnto\nBlabla-Applied-Keys: ${delivery.applied.length}\nBlabla-Skipped-Keys: ${delivery.skipped.length}',
+        '--',
+        ...changedPaths,
       ]);
 
       final body = _pullRequestBody(summary, delivery, appliedOnto);
@@ -243,13 +276,20 @@ class ReleaseRepositoryAdapter {
           'gh pr create --base ${summary.releaseRecord.integrationBranch} --head $branchName --title "fix(l10n): deliver reviewed translations" --body-file ${_shellQuote(pullRequestBodyFile)}';
       request.write('Created local branch $branchName.');
       request.write(
+        'Git distance from the Baseline (baseline-only, checkout-only): $commitDistance.',
+      );
+      request.write(
         'Applied ${delivery.applied.length} key${delivery.applied.length == 1 ? '' : 's'}; skipped ${delivery.skipped.length}.',
       );
       for (final skipped in delivery.skipped) {
         request.write('Skipped ${skipped.messageId}: ${skipped.reason}.');
       }
       request.write('Review it, then run: git push -u origin $branchName');
-      request.write(pullRequestCommand);
+      if (await _commandIsAvailable(checkout, 'gh')) {
+        request.write(pullRequestCommand);
+      } else {
+        request.write('Pull-request body: $pullRequestBodyFile');
+      }
       return ReleaseDeliveryResult(
         branchName: branchName,
         changedPaths: changedPaths,
@@ -418,17 +458,6 @@ class ReleaseRepositoryAdapter {
     }
   }
 
-  Future<void> _ensureIndexIsClean(Directory checkout) async {
-    final result = await _run(checkout, 'git', ['diff', '--cached', '--quiet']);
-    if (result.exitCode == 0) return;
-    if (result.exitCode == 1) {
-      throw RepositoryAdapterException(
-        'Brickit has staged changes. Commit or unstage them before creating a release review branch.',
-      );
-    }
-    throw _commandFailure('git diff --cached --quiet', result);
-  }
-
   Future<void> _ensureCommitIdentity(Directory checkout) async {
     for (final key in ['user.name', 'user.email']) {
       final result = await _run(checkout, 'git', ['config', '--get', key]);
@@ -476,13 +505,7 @@ class ReleaseRepositoryAdapter {
     final package = Directory(
       '${checkout.path}${Platform.pathSeparator}packages${Platform.pathSeparator}brickit_generated',
     );
-    if (!await File(
-      '${package.path}${Platform.pathSeparator}l10n.yaml',
-    ).exists()) {
-      throw RepositoryAdapterException(
-        'Brickit no longer has the expected packages/brickit_generated/l10n.yaml localization shape.',
-      );
-    }
+    await _regularFile(checkout, _l10nConfigPath);
     final result = await _run(package, flutter.executable, [
       ...flutter.argumentsPrefix,
       'gen-l10n',
@@ -503,7 +526,10 @@ class ReleaseRepositoryAdapter {
       files.add(
         DeliveryTreeFile(
           catalogPath: catalog.catalogPath,
-          content: await _file(checkout, catalog.catalogPath).readAsString(),
+          content: await (await _regularFile(
+            checkout,
+            catalog.catalogPath,
+          )).readAsString(),
         ),
       );
     }
@@ -515,10 +541,10 @@ class ReleaseRepositoryAdapter {
     List<DeliveryTreeFile> files,
   ) async {
     for (final file in files) {
-      await _file(
+      await (await _regularFile(
         checkout,
         file.catalogPath,
-      ).writeAsString(file.content, flush: true);
+      )).writeAsString(file.content, flush: true);
     }
   }
 
@@ -545,7 +571,10 @@ class ReleaseRepositoryAdapter {
       );
     }
     for (final expected in delivery.files) {
-      if (await _file(staging, expected.catalogPath).readAsString() !=
+      if (await (await _regularFile(
+            staging,
+            expected.catalogPath,
+          )).readAsString() !=
           expected.content) {
         throw RepositoryAdapterException(
           'Flutter generation rewrote ${expected.catalogPath} after Blabla authored it.',
@@ -571,7 +600,7 @@ class ReleaseRepositoryAdapter {
   ) async {
     final files = <String, List<int>>{};
     for (final path in paths) {
-      files[path] = await _file(checkout, path).readAsBytes();
+      files[path] = await (await _regularFile(checkout, path)).readAsBytes();
     }
     return files;
   }
@@ -581,10 +610,75 @@ class ReleaseRepositoryAdapter {
     Map<String, List<int>> files,
   ) async {
     for (final entry in files.entries) {
-      final destination = _file(checkout, entry.key);
-      await destination.parent.create(recursive: true);
+      final destination = await _regularFile(checkout, entry.key);
       await destination.writeAsBytes(entry.value, flush: true);
     }
+  }
+
+  Future<void> _assertRegularLocalizationFiles(
+    Directory checkout,
+    List<BoundCatalog> catalogs,
+    Set<String> generatedPaths,
+  ) async {
+    for (final path in {
+      _l10nConfigPath,
+      ...catalogs.map((catalog) => catalog.catalogPath),
+      ...generatedPaths,
+    }) {
+      await _regularFile(checkout, path);
+    }
+  }
+
+  Future<File> _regularFile(Directory root, String relativePath) async {
+    if (!_isSafeRelativePath(relativePath)) {
+      throw RepositoryAdapterException(
+        'Localization path is not a safe repository-relative file: $relativePath.',
+      );
+    }
+    var current = root.path;
+    for (final segment in relativePath.split('/')) {
+      current = '$current${Platform.pathSeparator}$segment';
+      final type = await FileSystemEntity.type(current, followLinks: false);
+      if (type == FileSystemEntityType.link) {
+        throw RepositoryAdapterException(
+          'Blabla refuses symlinked localization paths: $relativePath.',
+        );
+      }
+    }
+    final file = File(current);
+    if (!await file.exists()) {
+      throw RepositoryAdapterException(
+        'Brickit is missing the expected localization file $relativePath.',
+      );
+    }
+    final rootPath = await root.resolveSymbolicLinks();
+    final resolvedPath = await file.resolveSymbolicLinks();
+    final rootPrefix = rootPath.endsWith(Platform.pathSeparator)
+        ? rootPath
+        : '$rootPath${Platform.pathSeparator}';
+    if (!resolvedPath.startsWith(rootPrefix)) {
+      throw RepositoryAdapterException(
+        'Localization path escapes the disposable worktree: $relativePath.',
+      );
+    }
+    return file;
+  }
+
+  Future<Set<String>> _generatedInterfaceSignatures(Directory checkout) async {
+    final file = await _regularFile(
+      checkout,
+      '$_l10nDirectory/app_localizations.dart',
+    );
+    final source = await file.readAsString();
+    final withoutComments = source
+        .replaceAll(RegExp(r'/\*[\s\S]*?\*/'), '')
+        .replaceAll(RegExp(r'//[^\n]*'), '');
+    return RegExp(
+      r'\bString\s+(?:get\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:\s*\([^;{}]*\))?\s*;',
+      multiLine: true,
+    ).allMatches(withoutComments).map((match) {
+      return (match.group(0) as String).replaceAll(RegExp(r'\s+'), ' ').trim();
+    }).toSet();
   }
 
   String _pullRequestBody(
@@ -663,6 +757,18 @@ $skipped''';
     String executable,
     List<String> arguments,
   ) => _runner.run(executable, arguments, workingDirectory: checkout.path);
+
+  Future<bool> _commandIsAvailable(
+    Directory checkout,
+    String executable,
+  ) async {
+    try {
+      final result = await _run(checkout, executable, const ['--version']);
+      return result.exitCode == 0;
+    } on RepositoryAdapterException {
+      return false;
+    }
+  }
 
   RepositoryAdapterException _commandFailure(
     String command,

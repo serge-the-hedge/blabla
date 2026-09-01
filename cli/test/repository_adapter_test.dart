@@ -398,31 +398,8 @@ void main() {
       final fixture = await BrickitFixture.create();
       addTearDown(fixture.dispose);
       await fixture.addGermanCatalog();
-      final baseline = await fixture.git(['rev-parse', 'HEAD']);
-      final summary = ReleaseSummary(
-        releaseRecord: ReleaseRecordIdentity(
-          id: 'release_123',
-          projectId: 'project_123',
-          baselineSnapshotId: 'snapshot_123',
-          repository: 'github.com/brickit-app/brickit-flutter',
-          baselineCommit: baseline,
-          manifestHash: List.filled(64, 'a').join(),
-          integrationBranch: 'develop',
-        ),
-        catalogs: const [
-          BoundCatalog(
-            localeCode: 'en',
-            catalogPath: 'packages/brickit_generated/lib/l10n/intl_en.arb',
-            isSource: true,
-          ),
-          BoundCatalog(
-            localeCode: 'de',
-            catalogPath: 'packages/brickit_generated/lib/l10n/intl_de.arb',
-            isSource: false,
-          ),
-        ],
-        changeKeyCount: 2,
-      );
+      final summary = await existingLocaleRelease(fixture);
+      final baseline = summary.releaseRecord.baselineCommit;
       final output = StringBuffer();
 
       final result = await ReleaseRepositoryAdapter().deliver(
@@ -483,6 +460,124 @@ void main() {
         ),
       );
     },
+  );
+
+  test('refuses a tracked symlink before reading a bound catalog', () async {
+    final fixture = await BrickitFixture.create();
+    addTearDown(fixture.dispose);
+    await fixture.addGermanCatalog();
+    final outside = await Directory.systemTemp.createTemp('blabla-outside-');
+    addTearDown(() => outside.delete(recursive: true));
+    final outsideCatalog = File('${outside.path}/intl_de.arb');
+    await outsideCatalog.writeAsString('{"@@locale":"de","welcome":"secret"}');
+    final german = fixture.file(
+      'packages/brickit_generated/lib/l10n/intl_de.arb',
+    );
+    await german.delete();
+    await Link(german.path).create(outsideCatalog.path);
+    await fixture.git(['add', '--', german.path]);
+    await fixture.git(['commit', '-m', 'track catalog symlink']);
+    final summary = await existingLocaleRelease(fixture);
+
+    await expectLater(
+      ReleaseRepositoryAdapter().deliver(
+        ReleaseDeliveryRequest(
+          checkout: fixture.root,
+          recordId: summary.releaseRecord.id,
+          flutter: testFlutter(fixture.flutterExecutable),
+          gateway: StaticReleaseGateway(summary),
+          write: (_) {},
+        ),
+      ),
+      throwsA(
+        isA<RepositoryAdapterException>().having(
+          (error) => error.message,
+          'message',
+          contains('symlinked localization paths'),
+        ),
+      ),
+    );
+    expect(await outsideCatalog.readAsString(), contains('secret'));
+  });
+
+  test('rejects a regenerated public-interface signature change', () async {
+    final fixture = await BrickitFixture.create();
+    addTearDown(fixture.dispose);
+    await fixture.addGermanCatalog();
+    final summary = await existingLocaleRelease(fixture);
+    final flutter = await fixture.signatureChangingFlutter();
+
+    await expectLater(
+      ReleaseRepositoryAdapter().deliver(
+        ReleaseDeliveryRequest(
+          checkout: fixture.root,
+          recordId: summary.releaseRecord.id,
+          flutter: testFlutter(flutter),
+          gateway: StaticReleaseGateway(summary),
+          write: (_) {},
+        ),
+      ),
+      throwsA(
+        isA<RepositoryAdapterException>().having(
+          (error) => error.message,
+          'message',
+          contains('public localization interface'),
+        ),
+      ),
+    );
+    expect(await fixture.git(['branch', '--show-current']), 'develop');
+  });
+
+  test('preserves unrelated staged work outside the release commit', () async {
+    final fixture = await BrickitFixture.create();
+    addTearDown(fixture.dispose);
+    await fixture.addGermanCatalog();
+    final summary = await existingLocaleRelease(fixture);
+    await fixture.file('notes.txt').writeAsString('keep staged');
+    await fixture.git(['add', '--', 'notes.txt']);
+
+    await ReleaseRepositoryAdapter().deliver(
+      ReleaseDeliveryRequest(
+        checkout: fixture.root,
+        recordId: summary.releaseRecord.id,
+        flutter: testFlutter(fixture.flutterExecutable),
+        gateway: StaticReleaseGateway(summary),
+        write: (_) {},
+      ),
+    );
+
+    expect(await fixture.git(['diff', '--cached', '--name-only']), 'notes.txt');
+    expect(
+      await fixture.git(['show', '--format=', '--name-only', 'HEAD']),
+      isNot(contains('notes.txt')),
+    );
+  });
+}
+
+Future<ReleaseSummary> existingLocaleRelease(BrickitFixture fixture) async {
+  return ReleaseSummary(
+    releaseRecord: ReleaseRecordIdentity(
+      id: 'release_123',
+      projectId: 'project_123',
+      baselineSnapshotId: 'snapshot_123',
+      repository: 'github.com/brickit-app/brickit-flutter',
+      baselineCommit: await fixture.git(['rev-parse', 'HEAD']),
+      manifestHash: List.filled(64, 'a').join(),
+      integrationBranch: 'develop',
+    ),
+    catalogs: const [
+      BoundCatalog(
+        localeCode: 'en',
+        catalogPath: 'packages/brickit_generated/lib/l10n/intl_en.arb',
+        isSource: true,
+      ),
+      BoundCatalog(
+        localeCode: 'de',
+        catalogPath: 'packages/brickit_generated/lib/l10n/intl_de.arb',
+        isSource: false,
+      ),
+    ],
+    changeKeyCount: 2,
   );
 }
 
@@ -848,6 +943,31 @@ echo unexpected > lib/l10n/unexpected_generated.dart
     if (chmod.exitCode != 0) {
       throw StateError(
         'Could not make unexpected-surface Flutter executable: ${chmod.stderr}',
+      );
+    }
+    return executable.path;
+  }
+
+  Future<String> signatureChangingFlutter() async {
+    final executable = file('tools/flutter-changes-signature');
+    await executable.writeAsString('''#!/bin/sh
+set -eu
+if [ "\$1" != "gen-l10n" ]; then
+  exit 2
+fi
+if grep -q 'Guten Tag' lib/l10n/intl_de.arb; then
+  cat > lib/l10n/app_localizations.dart <<'EOF'
+class AppLocalizations {
+  String get unexpected;
+}
+EOF
+fi
+cp lib/l10n/intl_de.arb lib/l10n/app_localizations_de.dart
+''');
+    final chmod = await Process.run('chmod', ['+x', executable.path]);
+    if (chmod.exitCode != 0) {
+      throw StateError(
+        'Could not make signature-changing Flutter executable: ${chmod.stderr}',
       );
     }
     return executable.path;

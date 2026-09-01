@@ -2,11 +2,12 @@ import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 
 import { internal } from "./_generated/api";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
 	internalAction,
 	internalMutation,
 	internalQuery,
+	type MutationCtx,
 	mutation,
 	type QueryCtx,
 	query,
@@ -67,7 +68,7 @@ function buildSummary(run: Doc<"releaseBuildRuns">) {
 }
 
 async function assertCurrentReadyRecord(
-	ctx: QueryCtx,
+	ctx: QueryCtx | MutationCtx,
 	record: Doc<"releaseRecords">,
 ) {
 	if (record.status !== "ready" || record.posture !== "ready") {
@@ -225,6 +226,7 @@ export const bundleChangePage = internalQuery({
 				message: "Release Build Run is no longer buildable.",
 			});
 		}
+		await assertCurrentReadyRecord(ctx, record);
 		const page = await ctx.db
 			.query("catalogWorkspaceNavigationRows")
 			.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
@@ -332,10 +334,18 @@ export const completeBuild = internalMutation({
 		bundleByteLength: v.number(),
 		changeKeyCount: v.number(),
 	},
-	returns: v.null(),
+	returns: v.boolean(),
 	handler: async (ctx, args) => {
 		const run = await ctx.db.get(args.runId);
-		if (run?.status !== "building") return null;
+		if (run?.status !== "building") return false;
+		const record = await ctx.db.get(run.recordId);
+		if (!record) {
+			throw new ConvexError({
+				code: "BAD_STATE",
+				message: "Release Build Run lost its Release Record.",
+			});
+		}
+		await assertCurrentReadyRecord(ctx, record);
 		await ctx.db.patch(run._id, {
 			status: "ready",
 			bundleStorageId: args.bundleStorageId,
@@ -344,7 +354,7 @@ export const completeBuild = internalMutation({
 			changeKeyCount: args.changeKeyCount,
 			completedAt: now(),
 		});
-		return null;
+		return true;
 	},
 });
 
@@ -374,13 +384,13 @@ export const buildArtifact = internalAction({
 	args: { runId: v.id("releaseBuildRuns") },
 	returns: v.null(),
 	handler: async (ctx, args) => {
+		let storedBundleId: Id<"_storage"> | null = null;
 		try {
-			const context = await ctx.runQuery(
-				internal.releaseBundles.bundleContext,
-				{
-					runId: args.runId,
-				},
-			);
+			const context: {
+				artifact: Omit<ReleaseBundleArtifact, "changes">;
+			} = await ctx.runQuery(internal.releaseBundles.bundleContext, {
+				runId: args.runId,
+			});
 			const changes: ReleaseBundleArtifact["changes"] = [];
 			let cursor: string | null = null;
 			let done = false;
@@ -412,17 +422,28 @@ export const buildArtifact = internalAction({
 					message: "Release Bundle exceeds its supported byte envelope.",
 				});
 			}
-			const bundleStorageId = await ctx.storage.store(
+			storedBundleId = await ctx.storage.store(
 				new Blob([content], { type: "application/json" }),
 			);
-			await ctx.runMutation(internal.releaseBundles.completeBuild, {
-				runId: args.runId,
-				bundleStorageId,
-				bundleHash: await sha256Hex(content),
-				bundleByteLength: byteLength,
-				changeKeyCount: changes.length,
-			});
+			const completed: boolean = await ctx.runMutation(
+				internal.releaseBundles.completeBuild,
+				{
+					runId: args.runId,
+					bundleStorageId: storedBundleId,
+					bundleHash: await sha256Hex(content),
+					bundleByteLength: byteLength,
+					changeKeyCount: changes.length,
+				},
+			);
+			if (!completed) {
+				throw new ConvexError({
+					code: "BAD_STATE",
+					message: "Release Build Run stopped before publication.",
+				});
+			}
+			storedBundleId = null;
 		} catch (error) {
+			if (storedBundleId) await ctx.storage.delete(storedBundleId);
 			const data =
 				error instanceof ConvexError &&
 				typeof error.data === "object" &&
@@ -491,15 +512,7 @@ export const recordDeliveryCapture = internalMutation({
 		captureHash: v.string(),
 		captureByteLength: v.number(),
 		appliedCount: v.number(),
-		skipped: v.array(
-			v.object({
-				messageId: v.string(),
-				reason: v.union(
-					v.literal("missing_source"),
-					v.literal("source_changed"),
-				),
-			}),
-		),
+		skippedCount: v.number(),
 	},
 	returns: v.id("releaseDeliveryCaptures"),
 	handler: async (ctx, args) => {
@@ -538,7 +551,7 @@ export const recordDeliveryCapture = internalMutation({
 			captureHash: args.captureHash,
 			captureByteLength: args.captureByteLength,
 			appliedCount: args.appliedCount,
-			skipped: args.skipped,
+			skippedCount: args.skippedCount,
 			createdAt: now(),
 		});
 	},

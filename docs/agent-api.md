@@ -60,11 +60,11 @@ intentionally one-time visible.
    `POST /translation-tasks/:id/candidates`. The server resolves and validates
    the frozen concurrency basis; the agent supplies only message ids and
    values.
-6. Open the proposal in the human Proposals workbench. Accepting an exact
+5. Open the proposal in the human Proposals workbench. Accepting an exact
    candidate, accepting edited text, rejecting it, or recording an Intentional
    Blank leaves immutable review evidence; only an editor acceptance changes
    the Catalog Workspace.
-7. Report a value as **proposed** until the human review succeeds. The API
+6. Report a value as **proposed** until the human review succeeds. The API
    never claims that an agent submission is live.
 
 The authenticated production Proposals workbench is available at
@@ -243,8 +243,9 @@ human-created task; token-owned tasks remain private to their creating token.
 
 ### `GET /translation-tasks/:id`
 
-Returns a bounded page of the frozen task (`limit` 1–16) and an integer
-`nextCursor`. Pass that cursor unchanged until `done` is true. Each target
+Returns a bounded page of the frozen task (`limit` 1–16) and a `nextCursor`,
+which is `null` on the final page. Pass that cursor unchanged until it is
+`null`. Each target
 includes Source and current target text, while submitted targets also identify
 their current candidate revision.
 

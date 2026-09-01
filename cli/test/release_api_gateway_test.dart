@@ -104,4 +104,31 @@ void main() {
       'POST /api/repository-adapter/v1/releases/$recordId/delivery-tree',
     ]);
   });
+
+  test('translates a schema-invalid success response', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(server.close);
+    server.listen((request) async {
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(
+        '{"releaseRecord":{},"catalogs":[null],"changeKeyCount":1}',
+      );
+      await request.response.close();
+    });
+    final gateway = HttpReleaseGateway(
+      baseUrl: Uri.parse('http://${server.address.address}:${server.port}'),
+      token: 'token',
+    );
+
+    await expectLater(
+      gateway.readRelease('release_123'),
+      throwsA(
+        isA<RepositoryAdapterException>().having(
+          (error) => error.message,
+          'message',
+          contains('invalid existing-locale release response'),
+        ),
+      ),
+    );
+  });
 }

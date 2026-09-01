@@ -1347,15 +1347,9 @@ export default defineSchema({
 		captureHash: v.string(),
 		captureByteLength: v.number(),
 		appliedCount: v.number(),
-		skipped: v.array(
-			v.object({
-				messageId: v.string(),
-				reason: v.union(
-					v.literal("missing_source"),
-					v.literal("source_changed"),
-				),
-			}),
-		),
+		// The complete report stays in captureStorageId. Keeping only its count
+		// here avoids Convex's document-array ceiling on large releases.
+		skippedCount: v.number(),
 		createdAt: v.number(),
 	})
 		.index("by_record_and_captureHash", ["recordId", "captureHash"])

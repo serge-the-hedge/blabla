@@ -69,6 +69,7 @@ import {
 	type StringsCatalogNavigationState,
 	type StringsNavigationDigest,
 	type StringsNavigationRead,
+	translationTaskLocales,
 } from "@/lib/strings-catalog-navigation";
 import {
 	catalogWorkspaceCommitShortcut,
@@ -1720,18 +1721,10 @@ function StringsCatalogNavigator({
 		},
 		[],
 	);
-	const taskLocales = useMemo(() => {
-		const locales = new Map<string, string>();
-		for (const digest of navigation.keys ?? []) {
-			for (const target of digest.targets) {
-				locales.set(target.localeId, target.localeCode);
-			}
-		}
-		return [...locales].map(([localeId, localeCode]) => ({
-			localeId,
-			localeCode,
-		}));
-	}, [navigation.keys]);
+	const taskLocales = useMemo(
+		() => translationTaskLocales(navigation.keys ?? [], selectedMessageIds),
+		[navigation.keys, selectedMessageIds],
+	);
 
 	if (navigation.kind === "incomplete") {
 		const failed = navigation.status === "failed";
