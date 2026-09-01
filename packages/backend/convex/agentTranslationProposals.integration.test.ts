@@ -135,6 +135,51 @@ async function setupWorkQueueProject(user: AuthenticatedBackend) {
 	return { projectId, de, token: token.token };
 }
 
+async function setupSparseWorkQueueProject(user: AuthenticatedBackend) {
+	const projectId = await createProject(user);
+	const locales = await user.query(api.locales.list, { projectId });
+	const source = locales.find((locale) => locale.code === "en");
+	if (!source) throw new Error("Expected the source Locale.");
+	const de = await user.mutation(api.locales.create, {
+		projectId,
+		code: "de",
+	});
+	await user.mutation(api.locales.bind, {
+		localeId: source._id,
+		catalogPath: "en.arb",
+	});
+	await user.mutation(api.locales.bind, {
+		localeId: de,
+		catalogPath: "de.arb",
+	});
+
+	const sourceCatalog: Record<string, string> = { "@@locale": "en" };
+	const targetCatalog: Record<string, string> = { "@@locale": "de" };
+	for (let index = 0; index < 70; index += 1) {
+		const messageId = `item_${index.toString().padStart(3, "0")}`;
+		sourceCatalog[messageId] = `Source ${index}`;
+		targetCatalog[messageId] = `Deutsch ${index}`;
+	}
+	sourceCatalog.z_missing = "Last missing value";
+
+	const ingested = await user.action(api.snapshots.ingest, {
+		projectId,
+		repository: "repo",
+		commit: "sparse-work-queue-baseline",
+		files: [
+			{ catalogPath: "en.arb", content: JSON.stringify(sourceCatalog) },
+			{ catalogPath: "de.arb", content: JSON.stringify(targetCatalog) },
+		],
+	});
+	if (!ingested.snapshotId) throw new Error("Expected a baseline snapshot.");
+	const token = await user.mutation(api.apiTokens.create, {
+		projectId,
+		name: "sparse work queue agent",
+		scopes: ["read", "search", "propose"],
+	});
+	return token.token;
+}
+
 async function targetBasis(
 	user: AuthenticatedBackend,
 	projectId: Id<"projects">,
@@ -305,6 +350,39 @@ describe("Agent Translation Proposals", () => {
 		);
 		expect(staleCursor.status).toBe(400);
 		expect(await staleCursor.json()).toMatchObject({ code: "STALE_BASIS" });
+	});
+
+	test("keeps paging across an empty scan window to sparse work", async () => {
+		const user = await authenticatedBackend(t, "sparse-translation-work-queue");
+		const token = await setupSparseWorkQueueProject(user);
+		const firstResponse = await agentRequest(
+			t,
+			token,
+			"/api/agent/v1/workspace/work?localeCode=de&reason=missing",
+		);
+		expect(firstResponse.status).toBe(200);
+		const firstPage = (await firstResponse.json()) as {
+			items: Array<{ messageId: string }>;
+			nextCursor: string | null;
+		};
+		expect(firstPage.items).toEqual([]);
+		expect(firstPage.nextCursor).toEqual(expect.any(String));
+
+		const secondResponse = await agentRequest(
+			t,
+			token,
+			`/api/agent/v1/workspace/work?localeCode=de&reason=missing&cursor=${encodeURIComponent(firstPage.nextCursor ?? "")}`,
+		);
+		expect(secondResponse.status).toBe(200);
+		expect(await secondResponse.json()).toMatchObject({
+			items: [
+				expect.objectContaining({
+					messageId: "z_missing",
+					reasons: ["missing"],
+				}),
+			],
+			nextCursor: null,
+		});
 	});
 
 	test("creates, resumes, and human-accepts a Catalog Workspace candidate", async () => {
