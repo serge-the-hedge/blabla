@@ -4,6 +4,7 @@ import { ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { type ActionCtx, httpAction } from "./_generated/server";
+import type { TranslationWorkReason } from "./agentTranslationProposals";
 import { authComponent, createAuth, getTrustedOrigins } from "./auth";
 import { resend } from "./emails";
 import { sha256Hex, type TokenScope } from "./lib";
@@ -89,6 +90,25 @@ function optionalStringStatus(value: string | null): StringStatus | undefined {
 	throw new Error(
 		"status must be missing, translated, needs_review, or stale.",
 	);
+}
+
+function translationWorkReasons(
+	values: readonly string[],
+): TranslationWorkReason[] | undefined {
+	if (values.length === 0) return undefined;
+	return values.map((value) => {
+		if (
+			value === "missing" ||
+			value === "sourceIdentical" ||
+			value === "sameKeyRepeat" ||
+			value === "stale"
+		) {
+			return value;
+		}
+		throw new Error(
+			"reason must be missing, sourceIdentical, sameKeyRepeat, or stale.",
+		);
+	});
 }
 
 async function jsonObject(request: Request): Promise<Record<string, unknown>> {
@@ -836,6 +856,40 @@ http.route({
 								q: url.searchParams.get("q") ?? undefined,
 								localeCode: url.searchParams.get("localeCode") ?? undefined,
 								limit: Number(url.searchParams.get("limit") ?? 50),
+							},
+						),
+				),
+			);
+		} catch (error) {
+			return routeError(error);
+		}
+	}),
+});
+
+http.route({
+	path: "/api/agent/v1/workspace/work",
+	method: "GET",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const url = new URL(request.url);
+			return agentJson(
+				await withAgent(
+					ctx,
+					request,
+					"search",
+					"agentSearch",
+					async (token) =>
+						await ctx.runQuery(
+							internalApi.agentTranslationProposals.workspaceWorkPage,
+							{
+								token,
+								cursor: url.searchParams.get("cursor") ?? "",
+								limit: Number(url.searchParams.get("limit") ?? 16),
+								localeCode: url.searchParams.get("localeCode") ?? undefined,
+								reasons: translationWorkReasons(
+									url.searchParams.getAll("reason"),
+								),
+								q: url.searchParams.get("q") ?? undefined,
 							},
 						),
 				),

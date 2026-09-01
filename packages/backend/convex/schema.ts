@@ -883,8 +883,8 @@ export default defineSchema({
 				// Some earlier Translator Confirmation covered the Git content, so
 				// its Source Contract has since changed.
 				confirmedContentPreviously: v.boolean(),
-				// Repeated visible imported content is projection-stable and lets the
-				// ordinary summary stay additive instead of rescanning every key.
+				// The visible value identity lets one key detect suspicious repetition
+				// across its own target Locales without comparing unrelated keys.
 				repeatedGitContent: v.optional(v.boolean()),
 				valueFingerprint: v.optional(v.string()),
 				gitValueFingerprint: v.optional(v.string()),

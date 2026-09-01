@@ -92,9 +92,9 @@ export type CatalogWorkspaceNavigationTargetDigest = {
 	/** An earlier Translator Confirmation covered the Git content and its
 	 * Source Contract has since changed. */
 	confirmedContentPreviously: boolean;
-	/** The same visible imported content occurs on another Catalog key in this
-	 * Locale. The name retains the Git-origin distinction: only untouched Git
-	 * content participates in the ordinary-import policy. */
+	/** Legacy projection-stable repetition fact. Current classification compares
+	 * the target value identities carried by one key and never compares unrelated
+	 * keys. */
 	repeatedGitContent?: boolean;
 	/** Fingerprint of the visible value after Workspace composition. It keeps
 	 * legacy digest summaries exact without carrying the value itself. */

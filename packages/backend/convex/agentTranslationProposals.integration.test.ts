@@ -67,6 +67,74 @@ async function setupProject(user: AuthenticatedBackend) {
 	return { projectId, targetId, token: token.token };
 }
 
+async function setupWorkQueueProject(user: AuthenticatedBackend) {
+	const projectId = await createProject(user);
+	const locales = await user.query(api.locales.list, { projectId });
+	const source = locales.find((locale) => locale.code === "en");
+	if (!source) throw new Error("Expected the source Locale.");
+	const de = await user.mutation(api.locales.create, {
+		projectId,
+		code: "de",
+	});
+	const fr = await user.mutation(api.locales.create, {
+		projectId,
+		code: "fr",
+	});
+	for (const [localeId, catalogPath] of [
+		[source._id, "en.arb"],
+		[de, "de.arb"],
+		[fr, "fr.arb"],
+	] as const) {
+		await user.mutation(api.locales.bind, { localeId, catalogPath });
+	}
+	const ingested = await user.action(api.snapshots.ingest, {
+		projectId,
+		repository: "repo",
+		commit: "work-queue-baseline",
+		files: [
+			{
+				catalogPath: "en.arb",
+				content: JSON.stringify({
+					"@@locale": "en",
+					missing: "Needs translation",
+					echo: "Brickit",
+					repeated: "Continue",
+					unrelatedOne: "First shared label",
+					unrelatedTwo: "Second shared label",
+				}),
+			},
+			{
+				catalogPath: "de.arb",
+				content: JSON.stringify({
+					"@@locale": "de",
+					echo: "Brickit",
+					repeated: "Weiter",
+					unrelatedOne: "Gemeinsam",
+					unrelatedTwo: "Gemeinsam",
+				}),
+			},
+			{
+				catalogPath: "fr.arb",
+				content: JSON.stringify({
+					"@@locale": "fr",
+					missing: "À traduire",
+					echo: "Briques",
+					repeated: "Weiter",
+					unrelatedOne: "Premier",
+					unrelatedTwo: "Deuxième",
+				}),
+			},
+		],
+	});
+	if (!ingested.snapshotId) throw new Error("Expected a baseline snapshot.");
+	const token = await user.mutation(api.apiTokens.create, {
+		projectId,
+		name: "work queue agent",
+		scopes: ["read", "search", "propose"],
+	});
+	return { projectId, de, token: token.token };
+}
+
 async function targetBasis(
 	user: AuthenticatedBackend,
 	projectId: Id<"projects">,
@@ -158,6 +226,85 @@ describe("Agent Translation Proposals", () => {
 			candidates: [expect.objectContaining({ messageId: "greeting" })],
 			nextCursor: null,
 		});
+	});
+
+	test("pages the complete translation work queue without cross-key repetition noise", async () => {
+		const user = await authenticatedBackend(t, "agent-translation-work-queue");
+		const { token } = await setupWorkQueueProject(user);
+		const items: Array<{
+			messageId: string;
+			localeCode: string;
+			reasons: string[];
+			sourceValue: string;
+			targetValue: string;
+		}> = [];
+		let cursor = "";
+		do {
+			const response = await agentRequest(
+				t,
+				token,
+				`/api/agent/v1/workspace/work?limit=2&cursor=${encodeURIComponent(cursor)}`,
+			);
+			expect(response.status).toBe(200);
+			const page = (await response.json()) as {
+				items: typeof items;
+				nextCursor: string | null;
+			};
+			items.push(...page.items);
+			cursor = page.nextCursor ?? "";
+		} while (cursor);
+
+		expect(items).toEqual([
+			expect.objectContaining({
+				messageId: "missing",
+				localeCode: "de",
+				reasons: ["missing"],
+				sourceValue: "Needs translation",
+				targetValue: "",
+			}),
+			expect.objectContaining({
+				messageId: "echo",
+				localeCode: "de",
+				reasons: ["sourceIdentical"],
+			}),
+			expect.objectContaining({
+				messageId: "repeated",
+				localeCode: "de",
+				reasons: ["sameKeyRepeat"],
+			}),
+			expect.objectContaining({
+				messageId: "repeated",
+				localeCode: "fr",
+				reasons: ["sameKeyRepeat"],
+			}),
+		]);
+		expect(items.some((item) => item.messageId.startsWith("unrelated"))).toBe(
+			false,
+		);
+
+		const missingGerman = await agentRequest(
+			t,
+			token,
+			"/api/agent/v1/workspace/work?localeCode=de&reason=missing&limit=16",
+		);
+		expect(missingGerman.status).toBe(200);
+		expect(await missingGerman.json()).toMatchObject({
+			items: [
+				expect.objectContaining({
+					messageId: "missing",
+					localeCode: "de",
+				}),
+			],
+			nextCursor: null,
+		});
+
+		const staleCursor = await agentRequest(
+			t,
+			token,
+			"/api/agent/v1/workspace/work?cursor=v1.stale-projection.0.0",
+		);
+		expect(staleCursor.status).toBe(400);
+		expect(await staleCursor.json()).toMatchObject({ code: "STALE_BASIS" });
 	});
 
 	test("creates, resumes, and human-accepts a Catalog Workspace candidate", async () => {
@@ -287,6 +434,78 @@ describe("Agent Translation Proposals", () => {
 		expect(reviewedProposal?.proposal.status).toBe("accepted");
 	});
 
+	test("rolls back an exact-acceptance batch when one task candidate is stale", async () => {
+		const user = await authenticatedBackend(t, "atomic-task-batch-review");
+		const { projectId, de, token } = await setupWorkQueueProject(user);
+		const task = await user.mutation(api.agentTranslationProposals.createTask, {
+			projectId,
+			title: "German repair batch",
+			localeId: de,
+			messageIds: ["missing", "echo"],
+		});
+		const submission = await agentRequest(
+			t,
+			token,
+			`/api/agent/v1/translation-tasks/${task.taskId}/candidates`,
+			{
+				method: "POST",
+				body: JSON.stringify({
+					items: [
+						{ messageId: "missing", value: "Übersetzung benötigt" },
+						{ messageId: "echo", value: "Brickit App" },
+					],
+				}),
+			},
+		);
+		expect(submission.status).toBe(200);
+		const revisions = (await submission.json()) as {
+			revisions: Array<{
+				revisionId: Id<"agentTranslationCandidateRevisions">;
+			}>;
+		};
+		const revisionIds = revisions.revisions.map(
+			(revision) => revision.revisionId,
+		);
+		expect(revisionIds).toHaveLength(2);
+
+		const before = await readWorkspaceKeyCards(user, projectId);
+		const echo = before.keys
+			.find((key) => key.id === "echo")
+			?.values.find((value) => value.localeId === de);
+		if (
+			!echo ||
+			echo.gitValueFingerprint === undefined ||
+			echo.gitValueRevision === undefined ||
+			echo.workspaceRevision === undefined ||
+			echo.expectedSourceFingerprint === undefined
+		) {
+			throw new Error("Expected the German echo basis.");
+		}
+		await user.mutation(api.catalogWorkspace.commit, {
+			projectId,
+			messageId: "echo",
+			localeId: de,
+			intent: { kind: "save", value: "Brickit Anwendung" },
+			expectedGitValueFingerprint: echo.gitValueFingerprint,
+			expectedGitValueRevision: echo.gitValueRevision,
+			expectedWorkspaceRevision: echo.workspaceRevision,
+			expectedSourceFingerprint: echo.expectedSourceFingerprint,
+		});
+
+		await expect(
+			user.mutation(api.agentTranslationProposals.acceptTaskCandidates, {
+				proposalId: task.taskId,
+				candidateRevisionIds: revisionIds,
+			}),
+		).rejects.toThrow(/basis|revision/i);
+		const after = await readWorkspaceKeyCards(user, projectId);
+		expect(
+			after.keys
+				.find((key) => key.id === "missing")
+				?.values.find((value) => value.localeId === de),
+		).toMatchObject({ value: "", valueState: "waiting" });
+	});
+
 	test("lets a human freeze an existing-Locale task and an agent fill it without basis plumbing", async () => {
 		const user = await authenticatedBackend(t, "human-translation-task");
 		const { projectId, targetId, token } = await setupProject(user);
@@ -380,10 +599,18 @@ describe("Agent Translation Proposals", () => {
 				}),
 			],
 		});
-		await user.mutation(api.agentTranslationProposals.reviewCandidate, {
-			candidateRevisionId: restoredId,
-			decision: { kind: "accept" },
-		});
+		expect(
+			await user.mutation(api.agentTranslationProposals.acceptTaskCandidates, {
+				proposalId: created.taskId,
+				candidateRevisionIds: [restoredId],
+			}),
+		).toEqual({ accepted: 1, status: "accepted" });
+		expect(
+			await user.mutation(api.agentTranslationProposals.acceptTaskCandidates, {
+				proposalId: created.taskId,
+				candidateRevisionIds: [restoredId],
+			}),
+		).toEqual({ accepted: 0, status: "accepted" });
 		const reviewed = await user.query(
 			api.agentTranslationProposals.getForReview,
 			{ proposalId: created.taskId },
