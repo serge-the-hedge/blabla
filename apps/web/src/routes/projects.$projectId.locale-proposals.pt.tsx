@@ -17,9 +17,17 @@ import {
 import { Input } from "@blabla/ui/components/input";
 import { Skeleton } from "@blabla/ui/components/skeleton";
 import { Textarea } from "@blabla/ui/components/textarea";
-import { createFileRoute, useParams } from "@tanstack/react-router";
+import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useAction, useMutation, useQuery } from "convex/react";
-import { Check, Download, Languages, Save, Sparkles, X } from "lucide-react";
+import {
+	ArrowLeft,
+	Check,
+	Download,
+	Languages,
+	Save,
+	Sparkles,
+	X,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 
 import {
@@ -45,18 +53,35 @@ function PortugueseLocaleProposalRoute() {
 	const { projectId } = useParams({
 		from: "/projects/$projectId/locale-proposals/pt",
 	});
+	return <PortugueseLocaleProposalWorkbench projectId={projectId} />;
+}
+
+/** One new-Locale review surface, mounted either from the compatibility Locale
+ * route or from a Translation Task whose private adapter is that proposal. */
+export function PortugueseLocaleProposalWorkbench({
+	projectId,
+	initialProposalId,
+	title = "New Locale",
+	showTaskNavigation = false,
+}: {
+	projectId: string;
+	initialProposalId?: string;
+	title?: string;
+	showTaskNavigation?: boolean;
+}) {
 	const convexProjectId = convexId<"projects">(projectId);
 	const project = useQuery(api.projects.get, { projectId: convexProjectId });
-	const currentProposalId = useQuery(api.localeProposals.currentForReview, {
-		projectId: convexProjectId,
-	});
+	const currentProposalId = useQuery(
+		api.localeProposals.currentForReview,
+		initialProposalId ? "skip" : { projectId: convexProjectId },
+	);
 	const ensureForReview = useMutation(api.localeProposals.ensureForReview);
 	const stageForReview = useMutation(api.localeProposals.stageForReview);
 	const reviewStagedValue = useMutation(api.localeProposals.reviewStagedValue);
 	const finalizeForReview = useAction(api.localeProposals.finalizeForReview);
 	const artifactForReview = useAction(api.localeProposals.artifactForReview);
 	const [proposalId, setProposalId] = useState<string | null>(null);
-	const activeProposalId = proposalId ?? currentProposalId;
+	const activeProposalId = initialProposalId ?? proposalId ?? currentProposalId;
 	const [cursor, setCursor] = useState(0);
 	const detail = useQuery(
 		api.localeProposals.getForReview,
@@ -254,10 +279,26 @@ function PortugueseLocaleProposalRoute() {
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader
-				title="New Locale"
+				title={title}
 				description="Prepare a complete Portuguese catalog with the same reviewed delivery seam future Locales will use."
 				action={
 					<div className="flex flex-wrap items-center gap-2">
+						{showTaskNavigation ? (
+							<Button
+								nativeButton={false}
+								size="sm"
+								variant="outline"
+								render={
+									<Link
+										to="/projects/$projectId/proposals"
+										params={{ projectId }}
+									/>
+								}
+							>
+								<ArrowLeft data-icon="inline-start" />
+								All tasks
+							</Button>
+						) : null}
 						{detail ? (
 							<Badge variant="secondary">{detail.proposal.status}</Badge>
 						) : null}
@@ -285,7 +326,9 @@ function PortugueseLocaleProposalRoute() {
 					<AlertDescription>{notice}</AlertDescription>
 				</Alert>
 			) : null}
-			{currentProposalId === undefined && proposalId === null ? (
+			{initialProposalId === undefined &&
+			currentProposalId === undefined &&
+			proposalId === null ? (
 				<Skeleton className="h-48 w-full" />
 			) : !activeProposalId ? (
 				<Empty className="border">

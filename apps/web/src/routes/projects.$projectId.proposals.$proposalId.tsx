@@ -21,6 +21,7 @@ import {
 } from "@/components/localization/project-shell";
 import { WhitespaceFacts } from "@/components/localization/whitespace-facts";
 import { api, convexId } from "@/lib/convex-api";
+import { PortugueseLocaleProposalWorkbench } from "@/routes/projects.$projectId.locale-proposals.pt";
 
 export const Route = createFileRoute(
 	"/projects/$projectId/proposals/$proposalId",
@@ -142,6 +143,18 @@ function ProposalDetailRoute() {
 					<AlertDescription>Proposal not found.</AlertDescription>
 				</Alert>
 			</ProjectShell>
+		);
+	}
+	if (detail.proposal.localeProposalTaskScope) {
+		return (
+			<PortugueseLocaleProposalWorkbench
+				projectId={projectId}
+				initialProposalId={
+					detail.proposal.localeProposalTaskScope.localeProposalId
+				}
+				title={detail.proposal.clientProposalKey}
+				showTaskNavigation
+			/>
 		);
 	}
 

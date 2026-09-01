@@ -177,17 +177,10 @@ function ProposalsIndexRoute() {
 									size="sm"
 									variant="outline"
 									render={
-										proposal.localeProposalTaskScope ? (
-											<Link
-												to="/projects/$projectId/locale-proposals/pt"
-												params={{ projectId }}
-											/>
-										) : (
-											<Link
-												to="/projects/$projectId/proposals/$proposalId"
-												params={{ projectId, proposalId: proposal._id }}
-											/>
-										)
+										<Link
+											to="/projects/$projectId/proposals/$proposalId"
+											params={{ projectId, proposalId: proposal._id }}
+										/>
 									}
 								>
 									Review

@@ -113,9 +113,11 @@ changes the working catalog.
 3. Submit at most 16 `{ "messageId", "value" }` candidates at a time to
    `POST /translation-tasks/:id/candidates`. The server owns and validates the
    pinned Source evidence; callers do not copy fingerprints or Convex ids.
-4. Review values in `/projects/:projectId/locale-proposals/pt`. Agent values
-   remain awaiting review, corrections replace the current staged candidate,
-   and only human-applied values can finalize.
+4. Review values from the task in
+   `/projects/:projectId/proposals/:taskId`. It mounts the same new-Locale
+   workbench as the lower-level Portuguese route. Agent values remain awaiting
+   review, corrections replace the current staged candidate, and only
+   human-applied values can finalize.
 
 The `/locale-proposals/pt` endpoints remain available as a lower-level
 compatibility interface for clients that need explicit fingerprints,
