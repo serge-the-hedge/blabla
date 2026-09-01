@@ -238,6 +238,41 @@ describe("StringsCatalogView", () => {
 		);
 	});
 
+	test("gives editors a subtle key-level Translation Task selector", () => {
+		const markup = renderToStaticMarkup(
+			<StringsCatalogView
+				{...navigationProps}
+				{...windowedProps({
+					canEdit: true,
+					keys: [
+						{
+							id: "account_title",
+							source: {
+								localeCode: "en",
+								isSource: true,
+								value: "Account",
+								materialized: false,
+							},
+							targets: [
+								{
+									localeCode: "de",
+									isSource: false,
+									value: "Konto",
+									materialized: false,
+								},
+							],
+						},
+					],
+				})}
+				onCreateTranslationTask={async () => {}}
+			/>,
+		);
+
+		expect(markup).toContain(
+			'aria-label="Add account_title to Translation Task"',
+		);
+	});
+
 	test("distinguishes explicit empty values from materialized missing targets", () => {
 		const markup = renderToStaticMarkup(
 			<StringsCatalogView

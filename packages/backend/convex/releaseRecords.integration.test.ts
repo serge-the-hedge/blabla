@@ -16,6 +16,18 @@ beforeEach(() => {
 	t = createBackend();
 });
 
+async function repositoryRequest(
+	token: string,
+	path: string,
+	init: RequestInit = {},
+) {
+	const headers = new Headers(init.headers);
+	headers.set("Authorization", `Bearer ${token}`);
+	headers.set("X-Blabla-CLI-Protocol", "1");
+	if (init.body !== undefined) headers.set("Content-Type", "application/json");
+	return await t.fetch(path, { ...init, headers });
+}
+
 async function createCatalog(
 	user: Awaited<ReturnType<typeof authenticatedBackend>>,
 	slug = "primary-project",
@@ -168,6 +180,87 @@ async function prepareAndFinish(
 }
 
 describe("Release Records", () => {
+	test("builds a Ready record and applies its server-authored delta to a delivery tree", async () => {
+		const user = await authenticatedBackend(t, "release-bundle");
+		const { projectId, targetId } = await createCatalog(user);
+		await save(user, projectId, targetId, "Guten Tag");
+		const record = await prepareAndFinish(user, projectId);
+		expect(record).toMatchObject({ status: "ready", posture: "ready" });
+
+		const started = await user.mutation(api.releaseBundles.build, {
+			recordId: record.recordId,
+		});
+		expect(started.status).toBe("building");
+		await t.action(internal.releaseBundles.buildArtifact, {
+			runId: started.runId,
+		});
+		await expect(
+			user.query(api.releaseBundles.forRecord, {
+				recordId: record.recordId,
+			}),
+		).resolves.toMatchObject({
+			status: "ready",
+			changeKeyCount: 1,
+		});
+
+		const token = await user.mutation(api.apiTokens.create, {
+			projectId,
+			name: "release adapter",
+			scopes: ["export"],
+		});
+		const summary = await repositoryRequest(
+			token.token,
+			`/api/repository-adapter/v1/releases/${record.recordId}`,
+		);
+		expect(summary.status).toBe(200);
+		expect(await summary.json()).toMatchObject({
+			releaseRecord: { id: record.recordId, baselineCommit: "baseline" },
+			changeKeyCount: 1,
+		});
+
+		const delivery = await repositoryRequest(
+			token.token,
+			`/api/repository-adapter/v1/releases/${record.recordId}/delivery-tree`,
+			{
+				method: "POST",
+				body: JSON.stringify({
+					files: [
+						{
+							catalogPath: "en.arb",
+							content: '{"@@locale":"en","greeting":"Hello"}',
+						},
+						{
+							catalogPath: "de.arb",
+							content: '{"@@locale":"de","greeting":"Servus"}',
+						},
+					],
+				}),
+			},
+		);
+		expect(delivery.status).toBe(200);
+		const deliveryBody = (await delivery.json()) as {
+			deliveryCaptureId: Id<"releaseDeliveryCaptures">;
+			files: Array<{ catalogPath: string; content: string }>;
+			applied: string[];
+			skipped: unknown[];
+		};
+		expect(deliveryBody.applied).toEqual(["greeting"]);
+		expect(deliveryBody.skipped).toEqual([]);
+		expect(
+			deliveryBody.files.find((file) => file.catalogPath === "de.arb")?.content,
+		).toContain('"greeting": "Guten Tag"');
+		const captures = await t.run(async (ctx) =>
+			ctx.db.query("releaseDeliveryCaptures").collect(),
+		);
+		expect(captures).toHaveLength(1);
+		expect(captures[0]).toMatchObject({
+			_id: deliveryBody.deliveryCaptureId,
+			recordId: record.recordId,
+			appliedCount: 1,
+			skipped: [],
+		});
+	});
+
 	test("requires a Baseline and a complete Navigation Index", async () => {
 		const user = await authenticatedBackend(t, "release-basis");
 		const projectId = await createProject(user);

@@ -4,6 +4,8 @@ import 'package:blabla_cli/agent_api_gateway.dart';
 import 'package:blabla_cli/cli_version.dart';
 import 'package:blabla_cli/credentials.dart';
 import 'package:blabla_cli/locale_proposal_adapter.dart';
+import 'package:blabla_cli/release_api_gateway.dart';
+import 'package:blabla_cli/release_delivery_adapter.dart';
 import 'package:blabla_cli/snapshot_sync_adapter.dart';
 
 Future<void> main(List<String> arguments) async {
@@ -27,7 +29,9 @@ Future<int> runCli(
     output(_usage);
     return arguments.isEmpty ? 1 : 0;
   }
-  if (arguments.first != 'deliver-portuguese' && arguments.first != 'sync') {
+  if (arguments.first != 'deliver-portuguese' &&
+      arguments.first != 'deliver' &&
+      arguments.first != 'sync') {
     if (arguments.first == 'login') {
       return _login(
         arguments.skip(1).toList(),
@@ -42,6 +46,15 @@ Future<int> runCli(
 
   if (arguments.first == 'sync') {
     return _sync(
+      arguments.skip(1).toList(),
+      environment: effectiveEnvironment,
+      write: output,
+      writeError: errorOutput,
+    );
+  }
+
+  if (arguments.first == 'deliver') {
+    return _deliverRelease(
       arguments.skip(1).toList(),
       environment: effectiveEnvironment,
       write: output,
@@ -110,6 +123,76 @@ Future<int> runCli(
     return 0;
   } on RepositoryAdapterException catch (error) {
     errorOutput(error.message);
+    return 1;
+  }
+}
+
+Future<int> _deliverRelease(
+  List<String> arguments, {
+  required Map<String, String> environment,
+  required void Function(String line) write,
+  required void Function(String line) writeError,
+}) async {
+  try {
+    final options = _options(arguments, const {
+      'checkout',
+      'release',
+      'server',
+      'token',
+      'flutter-sdk',
+    });
+    final recordId = _requiredOption(options, 'release');
+    final store = CredentialStore();
+    BlablaCredentials? storedCredentials;
+    Future<BlablaCredentials?> stored() async =>
+        storedCredentials ??= await store.read();
+    final token =
+        options['token'] ??
+        environment['BLABLA_TOKEN'] ??
+        (await stored())?.token;
+    if (token == null || token.isEmpty) {
+      throw RepositoryAdapterException(
+        'Set BLABLA_TOKEN or pass --token to read the Release Bundle.',
+      );
+    }
+    final serverValue =
+        options['server'] ??
+        environment['BLABLA_API_URL'] ??
+        (await stored())?.server;
+    if (serverValue == null || serverValue.isEmpty) {
+      throw RepositoryAdapterException(
+        'Set BLABLA_API_URL or pass --server for the Blabla deployment.',
+      );
+    }
+    final server = Uri.tryParse(serverValue);
+    if (server == null ||
+        !server.hasScheme ||
+        !{'http', 'https'}.contains(server.scheme)) {
+      throw RepositoryAdapterException(
+        '--server must be an http or https URL.',
+      );
+    }
+    final checkout = Directory(options['checkout'] ?? Directory.current.path);
+    final flutter = await FlutterToolchainResolver(
+      environment: environment,
+    ).resolve(checkout, explicitSdk: options['flutter-sdk']);
+    write('Blabla CLI $blablaCliVersion. ${flutter.description}');
+    await ReleaseRepositoryAdapter().deliver(
+      ReleaseDeliveryRequest(
+        checkout: checkout,
+        recordId: recordId,
+        flutter: flutter,
+        gateway: HttpReleaseGateway(
+          baseUrl: server,
+          token: token,
+          onWarning: write,
+        ),
+        write: write,
+      ),
+    );
+    return 0;
+  } on RepositoryAdapterException catch (error) {
+    writeError(error.message);
     return 1;
   }
 }
@@ -231,6 +314,7 @@ String _requiredOption(Map<String, String> options, String key) {
 
 const _usage = '''Usage:
   blabla sync [options]
+  blabla deliver --release <release-record-id> [options]
   blabla deliver-portuguese --proposal <proposal-id> [options]
   blabla login --server <url> --token <token>
 
@@ -238,9 +322,11 @@ Options:
   sync                 Read bound ARB files and submit one durable snapshot
   --checkout <path>  Brickit checkout (defaults to the current directory)
   --server <url>     Blabla deployment (or BLABLA_API_URL)
-  --token <token>    Snapshot-submission token (or BLABLA_TOKEN)
+  --token <token>    Workspace token (or BLABLA_TOKEN)
   --flutter-sdk <path>
                      Flutter SDK directory (or FLUTTER_ROOT / .fvm/flutter_sdk
                      / .fvmrc through fvm / flutter on PATH)
 
-The command creates only a local review branch. It never pushes or opens a pull request.''';
+`deliver` applies a reviewed existing-locale Release Bundle, runs Flutter
+generation in a disposable worktree, and creates one local review commit.
+Commands never push or open a pull request.''';

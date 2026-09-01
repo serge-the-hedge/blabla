@@ -21,6 +21,7 @@ import {
 	PreparingCard,
 	ReleaseRecordView,
 } from "@/components/localization/release-record-view";
+import { blablaCommand } from "@/lib/blabla-command";
 import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects/$projectId/release")({
@@ -36,8 +37,14 @@ function ReleaseRoute() {
 		projectId: convexId<"projects">(projectId),
 	});
 	const prepare = useMutation(api.releaseRecords.prepare);
+	const buildRelease = useMutation(api.releaseBundles.build);
 	const [starting, setStarting] = useState(false);
+	const [building, setBuilding] = useState(false);
 	const record = release?.kind === "available" ? release.current : null;
+	const bundle = useQuery(
+		api.releaseBundles.forRecord,
+		record?.status === "ready" ? { recordId: record.recordId } : "skip",
+	);
 	const history = useQuery(
 		api.releaseRecords.history,
 		release?.kind === "available" && record
@@ -66,6 +73,22 @@ function ReleaseRoute() {
 			);
 		} finally {
 			setStarting(false);
+		}
+	};
+	const build = async () => {
+		if (!record) return;
+		setBuilding(true);
+		try {
+			await buildRelease({ recordId: record.recordId });
+			toast.success("Release Bundle construction started.");
+		} catch (cause) {
+			toast.error(
+				cause instanceof Error
+					? cause.message
+					: "Could not build the Release Bundle.",
+			);
+		} finally {
+			setBuilding(false);
 		}
 	};
 
@@ -120,6 +143,50 @@ function ReleaseRoute() {
 						>
 							Work through in Strings
 						</Button>
+					}
+					releaseAction={
+						bundle?.status === "ready" ? (
+							bundle.changeKeyCount === 0 ? (
+								<p className="text-muted-foreground text-xs">
+									No reviewed catalog changes need delivery from this record.
+								</p>
+							) : (
+								<div className="flex flex-col gap-2">
+									<p className="text-muted-foreground text-xs">
+										Bundle ready · {bundle.changeKeyCount ?? 0} changed key
+										{bundle.changeKeyCount === 1 ? "" : "s"}. From a clean
+										checkout, run:
+									</p>
+									<code className="w-fit max-w-full overflow-x-auto border bg-muted/30 px-2 py-1.5 text-xs">
+										{blablaCommand(`deliver --release ${record.recordId}`)}
+									</code>
+								</div>
+							)
+						) : (
+							<div className="flex flex-col gap-1.5">
+								<Button
+									size="sm"
+									disabled={
+										building ||
+										bundle === undefined ||
+										bundle?.status === "building"
+									}
+									onClick={build}
+								>
+									{building || bundle?.status === "building" ? (
+										<LoaderCircle aria-hidden="true" className="animate-spin" />
+									) : null}
+									{bundle?.status === "failed"
+										? "Retry build"
+										: "Build release"}
+								</Button>
+								{bundle?.failure ? (
+									<p className="text-destructive text-xs">
+										{bundle.failure.message}
+									</p>
+								) : null}
+							</div>
+						)
 					}
 				/>
 			) : (

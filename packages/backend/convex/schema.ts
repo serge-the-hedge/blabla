@@ -1307,6 +1307,60 @@ export default defineSchema({
 		messageId: v.string(),
 	}).index("by_handoff", ["handoffId"]),
 
+	// One immutable Release Bundle per approved Release Record. Construction is
+	// an explicit, durable run; the complete artifact lives in file storage and
+	// the local Repository Adapter can only ask Blabla to apply its delta.
+	releaseBuildRuns: defineTable({
+		projectId: v.id("projects"),
+		recordId: v.id("releaseRecords"),
+		status: v.union(
+			v.literal("building"),
+			v.literal("ready"),
+			v.literal("failed"),
+		),
+		startedBy: actor,
+		bundleStorageId: v.optional(v.id("_storage")),
+		bundleHash: v.optional(v.string()),
+		bundleByteLength: v.optional(v.number()),
+		changeKeyCount: v.optional(v.number()),
+		failure: v.optional(
+			v.object({
+				code: v.optional(v.string()),
+				message: v.string(),
+				failedAt: v.number(),
+			}),
+		),
+		createdAt: v.number(),
+		completedAt: v.optional(v.number()),
+	})
+		.index("by_record", ["recordId"])
+		.index("by_project_and_createdAt", ["projectId", "createdAt"]),
+
+	// The exact catalog tree observed by a local delivery. It is evidence for
+	// the Release Record, never a candidate Baseline Snapshot.
+	releaseDeliveryCaptures: defineTable({
+		projectId: v.id("projects"),
+		recordId: v.id("releaseRecords"),
+		runId: v.id("releaseBuildRuns"),
+		deliveredBy: actor,
+		captureStorageId: v.id("_storage"),
+		captureHash: v.string(),
+		captureByteLength: v.number(),
+		appliedCount: v.number(),
+		skipped: v.array(
+			v.object({
+				messageId: v.string(),
+				reason: v.union(
+					v.literal("missing_source"),
+					v.literal("source_changed"),
+				),
+			}),
+		),
+		createdAt: v.number(),
+	})
+		.index("by_record_and_captureHash", ["recordId", "captureHash"])
+		.index("by_record_and_createdAt", ["recordId", "createdAt"]),
+
 	// Automatic Archive Reconciliation remains normalized and tied to the
 	// accepted projection that made it visible. Published rows are immutable
 	// history; only abandoned staging rows are ever discarded.
@@ -1471,10 +1525,20 @@ export default defineSchema({
 	// revision through the proposal module.
 	agentTranslationProposals: defineTable({
 		projectId: v.id("projects"),
-		createdByTokenId: v.id("apiTokens"),
+		// Agent-created proposals retain their owning token. Human-created
+		// Translation Tasks deliberately have no token owner: any current
+		// project-scoped propose token may fill their frozen target scope.
+		createdByTokenId: v.optional(v.id("apiTokens")),
 		createdBy: actor,
 		clientProposalKey: v.string(),
 		target: agentTranslationProposalTarget,
+		taskScope: v.optional(
+			v.object({
+				localeId: v.id("locales"),
+				localeCode: v.string(),
+				targetCount: v.number(),
+			}),
+		),
 		status: v.union(
 			v.literal("open"),
 			v.literal("accepted"),
@@ -1492,6 +1556,25 @@ export default defineSchema({
 			"clientProposalKey",
 		])
 		.index("by_project_and_updatedAt", ["projectId", "updatedAt"]),
+
+	// A Translation Task freezes a small, human-legible work scope without
+	// copying the catalog into one reactive document. Candidate revisions use
+	// this server-owned basis, so agents submit only message/value pairs.
+	translationTaskTargets: defineTable({
+		projectId: v.id("projects"),
+		proposalId: v.id("agentTranslationProposals"),
+		catalogIndex: v.number(),
+		messageId: v.string(),
+		localeId: v.id("locales"),
+		localeCode: v.string(),
+		sourceValue: v.string(),
+		targetValue: v.string(),
+		targetCatalogPath: v.string(),
+		basis: agentTranslationCatalogWorkspaceBasis,
+		createdAt: v.number(),
+	})
+		.index("by_proposal_and_catalogIndex", ["proposalId", "catalogIndex"])
+		.index("by_proposal_and_messageId", ["proposalId", "messageId"]),
 
 	agentTranslationCandidates: defineTable({
 		projectId: v.id("projects"),

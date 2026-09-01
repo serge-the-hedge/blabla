@@ -39,6 +39,8 @@ const MAX_CONTEXT_LOCALES = 20;
 const MAX_CONTEXT_PAIRS = 128;
 const MAX_DISCOVERY_RESULTS = 50;
 const MAX_DISCOVERY_RESPONSE_BYTES = 512 * 1024;
+const MAX_TASK_TARGETS = 32;
+const MAX_TASK_TITLE_BYTES = 256;
 
 const targetValidator = v.union(
 	v.object({ kind: v.literal("catalogWorkspace") }),
@@ -82,6 +84,32 @@ const reviewDecisionValidator = v.union(
 	}),
 	v.object({ kind: v.literal("intentionalBlank"), reason: v.string() }),
 );
+
+const taskBasisValidator = v.object({
+	kind: v.literal("catalogWorkspace"),
+	projectionId: v.id("catalogProjections"),
+	snapshotId: v.id("sourceSnapshots"),
+	gitValueFingerprint: v.string(),
+	gitValueRevision: v.number(),
+	workspaceRevision: v.number(),
+	sourceFingerprint: v.string(),
+});
+
+const taskTargetValidator = v.object({
+	_id: v.id("translationTaskTargets"),
+	_creationTime: v.number(),
+	projectId: v.id("projects"),
+	proposalId: v.id("agentTranslationProposals"),
+	catalogIndex: v.number(),
+	messageId: v.string(),
+	localeId: v.id("locales"),
+	localeCode: v.string(),
+	sourceValue: v.string(),
+	targetValue: v.string(),
+	targetCatalogPath: v.string(),
+	basis: taskBasisValidator,
+	createdAt: v.number(),
+});
 
 type ProposalTarget =
 	| { kind: "catalogWorkspace" }
@@ -161,7 +189,14 @@ async function proposalForToken(
 	tokenId: Id<"apiTokens">,
 ) {
 	const proposal = await ctx.db.get(proposalId);
-	if (!proposal || proposal.createdByTokenId !== tokenId) {
+	const token = await ctx.db.get(tokenId);
+	if (
+		!proposal ||
+		!token ||
+		proposal.projectId !== token.projectId ||
+		(proposal.createdByTokenId !== undefined &&
+			proposal.createdByTokenId !== tokenId)
+	) {
 		throw new ConvexError({
 			code: "NOT_FOUND",
 			message: "Translation proposal not found.",
@@ -416,6 +451,363 @@ function assertDiscoveryResponse(value: unknown): void {
 		});
 	}
 }
+
+type TaskActor =
+	| { kind: "user"; id: string }
+	| { kind: "agent"; id: Id<"apiTokens"> };
+
+async function createCatalogWorkspaceTask(
+	ctx: MutationCtx,
+	input: {
+		projectId: Id<"projects">;
+		title: string;
+		localeId: Id<"locales">;
+		messageIds: readonly string[];
+		actor: TaskActor;
+		createdByTokenId?: Id<"apiTokens">;
+	},
+) {
+	assertBoundedString(input.title, "title", MAX_TASK_TITLE_BYTES);
+	if (
+		input.messageIds.length === 0 ||
+		input.messageIds.length > MAX_TASK_TARGETS
+	) {
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message: `A Translation Task needs 1–${MAX_TASK_TARGETS} keys.`,
+		});
+	}
+	const uniqueMessageIds = [...new Set(input.messageIds)];
+	if (uniqueMessageIds.length !== input.messageIds.length) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "A Translation Task cannot contain the same key twice.",
+		});
+	}
+	const locale = await ctx.db.get(input.localeId);
+	if (
+		!locale ||
+		locale.projectId !== input.projectId ||
+		locale.archivedAt !== undefined
+	) {
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message: "The requested target Locale is not active in this project.",
+		});
+	}
+
+	const targets = [];
+	for (const messageId of uniqueMessageIds) {
+		const current = await currentWorkspaceTarget(
+			ctx,
+			input.projectId,
+			messageId,
+			input.localeId,
+		);
+		if (!current.projection.snapshotId) {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "The active Catalog Workspace is missing Snapshot identity.",
+			});
+		}
+		targets.push({
+			catalogIndex: current.target.catalogIndex,
+			messageId,
+			localeId: current.target.localeId,
+			localeCode: current.target.localeCode,
+			sourceValue: current.source.value,
+			targetValue: current.value,
+			targetCatalogPath: current.target.catalogPath,
+			basis: {
+				kind: "catalogWorkspace" as const,
+				projectionId: current.projection._id,
+				snapshotId: current.projection.snapshotId,
+				gitValueFingerprint: current.target.gitValueFingerprint as string,
+				gitValueRevision: current.target.gitValueRevision ?? 0,
+				workspaceRevision: current.workspaceRevision,
+				sourceFingerprint: current.source.sourceFingerprint,
+			},
+		});
+	}
+	targets.sort(
+		(left, right) =>
+			left.catalogIndex - right.catalogIndex ||
+			left.messageId.localeCompare(right.messageId),
+	);
+
+	const timestamp = now();
+	const proposalId = await ctx.db.insert("agentTranslationProposals", {
+		projectId: input.projectId,
+		...(input.createdByTokenId === undefined
+			? {}
+			: { createdByTokenId: input.createdByTokenId }),
+		createdBy: input.actor,
+		clientProposalKey: input.title.trim(),
+		target: { kind: "catalogWorkspace" },
+		taskScope: {
+			localeId: locale._id,
+			localeCode: locale.code,
+			targetCount: targets.length,
+		},
+		status: "open",
+		candidateCount: 0,
+		revisionCount: 0,
+		retainedByteLength: 0,
+		createdAt: timestamp,
+		updatedAt: timestamp,
+	});
+	for (const target of targets) {
+		await ctx.db.insert("translationTaskTargets", {
+			projectId: input.projectId,
+			proposalId,
+			...target,
+			createdAt: timestamp,
+		});
+	}
+	return {
+		taskId: proposalId,
+		title: input.title.trim(),
+		localeCode: locale.code,
+		targetCount: targets.length,
+	};
+}
+
+/** Human entry into the Translation Task module. The browser names a Locale
+ * and a small key set; the server freezes every concurrency and Snapshot fact
+ * an agent will need later. */
+export const createTask = mutation({
+	args: {
+		projectId: v.id("projects"),
+		title: v.string(),
+		localeId: v.id("locales"),
+		messageIds: v.array(v.string()),
+	},
+	returns: v.object({
+		taskId: v.id("agentTranslationProposals"),
+		title: v.string(),
+		localeCode: v.string(),
+		targetCount: v.number(),
+	}),
+	handler: async (ctx, args) => {
+		const { userId } = await requireEditor(ctx, args.projectId);
+		return await createCatalogWorkspaceTask(ctx, {
+			...args,
+			actor: { kind: "user", id: userId },
+		});
+	},
+});
+
+export const createTaskForAgent = internalMutation({
+	args: {
+		token: v.string(),
+		clientTaskKey: v.string(),
+		localeCode: v.string(),
+		messageIds: v.array(v.string()),
+	},
+	returns: v.object({
+		taskId: v.id("agentTranslationProposals"),
+		title: v.string(),
+		localeCode: v.string(),
+		targetCount: v.number(),
+	}),
+	handler: async (ctx, args) => {
+		const token = await authenticate(ctx, args.token, "propose");
+		assertBoundedString(
+			args.clientTaskKey,
+			"clientTaskKey",
+			MAX_TASK_TITLE_BYTES,
+		);
+		const locale = await ctx.db
+			.query("locales")
+			.withIndex("by_project_code", (q) =>
+				q.eq("projectId", token.projectId).eq("code", args.localeCode),
+			)
+			.unique();
+		if (!locale || locale.archivedAt !== undefined) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "The requested target Locale is not active in this project.",
+			});
+		}
+		const existing = await ctx.db
+			.query("agentTranslationProposals")
+			.withIndex("by_project_and_token_and_clientProposalKey", (q) =>
+				q
+					.eq("projectId", token.projectId)
+					.eq("createdByTokenId", token._id)
+					.eq("clientProposalKey", args.clientTaskKey.trim()),
+			)
+			.unique();
+		if (existing) {
+			const targets = existing.taskScope
+				? await ctx.db
+						.query("translationTaskTargets")
+						.withIndex("by_proposal_and_catalogIndex", (q) =>
+							q.eq("proposalId", existing._id),
+						)
+						.take(MAX_TASK_TARGETS + 1)
+				: [];
+			const expected = [...new Set(args.messageIds)].sort();
+			const actual = targets.map((target) => target.messageId).sort();
+			if (
+				!existing.taskScope ||
+				existing.taskScope.localeId !== locale._id ||
+				JSON.stringify(actual) !== JSON.stringify(expected)
+			) {
+				throw new ConvexError({
+					code: "IDEMPOTENCY_KEY_REUSED",
+					message:
+						"clientTaskKey is already bound to a different Translation Task scope.",
+				});
+			}
+			return {
+				taskId: existing._id,
+				title: existing.clientProposalKey,
+				localeCode: existing.taskScope.localeCode,
+				targetCount: existing.taskScope.targetCount,
+			};
+		}
+		return await createCatalogWorkspaceTask(ctx, {
+			projectId: token.projectId,
+			title: args.clientTaskKey,
+			localeId: locale._id,
+			messageIds: args.messageIds,
+			actor: { kind: "agent", id: token._id },
+			createdByTokenId: token._id,
+		});
+	},
+});
+
+/** Bounded agent read for a human-created task. Unlike Workspace discovery,
+ * this returns the exact frozen scope and never asks the caller to manufacture
+ * concurrency tokens. */
+export const taskForAgent = internalQuery({
+	args: {
+		token: v.string(),
+		taskId: v.id("agentTranslationProposals"),
+		cursor: v.number(),
+		limit: v.number(),
+	},
+	returns: v.object({
+		task: v.object({
+			taskId: v.id("agentTranslationProposals"),
+			title: v.string(),
+			status: v.union(
+				v.literal("open"),
+				v.literal("accepted"),
+				v.literal("rejected"),
+			),
+			localeCode: v.string(),
+			targetCount: v.number(),
+			candidateCount: v.number(),
+		}),
+		targets: v.array(taskTargetValidator),
+		nextCursor: v.union(v.number(), v.null()),
+	}),
+	handler: async (ctx, args) => {
+		const token = await authenticate(ctx, args.token, "read");
+		const proposal = await proposalForToken(ctx, args.taskId, token._id);
+		if (!proposal.taskScope || proposal.target.kind !== "catalogWorkspace") {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Translation Task not found.",
+			});
+		}
+		assertNonNegativeInteger(args.cursor, "cursor");
+		const limit = Math.min(16, Math.max(1, Math.trunc(args.limit)));
+		const rows = await ctx.db
+			.query("translationTaskTargets")
+			.withIndex("by_proposal_and_catalogIndex", (q) =>
+				q.eq("proposalId", proposal._id).gte("catalogIndex", args.cursor),
+			)
+			.take(limit + 1);
+		const targets = rows.slice(0, limit);
+		const last = targets[targets.length - 1];
+		return {
+			task: {
+				taskId: proposal._id,
+				title: proposal.clientProposalKey,
+				status: proposal.status,
+				localeCode: proposal.taskScope.localeCode,
+				targetCount: proposal.taskScope.targetCount,
+				candidateCount: proposal.candidateCount,
+			},
+			targets,
+			nextCursor: rows.length > limit && last ? last.catalogIndex + 1 : null,
+		};
+	},
+});
+
+export const taskSubmissionContext = internalQuery({
+	args: {
+		token: v.string(),
+		taskId: v.id("agentTranslationProposals"),
+		messageIds: v.array(v.string()),
+	},
+	returns: v.array(
+		v.object({
+			messageId: v.string(),
+			localeId: v.id("locales"),
+			basis: taskBasisValidator,
+			currentRevision: v.number(),
+		}),
+	),
+	handler: async (ctx, args) => {
+		const token = await authenticate(ctx, args.token, "propose");
+		const proposal = await proposalForToken(ctx, args.taskId, token._id);
+		if (
+			!proposal.taskScope ||
+			proposal.target.kind !== "catalogWorkspace" ||
+			proposal.status !== "open"
+		) {
+			throw new ConvexError({
+				code: "BAD_STATE",
+				message: "This Translation Task cannot receive candidates.",
+			});
+		}
+		if (
+			args.messageIds.length === 0 ||
+			args.messageIds.length > MAX_SUBMISSION_ITEMS ||
+			new Set(args.messageIds).size !== args.messageIds.length
+		) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: `Submit 1–${MAX_SUBMISSION_ITEMS} distinct task keys at a time.`,
+			});
+		}
+		const result = [];
+		for (const messageId of args.messageIds) {
+			const target = await ctx.db
+				.query("translationTaskTargets")
+				.withIndex("by_proposal_and_messageId", (q) =>
+					q.eq("proposalId", proposal._id).eq("messageId", messageId),
+				)
+				.unique();
+			if (!target) {
+				throw new ConvexError({
+					code: "VALIDATION",
+					message: `“${messageId}” is outside this Translation Task.`,
+				});
+			}
+			const candidate = await ctx.db
+				.query("agentTranslationCandidates")
+				.withIndex("by_proposal_and_messageId_and_localeId", (q) =>
+					q
+						.eq("proposalId", proposal._id)
+						.eq("messageId", messageId)
+						.eq("localeId", target.localeId),
+				)
+				.unique();
+			result.push({
+				messageId,
+				localeId: target.localeId,
+				basis: target.basis,
+				currentRevision: candidate?.currentRevision ?? 0,
+			});
+		}
+		return result;
+	},
+});
 
 export const workspaceContext = internalQuery({
 	args: {
@@ -728,6 +1120,26 @@ export const submitRevisions = internalMutation({
 				});
 			}
 			identities.add(identity);
+			if (proposal.taskScope) {
+				const taskTarget = await ctx.db
+					.query("translationTaskTargets")
+					.withIndex("by_proposal_and_messageId", (q) =>
+						q.eq("proposalId", proposal._id).eq("messageId", item.messageId),
+					)
+					.unique();
+				if (
+					!taskTarget ||
+					item.localeId !== taskTarget.localeId ||
+					item.basis.kind !== "catalogWorkspace" ||
+					JSON.stringify(item.basis) !== JSON.stringify(taskTarget.basis)
+				) {
+					throw new ConvexError({
+						code: "VALIDATION",
+						message:
+							"This candidate is outside the Translation Task's frozen target scope.",
+					});
+				}
+			}
 			let candidate: Doc<"agentTranslationCandidates"> | null = null;
 			if (proposal.target.kind === "catalogWorkspace") {
 				if (
@@ -1028,7 +1440,21 @@ export const getForReview = query({
 				return { candidate, revision, reviews };
 			}),
 		);
-		return { proposal, candidates: entries };
+		const taskTargets = proposal.taskScope
+			? await ctx.db
+					.query("translationTaskTargets")
+					.withIndex("by_proposal_and_catalogIndex", (q) =>
+						q.eq("proposalId", proposal._id),
+					)
+					.take(MAX_TASK_TARGETS + 1)
+			: [];
+		if (taskTargets.length > MAX_TASK_TARGETS) {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Translation Task exceeds its target envelope.",
+			});
+		}
+		return { proposal, taskTargets, candidates: entries };
 	},
 });
 
@@ -1160,7 +1586,13 @@ async function completedProposalStatus(
 		.query("agentTranslationCandidates")
 		.withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
 		.take(MAX_CANDIDATES + 1);
-	if (candidates.length === 0 || candidates.length > MAX_CANDIDATES) {
+	const proposal = await ctx.db.get(proposalId);
+	if (
+		candidates.length === 0 ||
+		candidates.length > MAX_CANDIDATES ||
+		(proposal?.taskScope !== undefined &&
+			candidates.length !== proposal.taskScope.targetCount)
+	) {
 		return "open";
 	}
 	let accepted = 0;

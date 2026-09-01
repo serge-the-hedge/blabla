@@ -52,6 +52,7 @@ const workspaceScopes: TokenScope[] = [
 	"read",
 	"search",
 	"propose",
+	"export",
 	"snapshot-submission",
 ];
 type ApiToken = {
@@ -156,10 +157,10 @@ function ApiTokensRoute() {
 					<CardHeader>
 						<CardTitle>Create workspace connection</CardTitle>
 						<CardDescription>
-							Create one connection for this project. It lets the local{" "}
-							<code>blabla sync</code> command submit source snapshots and lets{" "}
-							agents propose reviewable translations. It cannot publish changes
-							by itself.
+							Create one connection for this project. It lets local{" "}
+							<code>blabla</code> commands sync source snapshots and deliver
+							reviewed Release Bundles, while agents can propose translations.
+							It cannot push or merge changes by itself.
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
@@ -311,7 +312,7 @@ function ApiTokensRoute() {
 						<CardTitle>Agent connection</CardTitle>
 						<CardDescription>
 							The same workspace connection can be handed to an agent through
-							your chat or used by the local sync command.
+							your chat or used by the local sync and delivery commands.
 						</CardDescription>
 					</CardHeader>
 					<CardContent className="flex flex-col gap-3">

@@ -26,8 +26,10 @@ Authorization: Bearer <project_api_token>
 2. Go to **Settings -> API tokens**.
 3. Create a project-scoped token with the minimum scopes:
    - Translation agents: `read`, `search`, `propose`.
-   - The legacy `export` scope is reserved and must not be used for release
-     output.
+   - Local Repository Adapter delivery: `export`.
+   - The default workspace connection includes those scopes plus
+     `snapshot-submission`, so one stored token supports the complete local
+     workflow.
 4. Copy the raw token immediately. The app stores only a hash and cannot show
    the raw value again.
 5. Give agents the site base URL and token:
@@ -50,13 +52,14 @@ intentionally one-time visible.
    To audit imported baseline state, read the conservative human-confirmation
    plan with `GET /workspace/ordinary-confirmations`; this endpoint never
    confirms values itself.
-3. Fetch exact target facts and the concurrency basis with
-   `POST /workspace/context`.
-4. Create or resume one logical proposal with `POST /translation-proposals`.
-5. Submit 1–16 non-empty candidate values at a time to
-   `POST /translation-proposals/:id/candidate-revisions`. Include the exact
-   `basis` returned by Workspace discovery and use a new `clientRevisionKey`
-   for every correction.
+3. For a human-selected task, read it with
+   `GET /translation-tasks/:id?cursor=...&limit=...`. To start an agent-owned
+   batch instead, call `POST /translation-tasks` with one Locale and up to 32
+   message ids.
+4. Submit 1–16 candidates at a time to
+   `POST /translation-tasks/:id/candidates`. The server resolves and validates
+   the frozen concurrency basis; the agent supplies only message ids and
+   values.
 6. Open the proposal in the human Proposals workbench. Accepting an exact
    candidate, accepting edited text, rejecting it, or recording an Intentional
    Blank leaves immutable review evidence; only an editor acceptance changes
@@ -84,8 +87,9 @@ that a value is current in the Strings editor.
 For either workflow, separate real language issues from app-context artifacts.
 Note any intentionally preserved casing, spacing, or punctuation in your report
 so later agents do not propose the same cosmetic changes. Release files are not
-available through the legacy Agent API export; they will come from the Catalog
-Workspace Release Bundle workflow.
+available through the legacy Agent API export. An editor builds a Release Bundle
+from a Ready Release Record, then the local Repository Adapter applies it
+through the dedicated release endpoints.
 
 ### Portuguese Locale Proposal
 
@@ -152,7 +156,8 @@ human to create it in the web app before proposing translations.
 - `read`: project metadata, context, and change-set status.
 - `search`: string search.
 - `propose`: translation and tag change-set creation.
-- `export`: JSON or ARB export.
+- `export`: read and apply an immutable Release Bundle through the local
+  Repository Adapter. It does not grant a remote Git write.
 
 Create tokens in the web app under project settings. Pick the minimum scopes the
 integration needs.
@@ -217,6 +222,50 @@ existing target values in the Catalog Workspace:
 
 Retries with the same token, key, and target return the same proposal. Reusing
 the key for a different target returns `IDEMPOTENCY_KEY_REUSED`.
+
+### `POST /translation-tasks`
+
+Creates or resumes a bounded existing-locale task. A task freezes the selected
+keys, Locale, current Source Contract, target values, and concurrency basis on
+the server:
+
+```json
+{
+  "clientTaskKey": "checkout-de-polish-1",
+  "localeCode": "de",
+  "messageIds": ["checkout.payButton", "checkout.total"]
+}
+```
+
+The same task shape is created from the Strings UI when an editor selects keys
+and chooses **Start task**. A project-scoped propose token can fill a
+human-created task; token-owned tasks remain private to their creating token.
+
+### `GET /translation-tasks/:id`
+
+Returns a bounded page of the frozen task (`limit` 1–16) and an integer
+`nextCursor`. Pass that cursor unchanged until `done` is true. Each target
+includes Source and current target text, while submitted targets also identify
+their current candidate revision.
+
+### `POST /translation-tasks/:id/candidates`
+
+Submits values without exposing Convex ids or asking the agent to copy internal
+basis facts:
+
+```json
+{
+  "items": [
+    { "messageId": "checkout.payButton", "value": "Jetzt bezahlen" }
+  ]
+}
+```
+
+The endpoint derives a deterministic idempotency key from the task, key, value,
+and expected revision. An exact retry is safe. Corrections create a new
+immutable candidate revision. Candidates remain inert until an editor accepts,
+edits and accepts, rejects, or records an Intentional Blank in Translation
+Tasks.
 
 ### `POST /translation-proposals/:id/candidate-revisions`
 
@@ -456,8 +505,34 @@ provenance, the project's integration branch, and the fixed `pt-BR` Runtime
 Locale Mapping. The local Repository Adapter requires the checkout to be on
 that branch and uses it as the pull-request base.
 
+## Existing-locale delivery
+
+When existing-locale review is complete, prepare a Release Record in the web
+app. A `ready` posture can be built into one immutable Release Bundle. The
+Repository Adapter API uses the site root rather than the `/api/agent/v1` base:
+
+- `GET /api/repository-adapter/v1/releases/:recordId` returns the repository,
+  Baseline, integration branch, exact bound catalogs, and change-key count.
+- `POST /api/repository-adapter/v1/releases/:recordId/delivery-tree` accepts the
+  current contents of every bound catalog and returns complete server-authored
+  catalog files plus applied and skipped key reports.
+
+The server overwrites target drift with the reviewed value. If the current
+Source value changed or disappeared relative to the Release Bundle's Baseline,
+it skips the entire key. Run the command from a clean Brickit integration
+branch:
+
+```sh
+blabla deliver --release <release-record-id>
+```
+
+The CLI preflights Flutter generation in a disposable worktree, applies the
+returned Catalog Documents, regenerates localization code, and creates one
+local `blabla/release-...` commit with provenance trailers. It prints push and
+`gh pr create` commands but never invokes either operation.
+
 ### `POST /export`
 
 Retired. Returns `410 Gone`. The old endpoint synthesized output from the
-pre-Catalog-Workspace model and is not a lossless Brickit release surface.
-Release automation must wait for the immutable Release Bundle workflow.
+pre-Catalog-Workspace model and is not a lossless Brickit release surface. Use
+the immutable Release Bundle workflow above.

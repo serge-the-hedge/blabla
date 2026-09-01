@@ -163,12 +163,23 @@ function ProposalDetailRoute() {
 	};
 	const blankReasonFor = (revisionId: string) =>
 		blankReasons[revisionId]?.trim() ?? "";
+	const candidateMessageIds = new Set(
+		detail.candidates.map(({ candidate }) => candidate.messageId),
+	);
+	const waitingTaskTargets = detail.taskTargets.filter(
+		(target) => !candidateMessageIds.has(target.messageId),
+	);
+	const taskScope = proposal.taskScope;
 
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader
 				title={proposal.clientProposalKey}
-				description={`${proposal.candidateCount} target${proposal.candidateCount === 1 ? "" : "s"} · ${proposal.revisionCount} immutable revision${proposal.revisionCount === 1 ? "" : "s"}`}
+				description={
+					taskScope
+						? `${taskScope.localeCode} · ${proposal.candidateCount} of ${taskScope.targetCount} candidates prepared · ${proposal.revisionCount} immutable revision${proposal.revisionCount === 1 ? "" : "s"}`
+						: `${proposal.candidateCount} target${proposal.candidateCount === 1 ? "" : "s"} · ${proposal.revisionCount} immutable revision${proposal.revisionCount === 1 ? "" : "s"}`
+				}
 				action={
 					<Button
 						nativeButton={false}
@@ -191,7 +202,45 @@ function ProposalDetailRoute() {
 					<AlertDescription>{error}</AlertDescription>
 				</Alert>
 			) : null}
+			{taskScope && proposal.status === "open" ? (
+				<Alert className="mb-4">
+					<AlertDescription>
+						This task has a frozen {taskScope.localeCode} scope. Give an agent
+						with this project’s read/propose token the task id{" "}
+						<code className="break-all">{proposal._id}</code>. Agent candidates
+						remain inert until you decide them below.
+					</AlertDescription>
+				</Alert>
+			) : null}
 			<div className="flex flex-col gap-4">
+				{waitingTaskTargets.map((target) => (
+					<Card key={target._id} className="border-dashed">
+						<CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between">
+							<CardTitle className="truncate text-sm">
+								{target.messageId}
+							</CardTitle>
+							<Badge variant="outline">awaiting candidate</Badge>
+						</CardHeader>
+						<CardContent className="grid gap-3 md:grid-cols-2">
+							<div className="rounded-md border bg-muted/20 p-3">
+								<div className="mb-1 font-medium text-muted-foreground text-xs uppercase tracking-wide">
+									Source Contract
+								</div>
+								<p className="whitespace-pre-wrap text-sm">
+									{target.sourceValue}
+								</p>
+							</div>
+							<div className="rounded-md border bg-muted/20 p-3">
+								<div className="mb-1 font-medium text-muted-foreground text-xs uppercase tracking-wide">
+									Current {target.localeCode} value
+								</div>
+								<p className="whitespace-pre-wrap text-sm">
+									{target.targetValue || "No value yet"}
+								</p>
+							</div>
+						</CardContent>
+					</Card>
+				))}
 				{detail.candidates.map(({ candidate, revision, reviews }) => {
 					if (!revision) return null;
 					const review = reviews[0];

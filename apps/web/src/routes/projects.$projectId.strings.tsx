@@ -156,6 +156,9 @@ function StringsRoute() {
 	const startNavigationBackfill = useMutation(
 		api.catalogWorkspaceNavigation.startNavigationIndexBackfill,
 	);
+	const createTranslationTask = useMutation(
+		api.agentTranslationProposals.createTask,
+	);
 	const releaseHandoffMessageIds =
 		releaseHandoff?.status === "published"
 			? releaseHandoff.keys.map((key) => key.messageId)
@@ -264,6 +267,28 @@ function StringsRoute() {
 			);
 		}
 	}, [convexProjectId, startNavigationBackfill]);
+	const onCreateTranslationTask = useCallback(
+		async (input: {
+			title: string;
+			localeId: string;
+			messageIds: readonly string[];
+		}) => {
+			const task = await createTranslationTask({
+				projectId: convexProjectId,
+				title: input.title,
+				localeId: convexId<"locales">(input.localeId),
+				messageIds: [...input.messageIds],
+			});
+			toast.success(
+				`Translation Task created for ${task.targetCount} ${task.targetCount === 1 ? "key" : "keys"}.`,
+			);
+			await navigate({
+				to: "/projects/$projectId/proposals/$proposalId",
+				params: { projectId, proposalId: task.taskId },
+			});
+		},
+		[createTranslationTask, convexProjectId, navigate, projectId],
+	);
 
 	if (
 		navigation === undefined ||
@@ -331,6 +356,7 @@ function StringsRoute() {
 							}
 						: undefined
 				}
+				onCreateTranslationTask={onCreateTranslationTask}
 			/>
 		</ProjectShell>
 	);

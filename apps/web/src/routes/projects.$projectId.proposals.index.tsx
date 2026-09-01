@@ -40,7 +40,7 @@ function ProposalsIndexRoute() {
 				description="One review queue for manual work, agent candidates, and the next Locale."
 				action={
 					<Badge variant="secondary">
-						{page?.page.length ?? 0} recent agent task
+						{page?.page.length ?? 0} recent task
 						{page?.page.length === 1 ? "" : "s"}
 					</Badge>
 				}
@@ -67,7 +67,7 @@ function ProposalsIndexRoute() {
 							}
 						>
 							<PenLine data-icon="inline-start" />
-							Edit current values
+							Select current values
 						</Button>
 						<Button
 							nativeButton={false}
@@ -113,9 +113,10 @@ function ProposalsIndexRoute() {
 						<EmptyMedia variant="icon">
 							<Bot />
 						</EmptyMedia>
-						<EmptyTitle>No agent tasks yet</EmptyTitle>
+						<EmptyTitle>No Translation Tasks yet</EmptyTitle>
 						<EmptyDescription>
-							Give an agent a scoped token and ask it to propose focused edits.
+							Select keys in Strings, choose one Locale, then let an agent
+							prepare reviewable candidates.
 						</EmptyDescription>
 					</EmptyHeader>
 					<EmptyContent>
@@ -156,9 +157,10 @@ function ProposalsIndexRoute() {
 										<Badge variant="secondary">{proposal.status}</Badge>
 									</div>
 									<div className="text-muted-foreground text-xs">
-										{proposal.candidateCount} target
-										{proposal.candidateCount === 1 ? "" : "s"} ·{" "}
-										{proposal.revisionCount} revision
+										{proposal.taskScope
+											? `${proposal.taskScope.localeCode} · ${proposal.candidateCount} of ${proposal.taskScope.targetCount} candidates`
+											: `${proposal.candidateCount} target${proposal.candidateCount === 1 ? "" : "s"}`}{" "}
+										· {proposal.revisionCount} revision
 										{proposal.revisionCount === 1 ? "" : "s"} ·{" "}
 										{proposal.target.kind}
 									</div>

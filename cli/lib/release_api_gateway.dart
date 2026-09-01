@@ -1,0 +1,265 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'cli_version.dart';
+import 'release_delivery_adapter.dart';
+
+/// HTTP transport for immutable existing-locale Release Bundles. The API token
+/// needs only the `export` scope for these two operations.
+class HttpReleaseGateway implements ReleaseGateway {
+  HttpReleaseGateway({
+    required this.baseUrl,
+    required this.token,
+    this.onWarning,
+  });
+
+  final Uri baseUrl;
+  final String token;
+  final void Function(String line)? onWarning;
+  String? _lastCompatibilityWarning;
+
+  @override
+  Future<ReleaseSummary> readRelease(String recordId) async {
+    final response = await _request('GET', _endpoint(recordId));
+    return _summary(response);
+  }
+
+  @override
+  Future<ReleaseDeliveryTree> createDeliveryTree(
+    String recordId,
+    List<DeliveryTreeFile> files,
+  ) async {
+    final response = await _request(
+      'POST',
+      _endpoint('$recordId/delivery-tree'),
+      body: jsonEncode({
+        'files': files
+            .map(
+              (file) => {
+                'catalogPath': file.catalogPath,
+                'content': file.content,
+              },
+            )
+            .toList(),
+      }),
+    );
+    return ReleaseDeliveryTree(
+      releaseRecord: _record(_requiredObject(response, 'releaseRecord')),
+      files: _requiredList(response, 'files').map((value) {
+        final file = _object(value);
+        return DeliveryTreeFile(
+          catalogPath: _requiredString(file, 'catalogPath'),
+          content: _requiredString(file, 'content'),
+        );
+      }).toList(),
+      applied: _requiredList(
+        response,
+        'applied',
+      ).map((value) => _string(value)).toList(),
+      skipped: _requiredList(response, 'skipped').map((value) {
+        final skipped = _object(value);
+        return SkippedReleaseKey(
+          messageId: _requiredString(skipped, 'messageId'),
+          reason: _requiredString(skipped, 'reason'),
+        );
+      }).toList(),
+    );
+  }
+
+  ReleaseSummary _summary(Map<String, Object?> response) => ReleaseSummary(
+    releaseRecord: _record(_requiredObject(response, 'releaseRecord')),
+    catalogs: _requiredList(response, 'catalogs').map((value) {
+      final catalog = _object(value);
+      return BoundCatalog(
+        localeCode: _requiredString(catalog, 'localeCode'),
+        catalogPath: _requiredString(catalog, 'catalogPath'),
+        isSource: _requiredBool(catalog, 'isSource'),
+      );
+    }).toList(),
+    changeKeyCount: _requiredInt(response, 'changeKeyCount'),
+  );
+
+  ReleaseRecordIdentity _record(Map<String, Object?> record) =>
+      ReleaseRecordIdentity(
+        id: _requiredString(record, 'id'),
+        projectId: _requiredString(record, 'projectId'),
+        baselineSnapshotId: _requiredString(record, 'baselineSnapshotId'),
+        repository: _requiredString(record, 'repository'),
+        baselineCommit: _requiredString(record, 'baselineCommit'),
+        manifestHash: _requiredString(record, 'manifestHash'),
+        integrationBranch: _requiredString(record, 'integrationBranch'),
+      );
+
+  Uri _endpoint(String suffix) {
+    final prefix = baseUrl.path == '/'
+        ? ''
+        : baseUrl.path.endsWith('/')
+        ? baseUrl.path.substring(0, baseUrl.path.length - 1)
+        : baseUrl.path;
+    return baseUrl.replace(
+      path: '$prefix/api/repository-adapter/v1/releases/$suffix',
+      queryParameters: const {},
+    );
+  }
+
+  Future<Map<String, Object?>> _request(
+    String method,
+    Uri uri, {
+    String? body,
+  }) async {
+    final client = HttpClient();
+    try {
+      final request = await client.openUrl(method, uri);
+      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      request.headers.set('X-Blabla-CLI-Version', blablaCliVersion);
+      request.headers.set('X-Blabla-CLI-Protocol', '$blablaCliProtocol');
+      if (body != null) {
+        request.headers.contentType = ContentType.json;
+        request.write(body);
+      }
+      final response = await request.close();
+      final responseBody = await utf8.decoder.bind(response).join();
+      if (response.statusCode != HttpStatus.ok) {
+        throw RepositoryAdapterException(
+          'Blabla rejected the release request (${response.statusCode}). ${_errorMessage(responseBody)}',
+        );
+      }
+      _checkCompatibility(response);
+      try {
+        return _object(jsonDecode(responseBody));
+      } on FormatException {
+        throw RepositoryAdapterException(
+          'Blabla returned an invalid existing-locale release response.',
+        );
+      }
+    } on SocketException catch (error) {
+      throw RepositoryAdapterException(
+        'Could not reach Blabla to read the release: ${error.message}',
+      );
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  String _errorMessage(String body) {
+    try {
+      final response = _object(jsonDecode(body));
+      final error = response['error'];
+      if (error is String && error.isNotEmpty) return error;
+      if (error is Map) {
+        final message = error['message'];
+        if (message is String && message.isNotEmpty) return message;
+      }
+    } on FormatException {
+      // A non-JSON error is safe to summarize by status alone.
+    }
+    return 'Check the Release Record id and the token export scope.';
+  }
+
+  void _checkCompatibility(HttpClientResponse response) {
+    final requiredProtocol = int.tryParse(
+      response.headers.value('X-Blabla-Minimum-CLI-Protocol') ?? '',
+    );
+    if (requiredProtocol != null && requiredProtocol > blablaCliProtocol) {
+      throw RepositoryAdapterException(
+        'Blabla requires CLI protocol $requiredProtocol, but this binary supports $blablaCliProtocol. Install a newer Blabla CLI before retrying.',
+      );
+    }
+    final minimumVersion = response.headers.value(
+      'X-Blabla-Minimum-CLI-Version',
+    );
+    if (minimumVersion == null ||
+        _compareVersion(blablaCliVersion, minimumVersion) >= 0) {
+      return;
+    }
+    final warning =
+        'A newer Blabla CLI ($minimumVersion or newer) is available. This request remains compatible, but update before the next protocol change.';
+    if (_lastCompatibilityWarning == warning) return;
+    _lastCompatibilityWarning = warning;
+    onWarning?.call(warning);
+  }
+}
+
+int _compareVersion(String left, String right) {
+  List<int>? parse(String value) {
+    final match = RegExp(r'^(\d+)\.(\d+)\.(\d+)').firstMatch(value.trim());
+    if (match == null) return null;
+    return [
+      int.parse(match.group(1)!),
+      int.parse(match.group(2)!),
+      int.parse(match.group(3)!),
+    ];
+  }
+
+  final leftParts = parse(left);
+  final rightParts = parse(right);
+  if (leftParts == null || rightParts == null) return 0;
+  for (var index = 0; index < leftParts.length; index += 1) {
+    final comparison = leftParts[index].compareTo(rightParts[index]);
+    if (comparison != 0) return comparison;
+  }
+  return 0;
+}
+
+Map<String, Object?> _object(Object? value) {
+  if (value is! Map) throw const FormatException();
+  final result = <String, Object?>{};
+  for (final entry in value.entries) {
+    if (entry.key is! String) throw const FormatException();
+    result[entry.key as String] = entry.value;
+  }
+  return result;
+}
+
+Map<String, Object?> _requiredObject(Map<String, Object?> object, String key) {
+  try {
+    return _object(object[key]);
+  } on FormatException {
+    throw RepositoryAdapterException(
+      'Blabla returned an invalid existing-locale release response.',
+    );
+  }
+}
+
+List<Object?> _requiredList(Map<String, Object?> object, String key) {
+  final value = object[key];
+  if (value is! List) {
+    throw RepositoryAdapterException(
+      'Blabla returned an invalid existing-locale release response.',
+    );
+  }
+  return value.cast<Object?>();
+}
+
+String _requiredString(Map<String, Object?> object, String key) =>
+    _string(object[key]);
+
+String _string(Object? value) {
+  if (value is! String) {
+    throw RepositoryAdapterException(
+      'Blabla returned an invalid existing-locale release response.',
+    );
+  }
+  return value;
+}
+
+int _requiredInt(Map<String, Object?> object, String key) {
+  final value = object[key];
+  if (value is! int) {
+    throw RepositoryAdapterException(
+      'Blabla returned an invalid existing-locale release response.',
+    );
+  }
+  return value;
+}
+
+bool _requiredBool(Map<String, Object?> object, String key) {
+  final value = object[key];
+  if (value is! bool) {
+    throw RepositoryAdapterException(
+      'Blabla returned an invalid existing-locale release response.',
+    );
+  }
+  return value;
+}
