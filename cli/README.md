@@ -54,7 +54,7 @@ Released macOS arm64 and Linux x64 binaries are attached to every Blabla GitHub
 Release. Install the latest one with:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/serge-the-hedge/blabla/main/cli/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/serge-the-hedge/flutte/main/cli/install.sh | sh
 ```
 
 Set `BLABLA_VERSION=v0.1.0` before that command to install a particular release,
