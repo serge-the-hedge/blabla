@@ -132,19 +132,23 @@ listed in `TRUSTED_ORIGINS`, `VITE_CONVEX_SITE_URL` points to the active
 deployment's `.convex.site` URL, and the Convex deployment env contains
 `BETTER_AUTH_URL` with the same Convex site URL.
 
-## Hosted Preview
+## Hosted Deployment
 
-The shareable preview is planned for
+The production frontend is planned for
 [`https://blabla.seryozha.world`](https://blabla.seryozha.world), deployed on
 Vercel with DNS managed in Gandi. The repo includes `vercel.json` for the Vite
-SPA build.
+SPA and Convex deployment build.
 
-Vercel environment variables:
+Vercel uses environment-scoped Convex deploy keys:
 
-```bash
-VITE_CONVEX_URL=https://pleasant-cow-99.convex.cloud
-VITE_CONVEX_SITE_URL=https://pleasant-cow-99.convex.site
+```txt
+Production: CONVEX_DEPLOY_KEY=<production deploy key>
+Preview:    CONVEX_DEPLOY_KEY=<preview deploy key>
 ```
+
+The build injects `VITE_CONVEX_URL`; the app derives the corresponding
+`.convex.site` URL. Do not pin either public URL in Vercel, or branch previews
+will accidentally connect to production.
 
 See [docs/hosted-auth-setup.md](docs/hosted-auth-setup.md) for the Vercel,
 Gandi, and Convex runtime steps.

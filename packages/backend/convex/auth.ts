@@ -24,7 +24,11 @@ function parseOrigins(value: string | undefined) {
 }
 
 const siteUrl = requiredEnv("SITE_URL");
-const authBaseUrl = process.env.BETTER_AUTH_URL ?? siteUrl;
+// Convex provides the deployment-specific HTTP Actions URL automatically. This
+// keeps preview deployments self-contained while still allowing a custom auth
+// domain to be supplied explicitly.
+const authBaseUrl =
+	process.env.BETTER_AUTH_URL ?? process.env.CONVEX_SITE_URL ?? siteUrl;
 const trustedOrigins = Array.from(
 	new Set([siteUrl, ...parseOrigins(process.env.TRUSTED_ORIGINS)]),
 );

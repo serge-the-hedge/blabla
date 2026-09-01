@@ -1,30 +1,35 @@
-# Hosted Auth Setup
+# Hosted Deployment Setup
 
-This repo now assumes the shareable preview lives at:
+Production uses Vercel's stable project URL while the custom domain is being
+configured:
 
 ```txt
-https://blabla.seryozha.world
+https://flutte-web-imperceptibles-projects.vercel.app
 ```
 
-The code changes are in the repo. The steps below must be done in Vercel, Gandi,
-and Convex.
+The intended custom domain is `https://blabla.seryozha.world`.
 
 ## Vercel
 
-Create a Vercel project from the repo root.
+Create the Vercel project from the repository root. Do not set `apps/web` as the
+Root Directory: the build also needs `packages/backend`.
 
 Use the root `vercel.json`:
 
 - install: `bun install --frozen-lockfile`
-- build: `bun run build`
+- build: the `buildCommand` in `vercel.json`
 - output: `apps/web/dist`
 
-Set these Vercel environment variables:
+The build deploys Convex, injects its deployment-specific URL into Vite, and
+then publishes the SPA. Set one secret in each Vercel environment:
 
-```bash
-VITE_CONVEX_URL=https://pleasant-cow-99.convex.cloud
-VITE_CONVEX_SITE_URL=https://pleasant-cow-99.convex.site
+```txt
+Production: CONVEX_DEPLOY_KEY=<production deploy key>
+Preview:    CONVEX_DEPLOY_KEY=<project preview deploy key>
 ```
+
+Do not set static `VITE_CONVEX_URL` or `VITE_CONVEX_SITE_URL` values in Vercel.
+The build selects the matching production or branch-scoped preview deployment.
 
 Add the custom domain:
 
@@ -44,35 +49,64 @@ Value: cname.vercel-dns.com
 
 Wait until Vercel verifies the domain and provisions HTTPS.
 
-## Convex Runtime Env
+## Convex Runtime Environment
 
-Run this from the backend package:
+Better Auth runs inside Convex, so its variables belong on Convex deployments,
+not in Vercel. Production needs:
 
 ```bash
 cd packages/backend
-bunx convex env set SITE_URL https://blabla.seryozha.world
-bunx convex env set BETTER_AUTH_URL https://pleasant-cow-99.convex.site
-bunx convex env set TRUSTED_ORIGINS "https://blabla.seryozha.world,http://localhost:3001"
+bunx convex env set --prod SITE_URL https://flutte-web-imperceptibles-projects.vercel.app
+bunx convex env set --prod BETTER_AUTH_URL https://polite-fish-670.convex.site
+bunx convex env set --prod TRUSTED_ORIGINS \
+  "https://flutte-web-imperceptibles-projects.vercel.app,https://blabla.seryozha.world"
+bunx convex env set --prod BETTER_AUTH_SECRET
 ```
 
-Do not rotate `BETTER_AUTH_SECRET` unless you want to invalidate existing
-sessions.
+Use a strong environment-specific secret. When promoting an existing auth
+database, retaining its secret avoids invalidating existing sessions.
+
+New preview deployments inherit project defaults. Configure these once:
+
+```txt
+BETTER_AUTH_SECRET=<a preview-only secret>
+SITE_URL=https://flutte-web-imperceptibles-projects.vercel.app
+TRUSTED_ORIGINS=https://flutte-web-imperceptibles-projects.vercel.app,https://*.vercel.app
+```
+
+`BETTER_AUTH_URL` is optional. If absent, the backend uses Convex's own
+deployment-specific `CONVEX_SITE_URL`, which is correct for previews. The
+current email/password flow accepts Vercel preview origins; if redirect-based
+auth is added later, previews need a deliberate callback URL strategy.
 
 Verify:
 
 ```bash
-bunx convex env list
-curl -sS https://pleasant-cow-99.convex.site/api/auth/ok
+bunx convex env list --prod --names-only
+curl -sS https://polite-fish-670.convex.site/api/auth/ok
 curl -sS -D - \
-  -H "Origin: https://blabla.seryozha.world" \
-  https://pleasant-cow-99.convex.site/api/auth/get-session
-curl -sS -D - \
-  -H "Origin: http://localhost:3001" \
-  https://pleasant-cow-99.convex.site/api/auth/get-session
+  -H "Origin: https://flutte-web-imperceptibles-projects.vercel.app" \
+  https://polite-fish-670.convex.site/api/auth/get-session
 ```
 
-Both `get-session` checks should include an
-`access-control-allow-origin` header matching the request origin.
+The `get-session` response should include an `access-control-allow-origin`
+header matching the request origin.
+
+## Promote Dev Data to Production
+
+Use one snapshot export and one atomic import. This retains document IDs and
+references and avoids reading the catalog through application queries:
+
+```bash
+cd packages/backend
+bunx convex export --include-file-storage --path /tmp/blabla-dev.zip
+bunx convex export --prod --include-file-storage --path /tmp/blabla-prod-before.zip
+bunx convex import --prod --replace-all /tmp/blabla-dev.zip
+```
+
+Inspect production before `--replace-all` and retain the production export as a
+rollback artifact. Convex environment variables and deployed functions are not
+part of a snapshot and must be configured separately.
 
 ## Colleague Flow
 
