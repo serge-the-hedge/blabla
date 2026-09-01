@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ProjectsRouteImport } from './routes/projects'
+import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
 import { Route as ProjectsNewRouteImport } from './routes/projects.new'
@@ -49,6 +50,11 @@ const DashboardRoute = DashboardRouteImport.update({
 const ProjectsRoute = ProjectsRouteImport.update({
   id: '/projects',
   path: '/projects',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignInRoute = SignInRouteImport.update({
@@ -186,6 +192,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
   '/projects': typeof ProjectsRouteWithChildren
+  '/reset-password': typeof ResetPasswordRoute
   '/sign-in': typeof SignInRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
@@ -214,6 +221,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
   '/projects': typeof ProjectsRouteWithChildren
+  '/reset-password': typeof ResetPasswordRoute
   '/sign-in': typeof SignInRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
@@ -241,6 +249,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
   '/projects': typeof ProjectsRouteWithChildren
+  '/reset-password': typeof ResetPasswordRoute
   '/sign-in': typeof SignInRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
@@ -271,6 +280,7 @@ export interface FileRouteTypes {
     | '/'
     | '/dashboard'
     | '/projects'
+    | '/reset-password'
     | '/sign-in'
     | '/projects/$projectId'
     | '/projects/new'
@@ -299,6 +309,7 @@ export interface FileRouteTypes {
     | '/'
     | '/dashboard'
     | '/projects'
+    | '/reset-password'
     | '/sign-in'
     | '/projects/$projectId'
     | '/projects/new'
@@ -325,6 +336,7 @@ export interface FileRouteTypes {
     | '/'
     | '/dashboard'
     | '/projects'
+    | '/reset-password'
     | '/sign-in'
     | '/projects/$projectId'
     | '/projects/new'
@@ -354,6 +366,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DashboardRoute: typeof DashboardRoute
   ProjectsRoute: typeof ProjectsRouteWithChildren
+  ResetPasswordRoute: typeof ResetPasswordRoute
   SignInRoute: typeof SignInRoute
   ProposalsPrototypeRoute: typeof ProposalsPrototypeRoute
 }
@@ -379,6 +392,13 @@ declare module '@tanstack/react-router' {
       path: '/projects'
       fullPath: '/projects'
       preLoaderRoute: typeof ProjectsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reset-password': {
+      id: '/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof ResetPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sign-in': {
@@ -652,6 +672,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DashboardRoute: DashboardRoute,
   ProjectsRoute: ProjectsRouteWithChildren,
+  ResetPasswordRoute: ResetPasswordRoute,
   SignInRoute: SignInRoute,
   ProposalsPrototypeRoute: ProposalsPrototypeRoute,
 }

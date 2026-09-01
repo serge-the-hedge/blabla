@@ -159,7 +159,20 @@ export default function SignInForm({ redirectTo }: { redirectTo: string }) {
 						</FieldGroup>
 					</form>
 				</CardContent>
-				<CardFooter className="justify-center">
+				<CardFooter className="flex-col justify-center gap-1">
+					<Button
+						nativeButton={false}
+						variant="link"
+						size="sm"
+						render={
+							<Link
+								to="/sign-in"
+								search={{ mode: "forgot-password", redirect: redirectTo }}
+							/>
+						}
+					>
+						Forgot password?
+					</Button>
 					<Button
 						nativeButton={false}
 						variant="link"

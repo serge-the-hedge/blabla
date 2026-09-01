@@ -125,6 +125,7 @@ Keep `apps/web/.env` pointed at the same Convex deployment:
 ```bash
 VITE_CONVEX_URL=https://<deployment>.convex.cloud
 VITE_CONVEX_SITE_URL=https://<deployment>.convex.site
+VITE_SITE_URL=http://localhost:3001
 ```
 
 If login fails after setup, first verify that the browser origin is
@@ -147,8 +148,10 @@ Preview:    CONVEX_DEPLOY_KEY=<preview deploy key>
 ```
 
 The build injects `VITE_CONVEX_URL`; the app derives the corresponding
-`.convex.site` URL. Do not pin either public URL in Vercel, or branch previews
-will accidentally connect to production.
+`.convex.site` URL. Do not pin either Convex URL in Vercel, or branch previews
+will accidentally connect to production. Production does set
+`VITE_SITE_URL=https://blabla.seryozha.world` so account-recovery links return
+to the canonical hostname; previews omit it and use their current origin.
 
 See [docs/hosted-auth-setup.md](docs/hosted-auth-setup.md) for the Vercel,
 Gandi, and Convex runtime steps.
@@ -158,7 +161,7 @@ To share a project with a colleague:
 1. Sign in as the project owner.
 2. Open Settings -> Members.
 3. Invite the colleague by email and assign a role.
-4. Ask them to sign up with the same email at the hosted preview.
+4. Ask them to sign up with the same email at the canonical hosted app.
 5. Pending invites are accepted automatically after sign-in.
 
 ## UI Customization

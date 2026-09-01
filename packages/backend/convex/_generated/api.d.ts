@@ -24,7 +24,9 @@ import type * as catalogWorkspaceView from "../catalogWorkspaceView.js";
 import type * as changeSetValidation from "../changeSetValidation.js";
 import type * as changeSets from "../changeSets.js";
 import type * as contractTransforms from "../contractTransforms.js";
+import type * as crons from "../crons.js";
 import type * as diffs from "../diffs.js";
+import type * as emails from "../emails.js";
 import type * as exports from "../exports.js";
 import type * as healthCheck from "../healthCheck.js";
 import type * as http from "../http.js";
@@ -76,7 +78,9 @@ declare const fullApi: ApiFromModules<{
   changeSetValidation: typeof changeSetValidation;
   changeSets: typeof changeSets;
   contractTransforms: typeof contractTransforms;
+  crons: typeof crons;
   diffs: typeof diffs;
+  emails: typeof emails;
   exports: typeof exports;
   healthCheck: typeof healthCheck;
   http: typeof http;
@@ -136,6 +140,7 @@ export declare const components: {
   betterAuth: import("@convex-dev/better-auth/_generated/component.js").ComponentApi<"betterAuth">;
   migrations: import("@convex-dev/migrations/_generated/component.js").ComponentApi<"migrations">;
   rateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"rateLimiter">;
+  resend: import("@convex-dev/resend/_generated/component.js").ComponentApi<"resend">;
   aggregate: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"aggregate">;
   workflow: import("@convex-dev/workflow/_generated/component.js").ComponentApi<"workflow">;
 };

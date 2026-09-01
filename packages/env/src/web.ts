@@ -10,6 +10,7 @@ const parsedEnv = createEnv({
 	client: {
 		VITE_CONVEX_URL: z.url(),
 		VITE_CONVEX_SITE_URL: z.url().optional(),
+		VITE_SITE_URL: z.url().optional(),
 	},
 	runtimeEnv: (import.meta as ImportMetaWithEnv).env,
 	emptyStringAsUndefined: true,
@@ -31,4 +32,5 @@ export const env = {
 	VITE_CONVEX_SITE_URL:
 		parsedEnv.VITE_CONVEX_SITE_URL ??
 		deriveConvexSiteUrl(parsedEnv.VITE_CONVEX_URL),
+	VITE_SITE_URL: parsedEnv.VITE_SITE_URL,
 };
