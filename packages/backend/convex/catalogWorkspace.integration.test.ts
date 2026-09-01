@@ -998,10 +998,10 @@ describe("Catalog Workspace", () => {
 		expect(navigation.ordinaryImports).toMatchObject({
 			policy: "ordinary-v1",
 			run: null,
-			eligible: 1,
+			eligible: 3,
 			empty: 1,
 			sourceIdentical: 1,
-			repeated: 2,
+			repeated: 0,
 		});
 
 		const started = await user.mutation(
@@ -1026,8 +1026,8 @@ describe("Catalog Workspace", () => {
 			if (result) run = result;
 		}
 		expect(run.status).toBe("done");
-		expect(run.confirmed).toBe(1);
-		expect(run.skipped).toBe(4);
+		expect(run.confirmed).toBe(3);
+		expect(run.skipped).toBe(2);
 
 		// The confirmed key leaves the ordinary-import summary at once and the
 		// Navigation Index carries the settled state through the projector.
@@ -1038,8 +1038,8 @@ describe("Catalog Workspace", () => {
 			throw new Error("Expected a ready Navigation read.");
 		}
 		expect(after.ordinaryImports).toMatchObject({
-			run: { status: "done", confirmed: 1 },
-			alreadyConfirmed: 1,
+			run: { status: "done", confirmed: 3 },
+			alreadyConfirmed: 3,
 			eligible: 0,
 		});
 		const uniqueDigest = after.keys.find(
@@ -1059,7 +1059,7 @@ describe("Catalog Workspace", () => {
 				.withIndex("by_project", (q) => q.eq("projectId", projectId))
 				.collect();
 		});
-		expect(provenance).toHaveLength(1);
+		expect(provenance).toHaveLength(3);
 		expect(provenance[0]).toMatchObject({
 			recordedBy: { kind: "user", id: "workspace-run-confirm" },
 		});

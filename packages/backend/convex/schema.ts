@@ -976,11 +976,17 @@ export default defineSchema({
 		// Persisted ordinary-import counts make the Agent read proportional to
 		// the requested page rather than the whole Navigation Index.
 		ordinaryImportCounts: v.optional(v.object(ordinaryImportCounts)),
+		// Versioned separately from policy's public name so category semantics can
+		// force one safe rebuild without inventing a second user-facing policy.
+		ordinaryImportPolicyVersion: v.optional(v.number()),
 		// A legacy ready state has no derived counts or repeated-value facts.
 		// The first operator backfill force-rebuilds its rows into the new shape.
 		backfillForceRebuild: v.optional(v.boolean()),
 		// Prevents two scheduled continuation steps from doing the same work.
 		backfillStepPending: v.optional(v.boolean()),
+		// Platform limits can terminate a scheduled function before it clears the
+		// flag above. The timestamp turns that flag into a short, resumable lease.
+		backfillStepPendingAt: v.optional(v.number()),
 		// A failed scheduled step is terminal until an explicit retry command
 		// clears this diagnostic and re-arms the worker.
 		backfillFailure: v.optional(

@@ -102,7 +102,7 @@ function ordinaryImportFailureFor(error: unknown) {
 /** The digest-level conservative pre-filter. A target that any of these
  * categories claims is not a candidate; the projection-stable content
  * categories (empty, Source-identical, repeated) are revalidated against the
- * canonical rows because only they can see the whole projection. */
+ * canonical rows for the key before a decision is recorded. */
 function isDigestLevelCandidate(
 	digest: NavigationDigestRow,
 	target: NavigationDigestRow["targets"][number],
@@ -289,22 +289,16 @@ async function revalidateOrdinaryImportTarget(
 	if (targetRow.value === sourceRow.value) {
 		return { category: "sourceIdentical" };
 	}
-	if (input.target.repeatedGitContent === true) {
+	if (
+		rows.some(
+			(row) =>
+				!row.isSource &&
+				row.localeId !== targetRow.localeId &&
+				row.value === targetRow.value,
+		)
+	) {
 		return { category: "repeated" };
 	}
-	if (input.target.repeatedGitContent === false) {
-		return { category: "eligible", candidate };
-	}
-	const repeatedProbe = await ctx.db
-		.query("catalogProjectionMessages")
-		.withIndex("by_projection_and_localeId_and_valueFingerprint", (q) =>
-			q
-				.eq("projectionId", input.projectionId)
-				.eq("localeId", targetRow.localeId)
-				.eq("valueFingerprint", candidate.valueFingerprint),
-		)
-		.take(2);
-	if (repeatedProbe.length > 1) return { category: "repeated" };
 	return { category: "eligible", candidate };
 }
 

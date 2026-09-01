@@ -77,19 +77,20 @@ function confirmationValueIdentity(input: {
 	]);
 }
 
-function localeValueIdentity(input: {
-	localeId: Id<"locales">;
+function messageValueIdentity(input: {
+	messageId: string;
 	value: string;
 }): string {
-	return JSON.stringify([input.localeId, input.value]);
+	return JSON.stringify([input.messageId, input.value]);
 }
 
 /**
  * Derive the exact conservative import set used by both the human preview and
  * the batch mutation. A value qualifies only while it is untouched Baseline
- * content, non-empty, different from Source, unique in its Locale, and has no
- * stale or current human decision. The categories are mutually exclusive so
- * the preview always explains every target value once.
+ * content, non-empty, different from Source, not duplicated across another
+ * target Locale of the same key, and has no stale or current human decision.
+ * Reuse by unrelated keys is ordinary catalog content, not review state. The
+ * categories are mutually exclusive so the preview explains every target once.
  */
 export function ordinaryImportConfirmationPlan(input: {
 	rows: readonly ConfirmationRow[];
@@ -103,7 +104,7 @@ export function ordinaryImportConfirmationPlan(input: {
 } {
 	const sourceByMessageId = new Map<string, ConfirmationRow>();
 	const targetByIdentity = new Map<string, ConfirmationRow>();
-	const targetValueCounts = new Map<string, number>();
+	const messageValueCounts = new Map<string, number>();
 	for (const row of input.rows) {
 		if (row.isSource) {
 			if (sourceByMessageId.has(row.messageId)) {
@@ -117,8 +118,11 @@ export function ordinaryImportConfirmationPlan(input: {
 			continue;
 		}
 		targetByIdentity.set(valueIdentity(row), row);
-		const identity = localeValueIdentity(row);
-		targetValueCounts.set(identity, (targetValueCounts.get(identity) ?? 0) + 1);
+		const identity = messageValueIdentity(row);
+		messageValueCounts.set(
+			identity,
+			(messageValueCounts.get(identity) ?? 0) + 1,
+		);
 	}
 
 	const currentHeadIdentities = new Set(
@@ -194,7 +198,7 @@ export function ordinaryImportConfirmationPlan(input: {
 			counts.sourceIdentical++;
 			continue;
 		}
-		if ((targetValueCounts.get(localeValueIdentity(row)) ?? 0) > 1) {
+		if ((messageValueCounts.get(messageValueIdentity(row)) ?? 0) > 1) {
 			counts.repeated++;
 			continue;
 		}

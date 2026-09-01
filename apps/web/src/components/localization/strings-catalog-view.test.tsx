@@ -471,6 +471,50 @@ describe("StringsCatalogView", () => {
 		expect(markup).toContain("Confirm ordinary · 7");
 	});
 
+	test("keeps the ordinary-import explanation available when none qualify", () => {
+		const markup = renderToStaticMarkup(
+			<StringsCatalogView
+				{...navigationProps}
+				onStartOrdinaryImportRun={() => {}}
+				ordinaryImports={{
+					policy: "ordinary-v1",
+					total: 2,
+					eligible: 0,
+					empty: 0,
+					sourceIdentical: 0,
+					repeated: 2,
+					modified: 0,
+					stale: 0,
+					alreadyConfirmed: 0,
+					pendingSourceProposal: 0,
+					run: null,
+				}}
+				{...windowedProps({
+					valueStateCounts: {
+						waiting: 0,
+						unconfirmedImport: 2,
+						stale: 0,
+						settled: 0,
+					},
+					keys: [
+						{
+							id: "reviewed",
+							source: {
+								localeCode: "en",
+								isSource: true,
+								value: "Reviewed",
+								materialized: false,
+							},
+							targets: [],
+						},
+					],
+				})}
+			/>,
+		);
+
+		expect(markup).toContain("Confirm ordinary · 0");
+	});
+
 	test("makes an editor's source proposal and target values live Catalog Workspace fields", () => {
 		const markup = renderToStaticMarkup(
 			<StringsCatalogView
@@ -570,6 +614,49 @@ describe("StringsCatalogView", () => {
 		expect(markup).not.toContain("needs a value");
 		expect(markup).not.toContain("⌘↵");
 		expect(markup).not.toContain("waiting");
+	});
+
+	test("shows a pointer-accessible approval for an unconfirmed value", () => {
+		const markup = renderToStaticMarkup(
+			<StringsCatalogView
+				{...navigationProps}
+				onCommitValue={async () => ({
+					workspaceRevision: 1,
+					sourceFingerprint: "source-greeting",
+				})}
+				{...windowedProps({
+					canEdit: true,
+					keys: [
+						{
+							id: "greeting",
+							source: {
+								localeCode: "en",
+								isSource: true,
+								value: "Hello",
+								materialized: false,
+							},
+							targets: [
+								{
+									localeId: "locale-de",
+									localeCode: "de",
+									isSource: false,
+									value: "Hallo",
+									materialized: false,
+									gitValueFingerprint: "git-de",
+									gitValueRevision: 0,
+									workspaceRevision: 0,
+									expectedSourceFingerprint: "source-greeting",
+									valueState: "unconfirmedImport",
+								},
+							],
+						},
+					],
+				})}
+			/>,
+		);
+
+		expect(markup).toContain("Approve");
+		expect(markup).toContain("⌘↵ still correct");
 	});
 
 	test("renders compound ICU as a sentence with quiet arm affordances", () => {

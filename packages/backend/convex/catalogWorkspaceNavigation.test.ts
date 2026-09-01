@@ -15,6 +15,7 @@ const projectionId =
 	"catalogProjections:proj1" as unknown as Id<"catalogProjections">;
 const enId = "locales:en" as unknown as Id<"locales">;
 const deId = "locales:de" as unknown as Id<"locales">;
+const frId = "locales:fr" as unknown as Id<"locales">;
 
 async function messageRow(input: {
 	id: string;
@@ -496,13 +497,52 @@ describe("deriveNavigationDigest", () => {
 			}),
 		);
 		expect(ordinaryImportSummaryFromDigests(digests)).toEqual(plan.counts);
-		expect(plan.counts.eligible).toBe(1);
+		expect(plan.counts.eligible).toBe(3);
 		expect(plan.counts.empty).toBe(1);
 		expect(plan.counts.sourceIdentical).toBe(1);
-		expect(plan.counts.repeated).toBe(2);
+		expect(plan.counts.repeated).toBe(0);
 		expect(plan.counts.modified).toBe(1);
 		expect(plan.counts.alreadyConfirmed).toBe(1);
 		expect(plan.counts.stale).toBe(1);
 		expect(plan.counts.pendingSourceProposal).toBe(1);
 	}, 30_000);
+
+	test("counts equal target text only when it repeats within one key", async () => {
+		const sourceValue = "Continue";
+		const targetValue = "Continuer";
+		const rows = [
+			await messageRow({
+				id: "same-key-en",
+				messageId: "same-key",
+				isSource: true,
+				value: sourceValue,
+				gitValueFingerprint: await sha256Hex(sourceValue),
+			}),
+			await messageRow({
+				id: "same-key-de",
+				messageId: "same-key",
+				isSource: false,
+				value: targetValue,
+				sourceValue,
+				gitValueFingerprint: await sha256Hex(targetValue),
+			}),
+			await messageRow({
+				id: "same-key-fr",
+				messageId: "same-key",
+				isSource: false,
+				localeId: frId,
+				localeCode: "fr",
+				value: targetValue,
+				sourceValue,
+				gitValueFingerprint: await sha256Hex(targetValue),
+			}),
+		];
+		const digest = await deriveNavigationDigest(digestInput({ rows }));
+
+		expect(ordinaryImportSummaryFromDigests([digest])).toMatchObject({
+			total: 2,
+			eligible: 0,
+			repeated: 2,
+		});
+	});
 });

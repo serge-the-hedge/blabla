@@ -23,6 +23,7 @@ import { cn } from "@blabla/ui/lib/utils";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
 	BookOpen,
+	Check,
 	CheckCheck,
 	GitBranch,
 	Languages,
@@ -643,10 +644,22 @@ function EditableCatalogValue({
 							identical to English — saving records that as the decision
 						</span>
 					) : null}
+					{presentation.affordances.includes("confirm") ? (
+						<Button
+							type="button"
+							size="xs"
+							variant="ghost"
+							className="ml-auto h-6 px-1.5 text-[11px]"
+							onClick={() => void confirm()}
+						>
+							<Check aria-hidden="true" />
+							Approve
+						</Button>
+					) : null}
 					{presentation.affordances.includes("intentionalBlank") ? (
 						<button
 							type="button"
-							className="ml-auto underline underline-offset-2 hover:text-foreground"
+							className="underline underline-offset-2 hover:text-foreground"
 							// mousedown, not click: blur must not beat the press.
 							onMouseDown={(event) => {
 								event.preventDefault();
@@ -877,7 +890,6 @@ function BatchImportConfirmation({
 	onStart: (expectedProjectionId: string, policy: "ordinary-v1") => void;
 }) {
 	const eligible = summary.eligible;
-	if (eligible === 0 && summary.run === null) return null;
 
 	const skippedFromCounts =
 		summary.empty +
@@ -908,12 +920,15 @@ function BatchImportConfirmation({
 			<AlertDialogContent size="sm">
 				<AlertDialogHeader>
 					<AlertDialogTitle>
-						Confirm {NUMBER_FORMAT.format(eligible)} ordinary imports?
+						{eligible === 0
+							? "No ordinary imports are ready"
+							: `Confirm ${NUMBER_FORMAT.format(eligible)} ordinary imports?`}
 					</AlertDialogTitle>
 					<AlertDialogDescription>
 						<span className="block">
 							These are untouched, non-empty Baseline values that differ from
-							Source and occur only once in their Locale.
+							Source and do not repeat across another target Locale of the same
+							key.
 						</span>
 						<span className="mt-2 block">
 							{NUMBER_FORMAT.format(skippedFromCounts)} suspicious or already
@@ -941,12 +956,16 @@ function BatchImportConfirmation({
 					</AlertDialogDescription>
 				</AlertDialogHeader>
 				<AlertDialogFooter>
-					<AlertDialogCancel>Cancel</AlertDialogCancel>
-					<AlertDialogAction
-						onClick={() => onStart(projectionId, summary.policy)}
-					>
-						Confirm ordinary imports
-					</AlertDialogAction>
+					<AlertDialogCancel>
+						{eligible === 0 ? "Close" : "Cancel"}
+					</AlertDialogCancel>
+					{eligible > 0 ? (
+						<AlertDialogAction
+							onClick={() => onStart(projectionId, summary.policy)}
+						>
+							Confirm ordinary imports
+						</AlertDialogAction>
+					) : null}
 				</AlertDialogFooter>
 			</AlertDialogContent>
 		</AlertDialog>
