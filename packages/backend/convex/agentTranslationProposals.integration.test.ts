@@ -385,6 +385,43 @@ describe("Agent Translation Proposals", () => {
 		});
 	});
 
+	test("does not call old Git content Source-identical while a Source Proposal is pending", async () => {
+		const user = await authenticatedBackend(t, "pending-source-work-queue");
+		const { projectId, token } = await setupWorkQueueProject(user);
+		const workspace = await readWorkspaceKeyCards(user, projectId);
+		const source = workspace.keys
+			.find((key) => key.id === "echo")
+			?.values.find((value) => value.isSource);
+		if (
+			!source ||
+			source.gitValueFingerprint === undefined ||
+			source.gitValueRevision === undefined ||
+			source.workspaceRevision === undefined
+		) {
+			throw new Error("Expected the Source concurrency basis.");
+		}
+		await user.mutation(api.catalogWorkspace.commit, {
+			projectId,
+			messageId: "echo",
+			localeId: source.localeId,
+			intent: { kind: "save", value: "Brickit app" },
+			expectedGitValueFingerprint: source.gitValueFingerprint,
+			expectedGitValueRevision: source.gitValueRevision,
+			expectedWorkspaceRevision: source.workspaceRevision,
+		});
+
+		const response = await agentRequest(
+			t,
+			token,
+			"/api/agent/v1/workspace/work?localeCode=de&reason=sourceIdentical",
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			items: [],
+			nextCursor: null,
+		});
+	});
+
 	test("creates, resumes, and human-accepts a Catalog Workspace candidate", async () => {
 		const user = await authenticatedBackend(t, "agent-translation-reviewer");
 		const { projectId, token } = await setupProject(user);

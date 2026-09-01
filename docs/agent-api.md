@@ -187,7 +187,8 @@ are `cursor`, `limit` (maximum 16), optional `localeCode`, optional `q`, and one
 or more repeated `reason` parameters:
 
 - `missing`: the target has no decided value;
-- `sourceIdentical`: untouched imported target content equals Source;
+- `sourceIdentical`: untouched imported target content equals Source, with no
+  Source Proposal pending for the key;
 - `sameKeyRepeat`: two target Locales of the same key carry equal untouched
   imported content;
 - `stale`: a previously confirmed value's Source Contract changed.

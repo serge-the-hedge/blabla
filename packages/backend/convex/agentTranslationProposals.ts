@@ -215,6 +215,7 @@ function translationWorkReasons(
 
 	const reasons: TranslationWorkReason[] = [];
 	if (
+		!digest.pendingSourceProposal &&
 		target.gitValueFingerprint !== undefined &&
 		target.gitValueFingerprint === digest.source.gitValueFingerprint
 	) {
