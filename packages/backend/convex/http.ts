@@ -1188,28 +1188,15 @@ http.route({
 http.route({
 	path: "/api/agent/v1/export",
 	method: "POST",
-	handler: httpAction(async (ctx, request) => {
-		try {
-			const body = await request.json();
-			return agentJson(
-				await withAgent(
-					ctx,
-					request,
-					"export",
-					"agentExport",
-					async (token) =>
-						await ctx.runQuery(internalApi.agentApi.exportContent, {
-							token,
-							format: body.format,
-							locale: body.locale,
-							selection: body.selection ?? { type: "all" },
-						}),
-				),
-			);
-		} catch (error) {
-			return routeError(error);
-		}
-	}),
+	handler: httpAction(async () =>
+		json(
+			{
+				error:
+					"Legacy export is retired. Build release output from the Catalog Workspace through a Release Bundle once that workflow is available.",
+			},
+			410,
+		),
+	),
 });
 
 export default http;

@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-repository="${BLABLA_REPOSITORY:-serge-the-hedge/blabla}"
+repository="${BLABLA_REPOSITORY:-serge-the-hedge/flutte}"
 version="${BLABLA_VERSION:-latest}"
 install_directory="${BLABLA_INSTALL_DIR:-${HOME}/.local/bin}"
 

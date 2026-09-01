@@ -26,7 +26,8 @@ Authorization: Bearer <project_api_token>
 2. Go to **Settings -> API tokens**.
 3. Create a project-scoped token with the minimum scopes:
    - Translation agents: `read`, `search`, `propose`.
-   - Release export automation: add `export`.
+   - The legacy `export` scope is reserved and must not be used for release
+     output.
 4. Copy the raw token immediately. The app stores only a hash and cannot show
    the raw value again.
 5. Give agents the site base URL and token:
@@ -82,8 +83,9 @@ that a value is current in the Strings editor.
 
 For either workflow, separate real language issues from app-context artifacts.
 Note any intentionally preserved casing, spacing, or punctuation in your report
-so later agents do not propose the same cosmetic changes. Export release files
-with `POST /export` only when the token has the `export` scope.
+so later agents do not propose the same cosmetic changes. Release files are not
+available through the legacy Agent API export; they will come from the Catalog
+Workspace Release Bundle workflow.
 
 ### Portuguese Locale Proposal
 
@@ -456,19 +458,6 @@ that branch and uses it as the pull-request base.
 
 ### `POST /export`
 
-Body:
-
-```json
-{
-  "format": "arb",
-  "locale": "hy",
-  "selection": {
-    "type": "tag",
-    "tag": "checkout"
-  }
-}
-```
-
-Formats: `json`, `arb`.
-
-Selections: `all`, `keys`, `tag`, `screen`.
+Retired. Returns `410 Gone`. The old endpoint synthesized output from the
+pre-Catalog-Workspace model and is not a lossless Brickit release surface.
+Release automation must wait for the immutable Release Bundle workflow.

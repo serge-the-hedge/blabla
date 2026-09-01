@@ -68,9 +68,9 @@ Returns review status, item statuses, and conflicts.
 
 ### `localization_export`
 
-Maps to `POST /api/agent/v1/export`.
-
-Exports JSON or Flutter ARB for `all`, `keys`, `tag`, or `screen` selection.
+Reserved for the future immutable Release Bundle workflow. The legacy
+`POST /api/agent/v1/export` endpoint returns `410 Gone` and must not be exposed
+as an MCP tool.
 
 ## Token Scope Mapping
 
@@ -78,4 +78,4 @@ Exports JSON or Flutter ARB for `all`, `keys`, `tag`, or `screen` selection.
   `localization_get_change_set`
 - `search`: `localization_search_strings`
 - `propose`: `localization_create_change_set`, `localization_tag_strings`
-- `export`: `localization_export`
+- `export`: reserved for `localization_export` once Release Bundles ship
