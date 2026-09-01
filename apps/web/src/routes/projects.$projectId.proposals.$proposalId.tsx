@@ -19,6 +19,7 @@ import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
+import { WhitespaceFacts } from "@/components/localization/whitespace-facts";
 import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute(
@@ -93,45 +94,6 @@ function CandidateReviewContext({ revisionId }: { revisionId: string }) {
 				) : null}
 			</div>
 		</div>
-	);
-}
-
-function whitespaceLabel(value: string, edge: "leading" | "trailing") {
-	const whitespace =
-		edge === "leading"
-			? /^[\t ]+/.exec(value)?.[0]
-			: /[\t ]+$/.exec(value)?.[0];
-	if (!whitespace) return null;
-	const spaces = [...whitespace].filter(
-		(character) => character === " ",
-	).length;
-	const tabs = whitespace.length - spaces;
-	const parts = [
-		spaces > 0 ? `${spaces} space${spaces === 1 ? "" : "s"}` : null,
-		tabs > 0 ? `${tabs} tab${tabs === 1 ? "" : "s"}` : null,
-	].filter((part): part is string => part !== null);
-	return `${edge}: ${parts.join(", ")}`;
-}
-
-function WhitespaceFacts({ value }: { value: string }) {
-	const lineBreaks = value.match(/\n/g)?.length ?? 0;
-	const facts = [
-		whitespaceLabel(value, "leading"),
-		whitespaceLabel(value, "trailing"),
-		lineBreaks > 0
-			? `${lineBreaks} line break${lineBreaks === 1 ? "" : "s"}`
-			: null,
-	].filter((fact): fact is string => fact !== null);
-	if (facts.length === 0) return null;
-	return (
-		<fieldset className="mt-2 flex flex-wrap gap-1">
-			<legend className="sr-only">Whitespace facts</legend>
-			{facts.map((fact) => (
-				<Badge key={fact} variant="outline" className="font-mono normal-case">
-					{fact}
-				</Badge>
-			))}
-		</fieldset>
 	);
 }
 

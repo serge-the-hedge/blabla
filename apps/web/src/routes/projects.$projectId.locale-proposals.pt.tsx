@@ -26,6 +26,7 @@ import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
+import { WhitespaceFacts } from "@/components/localization/whitespace-facts";
 import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute(
@@ -409,6 +410,7 @@ function PortugueseLocaleProposalRoute() {
 										<p className="whitespace-pre-wrap text-sm">
 											{message.sourceValue}
 										</p>
+										<WhitespaceFacts value={message.sourceValue} />
 									</div>
 									<div className="flex flex-col gap-2">
 										<Textarea
@@ -425,6 +427,7 @@ function PortugueseLocaleProposalRoute() {
 											}
 											rows={3}
 										/>
+										<WhitespaceFacts value={draft} />
 										<div className="flex flex-col gap-2">
 											<div className="flex flex-col gap-2 sm:flex-row">
 												<Input
