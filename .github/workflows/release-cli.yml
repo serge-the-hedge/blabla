@@ -19,7 +19,7 @@ jobs:
           - os: ubuntu-latest
             artifact: blabla-linux-x64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name }}
       - uses: dart-lang/setup-dart@v1
@@ -29,7 +29,7 @@ jobs:
         run: >-
           dart compile exe --define=BLABLA_CLI_VERSION="${GITHUB_REF_NAME#v}"
           bin/blabla.dart -o dist/${{ matrix.artifact }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: cli/dist/${{ matrix.artifact }}
@@ -39,7 +39,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
