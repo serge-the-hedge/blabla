@@ -157,12 +157,19 @@ function ProposalsIndexRoute() {
 										<Badge variant="secondary">{proposal.status}</Badge>
 									</div>
 									<div className="text-muted-foreground text-xs">
-										{proposal.taskScope
-											? `${proposal.taskScope.localeCode} · ${proposal.candidateCount} of ${proposal.taskScope.targetCount} candidates`
-											: `${proposal.candidateCount} target${proposal.candidateCount === 1 ? "" : "s"}`}{" "}
-										· {proposal.revisionCount} revision
-										{proposal.revisionCount === 1 ? "" : "s"} ·{" "}
-										{proposal.target.kind}
+										{proposal.localeProposalTaskScope
+											? `${proposal.localeProposalTaskScope.localeCode} · new Locale · ${proposal.candidateCount} of ${proposal.localeProposalTaskScope.targetCount} candidates`
+											: proposal.taskScope
+												? `${proposal.taskScope.localeCode} · ${proposal.candidateCount} of ${proposal.taskScope.targetCount} candidates`
+												: `${proposal.candidateCount} target${proposal.candidateCount === 1 ? "" : "s"}`}
+										{proposal.localeProposalTaskScope ? null : (
+											<>
+												{" "}
+												· {proposal.revisionCount} revision
+												{proposal.revisionCount === 1 ? "" : "s"} ·{" "}
+												{proposal.target.kind}
+											</>
+										)}
 									</div>
 								</div>
 								<Button
@@ -170,10 +177,17 @@ function ProposalsIndexRoute() {
 									size="sm"
 									variant="outline"
 									render={
-										<Link
-											to="/projects/$projectId/proposals/$proposalId"
-											params={{ projectId, proposalId: proposal._id }}
-										/>
+										proposal.localeProposalTaskScope ? (
+											<Link
+												to="/projects/$projectId/locale-proposals/pt"
+												params={{ projectId }}
+											/>
+										) : (
+											<Link
+												to="/projects/$projectId/proposals/$proposalId"
+												params={{ projectId, proposalId: proposal._id }}
+											/>
+										)
 									}
 								>
 									Review
