@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { type ActionCtx, httpAction } from "./_generated/server";
 import { authComponent, createAuth, getTrustedOrigins } from "./auth";
+import { resend } from "./emails";
 import type { TokenScope } from "./lib";
 import {
 	createOrResumeProposal,
@@ -505,6 +506,14 @@ function routeError(error: unknown) {
 authComponent.registerRoutesLazy(http, createAuth, {
 	cors: true,
 	trustedOrigins: getTrustedOrigins(),
+});
+
+http.route({
+	path: "/resend-webhook",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		return await resend.handleResendEventWebhook(ctx, request);
+	}),
 });
 
 http.route({

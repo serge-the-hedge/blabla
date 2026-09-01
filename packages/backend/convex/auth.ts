@@ -7,6 +7,7 @@ import type { DataModel } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { query } from "./_generated/server";
 import authConfig from "./auth.config";
+import { queuePasswordResetEmail } from "./emails";
 
 function requiredEnv(name: string) {
 	const value = process.env[name]?.trim();
@@ -47,6 +48,11 @@ function createAuth(ctx: GenericCtx<DataModel>) {
 		emailAndPassword: {
 			enabled: true,
 			requireEmailVerification: false,
+			revokeSessionsOnPasswordReset: true,
+			resetPasswordTokenExpiresIn: 60 * 60,
+			sendResetPassword: async ({ user, url }) => {
+				await queuePasswordResetEmail(ctx, { email: user.email, url });
+			},
 		},
 		plugins: [
 			crossDomain({ siteUrl }),

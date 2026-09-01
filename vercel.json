@@ -1,6 +1,20 @@
 {
 	"installCommand": "bun install --frozen-lockfile",
-	"buildCommand": "cd packages/backend && bunx convex deploy --cmd-url-env-var-name VITE_CONVEX_URL --cmd 'cd ../.. && bun run build'",
+	"buildCommand": "cd packages/backend && bunx convex deploy --cmd-url-env-var-name VITE_CONVEX_URL --cmd 'cd ../.. && bun run build:vercel'",
 	"outputDirectory": "apps/web/dist",
+	"redirects": [
+		{
+			"source": "/:path*",
+			"has": [{ "type": "host", "value": "flutte-web.vercel.app" }],
+			"destination": "https://blabla.seryozha.world/:path*",
+			"permanent": true
+		},
+		{
+			"source": "/:path*",
+			"has": [{ "type": "host", "value": "flutte.seryozha.world" }],
+			"destination": "https://blabla.seryozha.world/:path*",
+			"permanent": true
+		}
+	],
 	"rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
 }

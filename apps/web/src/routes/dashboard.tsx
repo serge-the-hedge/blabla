@@ -14,6 +14,7 @@ import {
 	useQuery,
 } from "convex/react";
 import AuthRedirect from "@/components/auth-redirect";
+import ChangePasswordForm from "@/components/change-password-form";
 import { api } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/dashboard")({
@@ -49,6 +50,7 @@ function PrivateDashboardContent() {
 					)}
 				</CardContent>
 			</Card>
+			<ChangePasswordForm />
 		</div>
 	);
 }
