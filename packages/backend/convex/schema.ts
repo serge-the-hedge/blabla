@@ -1226,6 +1226,23 @@ export default defineSchema({
 		recordId: v.id("releaseRecords"),
 		cursor: v.number(),
 		...releaseAssessmentFields,
+		terminal: v.optional(
+			v.union(
+				v.object({
+					status: v.literal("superseded"),
+					completedAt: v.number(),
+				}),
+				v.object({
+					status: v.literal("failed"),
+					completedAt: v.number(),
+					failure: v.object({
+						code: v.optional(v.string()),
+						message: v.string(),
+						failedAt: v.number(),
+					}),
+				}),
+			),
+		),
 		stepPending: v.boolean(),
 		updatedAt: v.number(),
 	}).index("by_recordId", ["recordId"]),

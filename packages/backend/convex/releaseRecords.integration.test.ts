@@ -291,6 +291,35 @@ describe("Release Records", () => {
 			projectId,
 		});
 		expect(reused.recordId).toBe(started.recordId);
+		await save(user, projectId, targetId, "Hallo wieder");
+		await expect(
+			user.query(api.releaseRecords.handoff, {
+				projectId,
+				recordId: started.recordId,
+			}),
+		).resolves.toEqual({
+			recordId: started.recordId,
+			status: "stale",
+			keys: [],
+		});
+	});
+
+	test("does not reuse a superseded record on the same basis", async () => {
+		const user = await authenticatedBackend(t, "release-superseded-retry");
+		const { projectId } = await createCatalog(user);
+		const completed = await prepareAndFinish(user, projectId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(completed.recordId, {
+				status: "superseded",
+				completedAt: Date.now(),
+			});
+		});
+
+		const retried = await user.mutation(api.releaseRecords.prepare, {
+			projectId,
+		});
+		expect(retried.recordId).not.toBe(completed.recordId);
+		expect(retried.status).toBe("preparing");
 	});
 
 	test("supersedes preparation when the Workspace revision advances", async () => {
@@ -318,11 +347,41 @@ describe("Release Records", () => {
 		).rejects.toThrow("has not been published");
 
 		await save(user, projectId, targetId, "Hallo wieder");
+		const cleanupQueued = await t.mutation(
+			internal.releaseRecords.processStep,
+			{
+				recordId: started.recordId,
+			},
+		);
+		expect(cleanupQueued?.status).toBe("preparing");
+		await t.mutation(internal.releaseRecords.processStep, {
+			recordId: started.recordId,
+		});
 		const result = await t.mutation(internal.releaseRecords.processStep, {
 			recordId: started.recordId,
 		});
-
 		expect(result?.status).toBe("superseded");
+		await t.run(async (ctx) => {
+			const [findings, evidence, handoffKeys, preparation] = await Promise.all([
+				ctx.db
+					.query("releaseFindings")
+					.withIndex("by_record", (q) => q.eq("recordId", started.recordId))
+					.collect(),
+				ctx.db
+					.query("releaseEvidence")
+					.withIndex("by_record", (q) => q.eq("recordId", started.recordId))
+					.collect(),
+				ctx.db.query("releaseWorkHandoffKeys").collect(),
+				ctx.db
+					.query("releaseRecordPreparations")
+					.withIndex("by_recordId", (q) => q.eq("recordId", started.recordId))
+					.unique(),
+			]);
+			expect(findings).toEqual([]);
+			expect(evidence).toEqual([]);
+			expect(handoffKeys).toEqual([]);
+			expect(preparation).toBeNull();
+		});
 		await expect(
 			user.query(api.releaseRecords.details, {
 				recordId: started.recordId,

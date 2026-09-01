@@ -201,6 +201,13 @@ function StringsRoute() {
 			replace: true,
 		});
 	}, [navigate]);
+	useEffect(() => {
+		if (releaseHandoff?.status !== "stale") return;
+		toast.info(
+			"The catalog changed after this release was assessed. Prepare a current Release Record before using its work scope.",
+		);
+		onClearReleaseHandoff();
+	}, [onClearReleaseHandoff, releaseHandoff?.status]);
 	const onCommitValue = useCallback(
 		async (input: CatalogWorkspaceCommit) => {
 			try {
