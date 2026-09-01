@@ -4,19 +4,22 @@ import type { Id } from "./_generated/dataModel";
 import { ordinaryImportConfirmationPlan } from "./ordinaryImportConfirmations";
 
 const localeId = "locale-de" as Id<"locales">;
+const secondLocaleId = "locale-fr" as Id<"locales">;
 const sourceLocaleId = "locale-en" as Id<"locales">;
 
 function row(input: {
 	messageId: string;
 	isSource: boolean;
 	value: string;
+	localeId?: Id<"locales">;
+	localeCode?: string;
 	valueFingerprint?: string;
 	sourceFingerprint?: string;
 }) {
 	return {
 		messageId: input.messageId,
-		localeId: input.isSource ? sourceLocaleId : localeId,
-		localeCode: input.isSource ? "en" : "de",
+		localeId: input.isSource ? sourceLocaleId : (input.localeId ?? localeId),
+		localeCode: input.isSource ? "en" : (input.localeCode ?? "de"),
 		isSource: input.isSource,
 		value: input.value,
 		valueFingerprint:
@@ -29,7 +32,7 @@ function row(input: {
 }
 
 describe("ordinary import confirmation policy", () => {
-	test("explains every target once and selects only untouched unique translations", () => {
+	test("does not treat text reused by unrelated keys as suspicious", () => {
 		const messages = [
 			["eligible", "Account", "Konto"],
 			["empty", "Empty", ""],
@@ -76,22 +79,46 @@ describe("ordinary import confirmation policy", () => {
 
 		expect(plan.counts).toEqual({
 			total: 9,
-			eligible: 1,
+			eligible: 3,
 			empty: 1,
 			sourceIdentical: 1,
-			repeated: 2,
+			repeated: 0,
 			modified: 1,
 			stale: 1,
 			alreadyConfirmed: 1,
 			pendingSourceProposal: 1,
 		});
-		expect(plan.candidates).toEqual([
-			{
-				messageId: "eligible",
-				localeId,
-				sourceFingerprint: "eligible-source",
-				valueFingerprint: "eligible-de",
-			},
+		expect(plan.candidates.map((candidate) => candidate.messageId)).toEqual([
+			"eligible",
+			"repeat-one",
+			"repeat-two",
 		]);
+	});
+
+	test("keeps equal target translations within one key for deliberate review", () => {
+		const plan = ordinaryImportConfirmationPlan({
+			rows: [
+				row({ messageId: "same-key", isSource: true, value: "Continue" }),
+				row({ messageId: "same-key", isSource: false, value: "Continue!" }),
+				row({
+					messageId: "same-key",
+					isSource: false,
+					localeId: secondLocaleId,
+					localeCode: "fr",
+					value: "Continue!",
+					valueFingerprint: "same-key-fr",
+				}),
+			],
+			heads: [],
+			decisions: [],
+			pendingSourceMessageIds: new Set(),
+		});
+
+		expect(plan.counts).toMatchObject({
+			total: 2,
+			eligible: 0,
+			repeated: 2,
+		});
+		expect(plan.candidates).toEqual([]);
 	});
 });

@@ -891,9 +891,11 @@ and cutover](https://github.com/serge-the-hedge/blabla/issues/13)
 8. **Preview and approve the `ordinary-v1` cutover batch once Navigation is
    ready.** It confirms only
    untouched, contract-valid, non-empty target values that differ from Source
-   and occur once in their Locale. Empty, source-identical, repeated, locally
-   modified, stale, and pending-Source-Proposal values remain visible for
-   deliberate review. The one-time bootstrap records the named system policy
+   and do not repeat across target Locales of the same key. Reuse of the same
+   text by unrelated keys is ordinary catalog content and does not affect
+   confirmation state. Empty, source-identical, same-key cross-Locale repeats,
+   locally modified, stale, and pending-Source-Proposal values remain visible
+   for deliberate review. The one-time bootstrap records the named system policy
    only after a human approves this exact preview; ordinary product use records
    the authenticated editor instead.
 

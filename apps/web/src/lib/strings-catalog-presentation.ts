@@ -17,7 +17,8 @@ export type ValuePhrase =
  */
 export type ValueTone = "silent" | "mark" | "attention";
 
-/** A control the focused value offers. An unfocused clean value offers none. */
+/** A control a value offers. Unconfirmed work keeps its approval discoverable;
+ * editing-only actions still appear on focus. */
 export type ValueAffordance = "commit" | "confirm" | "intentionalBlank";
 
 export type ValuePresentation = {
@@ -138,12 +139,13 @@ export function presentCatalogWorkspaceValue(
 				? ("still correct" as const)
 				: undefined;
 
-	// Silence is the resting state: a clean, unfocused value offers no control
-	// at all, so a page of finished work presents nothing to ignore.
+	// Completed work stays silent, while an unconfirmed or semantically stale
+	// value keeps its one useful decision visible without requiring discovery of
+	// the keyboard shortcut first.
 	const affordances: ValueAffordance[] = [];
+	if (shortcut === "confirm") affordances.push("confirm");
 	if (isFocused || isDirty) {
 		if (shortcut === "save") affordances.push("commit");
-		else if (shortcut === "confirm") affordances.push("confirm");
 		// Clearing a field and walking away must mean undecided, so a deliberate
 		// blank stays an explicit act — and is not offered on a value that
 		// already renders nothing.

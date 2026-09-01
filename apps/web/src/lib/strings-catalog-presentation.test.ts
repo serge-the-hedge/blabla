@@ -73,6 +73,7 @@ describe("presentCatalogWorkspaceValue", () => {
 		expect(presentation.tone).toBe("mark");
 		expect(presentation.blocks).toBe(false);
 		expect(presentation.phrase).toBeUndefined();
+		expect(presentation.affordances).toEqual(["confirm"]);
 	});
 
 	test("an unconfirmed value equal to its source reads as English, not chosen", () => {
@@ -157,7 +158,7 @@ describe("affordances follow focus", () => {
 		expect(presentation.commitHint).toBe("save");
 	});
 
-	test("an untouched Unconfirmed Import offers a confirmation", () => {
+	test("an untouched Unconfirmed Import keeps confirmation visible", () => {
 		const presentation = present(target({ valueState: "unconfirmedImport" }), {
 			isFocused: true,
 		});

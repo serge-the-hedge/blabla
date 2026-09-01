@@ -59,8 +59,11 @@ export const MAX_CATALOG_WORKSPACE_NAVIGATION_BYTES = 4 * 1024 * 1024;
  * response. */
 export const MAX_CATALOG_WORKSPACE_NAVIGATION_RETURN_BYTES = 4 * 1024 * 1024;
 const MAX_NAVIGATION_RESET_ROWS_PER_MUTATION = 256;
-const MAX_NAVIGATION_KEYS_PER_STAGE_STEP = 128;
+// Repair derivation reads every Locale row and current decision for each key.
+// Keep its transactions comfortably below Convex's system-operation ceiling.
+const MAX_NAVIGATION_KEYS_PER_STAGE_STEP = 32;
 const MAX_NAVIGATION_VERIFY_ROWS_PER_MUTATION = 256;
+const NAVIGATION_BACKFILL_STEP_LEASE_MS = 60_000;
 /** Step budget for the ingest action's staging loop; 32 keys per step over
  * the working-catalog key envelope leaves a generous safety margin. */
 export const MAX_NAVIGATION_STAGE_STEPS = 512;
@@ -327,6 +330,31 @@ const ORDINARY_IMPORT_COUNT_FIELDS = [
 	"pendingSourceProposal",
 ] as const satisfies readonly (keyof OrdinaryImportConfirmationCounts)[];
 
+/** Bump when the meaning of persisted ordinary-import categories changes. */
+const ORDINARY_IMPORT_POLICY_VERSION = 2;
+
+function backfillStepIsPending(
+	state: Pick<
+		Doc<"catalogWorkspaceNavigationStates">,
+		"backfillStepPending" | "backfillStepPendingAt"
+	>,
+) {
+	return (
+		state.backfillStepPending === true &&
+		state.backfillStepPendingAt !== undefined &&
+		state.backfillStepPendingAt > now() - NAVIGATION_BACKFILL_STEP_LEASE_MS
+	);
+}
+
+function pendingBackfillStepPatch() {
+	return { backfillStepPending: true as const, backfillStepPendingAt: now() };
+}
+
+const IDLE_BACKFILL_STEP_PATCH = {
+	backfillStepPending: false as const,
+	backfillStepPendingAt: undefined,
+};
+
 function emptyOrdinaryImportCounts(): OrdinaryImportConfirmationCounts {
 	return {
 		total: 0,
@@ -359,9 +387,23 @@ function combineOrdinaryImportCounts(
 	return next;
 }
 
-/** Count one digest independently. New rows carry the projection-stable
- * repeated-value fact, so these counts can be added and subtracted when one
- * key changes without reopening the whole Navigation Index. */
+function repeatsAcrossTargetLocales(
+	digest: CatalogWorkspaceNavigationDigest,
+	target: CatalogWorkspaceNavigationTargetDigest,
+): boolean {
+	return (
+		target.valueFingerprint !== undefined &&
+		digest.targets.some(
+			(other) =>
+				other.localeId !== target.localeId &&
+				other.valueFingerprint === target.valueFingerprint,
+		)
+	);
+}
+
+/** Count one digest independently. Suspicious repetition is local to one key:
+ * two target Locales carrying the same visible text merit deliberate review,
+ * while unrelated keys are free to reuse ordinary words and labels. */
 export function ordinaryImportCountsForDigest(
 	digest: CatalogWorkspaceNavigationDigest,
 ): OrdinaryImportConfirmationCounts {
@@ -395,7 +437,7 @@ export function ordinaryImportCountsForDigest(
 			counts.sourceIdentical++;
 			continue;
 		}
-		if (target.repeatedGitContent) {
+		if (repeatsAcrossTargetLocales(digest, target)) {
 			counts.repeated++;
 			continue;
 		}
@@ -405,44 +447,14 @@ export function ordinaryImportCountsForDigest(
 }
 
 /** Derive the whole-catalog ordinary-confirmation summary from Navigation
- * digests alone. Legacy rows without the materialized repeated-value fact use
- * the visible value fingerprint carried by the digest until the operator
- * backfill rebuilds them. */
+ * digests alone. Every repetition decision stays inside one key digest, so the
+ * summary remains additive and never scans unrelated keys for equal text. */
 export function ordinaryImportSummaryFromDigests(
 	digests: readonly CatalogWorkspaceNavigationDigest[],
 ): OrdinaryImportConfirmationCounts {
-	const localeValueCounts = new Map<string, number>();
-	const needsLegacyRepeatedFallback = digests.some((digest) =>
-		digest.targets.some((target) => target.repeatedGitContent === undefined),
-	);
-	if (needsLegacyRepeatedFallback) {
-		for (const digest of digests) {
-			for (const target of digest.targets) {
-				if (target.valueFingerprint === undefined) continue;
-				const identity = JSON.stringify([
-					target.localeId,
-					target.valueFingerprint,
-				]);
-				localeValueCounts.set(
-					identity,
-					(localeValueCounts.get(identity) ?? 0) + 1,
-				);
-			}
-		}
-	}
 	const counts = emptyOrdinaryImportCounts();
 	for (const digest of digests) {
-		const digestCounts = ordinaryImportCountsForDigest({
-			...digest,
-			targets: digest.targets.map((target) => ({
-				...target,
-				repeatedGitContent:
-					target.repeatedGitContent ??
-					(localeValueCounts.get(
-						JSON.stringify([target.localeId, target.valueFingerprint]),
-					) ?? 0) > 1,
-			})),
-		});
+		const digestCounts = ordinaryImportCountsForDigest(digest);
 		for (const field of ORDINARY_IMPORT_COUNT_FIELDS) {
 			counts[field] += digestCounts[field];
 		}
@@ -584,6 +596,7 @@ export async function readyNavigationStateFor(
 		state.projectionId !== input.projectionId ||
 		state.status !== "ready" ||
 		state.ordinaryImportCounts === undefined ||
+		state.ordinaryImportPolicyVersion !== ORDINARY_IMPORT_POLICY_VERSION ||
 		state.rowCount !== input.expectedRowCount ||
 		state.expectedRowCount !== input.expectedRowCount
 	) {
@@ -1047,6 +1060,7 @@ export async function recomputeNavigationRows(
 			status: "staging",
 			expectedRowCount: projection.expectedKeyCount,
 			ordinaryImportCounts: emptyOrdinaryImportCounts(),
+			ordinaryImportPolicyVersion: ORDINARY_IMPORT_POLICY_VERSION,
 		});
 		const created = await navigationStateFor(ctx, input.projectId);
 		if (!created) {
@@ -1077,6 +1091,7 @@ export async function recomputeNavigationRows(
 			status: "staging",
 			expectedRowCount: projection.expectedKeyCount,
 			ordinaryImportCounts: emptyOrdinaryImportCounts(),
+			ordinaryImportPolicyVersion: ORDINARY_IMPORT_POLICY_VERSION,
 		});
 		state = (await navigationStateFor(ctx, input.projectId)) ?? state;
 	}
@@ -1316,7 +1331,7 @@ async function navigationBackfillStatusFor(
 		expectedRowCount: state.expectedRowCount ?? null,
 		expectedByteLength: state.expectedByteLength ?? null,
 		ordinaryImportCounts: state.ordinaryImportCounts ?? null,
-		stepPending: state.backfillStepPending ?? false,
+		stepPending: backfillStepIsPending(state),
 		forceRebuild: state.backfillForceRebuild ?? false,
 		failure: state.backfillFailure ?? null,
 	};
@@ -1379,6 +1394,7 @@ export const startNavigationIndexBackfill = mutation({
 				status: "staging",
 				expectedRowCount: projection.expectedKeyCount,
 				ordinaryImportCounts: emptyOrdinaryImportCounts(),
+				ordinaryImportPolicyVersion: ORDINARY_IMPORT_POLICY_VERSION,
 				backfillForceRebuild: true,
 				backfillFailure: undefined,
 			});
@@ -1389,7 +1405,10 @@ export const startNavigationIndexBackfill = mutation({
 					message: "Navigation backfill is missing its project envelope.",
 				});
 			}
-		} else if (state.ordinaryImportCounts === undefined) {
+		} else if (
+			state.ordinaryImportCounts === undefined ||
+			state.ordinaryImportPolicyVersion !== ORDINARY_IMPORT_POLICY_VERSION
+		) {
 			// A state from before materialized ordinary-import counts cannot be
 			// repaired by replacing rows in place: its envelope has no trustworthy
 			// additive baseline. Clear the generation first, then refill it.
@@ -1400,6 +1419,7 @@ export const startNavigationIndexBackfill = mutation({
 				expectedRowCount: projection.expectedKeyCount,
 				expectedByteLength: undefined,
 				ordinaryImportCounts: emptyOrdinaryImportCounts(),
+				ordinaryImportPolicyVersion: ORDINARY_IMPORT_POLICY_VERSION,
 				backfillLastCatalogIndex: -1,
 				verificationLastCatalogIndex: undefined,
 				verifiedRowCount: undefined,
@@ -1431,8 +1451,8 @@ export const startNavigationIndexBackfill = mutation({
 			});
 			state = (await navigationStateFor(ctx, args.projectId)) ?? state;
 		}
-		if (state.backfillStepPending !== true) {
-			await ctx.db.patch(state._id, { backfillStepPending: true });
+		if (!backfillStepIsPending(state)) {
+			await ctx.db.patch(state._id, pendingBackfillStepPatch());
 			await ctx.scheduler.runAfter(
 				0,
 				internal.catalogWorkspaceNavigation.backfillNavigationIndexStep,
@@ -1507,6 +1527,7 @@ export const backfillNavigationIndexStep = internalMutation({
 					status: "staging",
 					expectedRowCount: projection.expectedKeyCount,
 					ordinaryImportCounts: emptyOrdinaryImportCounts(),
+					ordinaryImportPolicyVersion: ORDINARY_IMPORT_POLICY_VERSION,
 					backfillForceRebuild: true,
 				});
 				state = await navigationStateFor(ctx, args.projectId);
@@ -1521,7 +1542,7 @@ export const backfillNavigationIndexStep = internalMutation({
 				return { phase: "failed" as const };
 			}
 			if (state.backfillStepPending) {
-				await ctx.db.patch(state._id, { backfillStepPending: false });
+				await ctx.db.patch(state._id, IDLE_BACKFILL_STEP_PATCH);
 			}
 			if (state.backfillForceRebuild) {
 				const rowsToClear = await ctx.db
@@ -1538,8 +1559,21 @@ export const backfillNavigationIndexStep = internalMutation({
 				)) {
 					await ctx.db.delete(row._id);
 				}
-				if (rowsToClear.length > MAX_NAVIGATION_RESET_ROWS_PER_MUTATION) {
-					await ctx.db.patch(state._id, { backfillStepPending: true });
+				if (rowsToClear.length > 0) {
+					const clearedGeneration =
+						rowsToClear.length <= MAX_NAVIGATION_RESET_ROWS_PER_MUTATION;
+					await ctx.db.patch(state._id, {
+						...pendingBackfillStepPatch(),
+						...(clearedGeneration
+							? {
+									rowCount: 0,
+									byteLength: 0,
+									ordinaryImportCounts: emptyOrdinaryImportCounts(),
+									backfillLastCatalogIndex: -1,
+									backfillForceRebuild: undefined,
+								}
+							: {}),
+					});
 					await ctx.scheduler.runAfter(
 						0,
 						internal.catalogWorkspaceNavigation.backfillNavigationIndexStep,
@@ -1547,6 +1581,9 @@ export const backfillNavigationIndexStep = internalMutation({
 					);
 					return { phase: "clearing" as const };
 				}
+				// Empty legacy generations can advance directly to filling. A non-empty
+				// generation always yields above, keeping deletion and derivation in
+				// separate transactions with predictable system-operation budgets.
 				await ctx.db.patch(state._id, {
 					rowCount: 0,
 					byteLength: 0,
@@ -1582,7 +1619,7 @@ export const backfillNavigationIndexStep = internalMutation({
 				const done = !batch.moreRemaining;
 				await ctx.db.patch(state._id, {
 					backfillLastCatalogIndex: batch.lastCatalogIndex,
-					backfillStepPending: true,
+					...pendingBackfillStepPatch(),
 					...(done
 						? {
 								status: "verifying" as const,
@@ -1626,7 +1663,7 @@ export const backfillNavigationIndexStep = internalMutation({
 				verifiedByteLength,
 			});
 			if (!done) {
-				await ctx.db.patch(state._id, { backfillStepPending: true });
+				await ctx.db.patch(state._id, pendingBackfillStepPatch());
 				await ctx.scheduler.runAfter(
 					0,
 					internal.catalogWorkspaceNavigation.backfillNavigationIndexStep,
@@ -1656,8 +1693,9 @@ export const backfillNavigationIndexStep = internalMutation({
 					status: "staging",
 					expectedRowCount: projection.expectedKeyCount,
 					ordinaryImportCounts: emptyOrdinaryImportCounts(),
+					ordinaryImportPolicyVersion: ORDINARY_IMPORT_POLICY_VERSION,
 					backfillForceRebuild: true,
-					backfillStepPending: true,
+					...pendingBackfillStepPatch(),
 				});
 				await ctx.scheduler.runAfter(
 					0,
@@ -1668,10 +1706,11 @@ export const backfillNavigationIndexStep = internalMutation({
 			}
 			await ctx.db.patch(state._id, {
 				status: "ready",
+				ordinaryImportPolicyVersion: ORDINARY_IMPORT_POLICY_VERSION,
 				verificationLastCatalogIndex: undefined,
 				verifiedRowCount: undefined,
 				verifiedByteLength: undefined,
-				backfillStepPending: false,
+				...IDLE_BACKFILL_STEP_PATCH,
 			});
 			return { phase: "ready" as const };
 		} catch (error) {
@@ -1679,7 +1718,7 @@ export const backfillNavigationIndexStep = internalMutation({
 			if (!state) throw error;
 			await ctx.db.patch(state._id, {
 				status: "failed",
-				backfillStepPending: false,
+				...IDLE_BACKFILL_STEP_PATCH,
 				backfillFailure: backfillFailureFor(error),
 			});
 			return { phase: "failed" as const };
@@ -1793,9 +1832,11 @@ export async function activateNavigationGeneration(
 			expectedByteLength: staging.expectedByteLength,
 			ordinaryImportCounts:
 				staging.ordinaryImportCounts ?? emptyOrdinaryImportCounts(),
+			ordinaryImportPolicyVersion: ORDINARY_IMPORT_POLICY_VERSION,
 			backfillLastCatalogIndex: undefined,
 			backfillForceRebuild: undefined,
 			backfillStepPending: undefined,
+			backfillStepPendingAt: undefined,
 			verificationLastCatalogIndex: undefined,
 			verifiedRowCount: undefined,
 			verifiedByteLength: undefined,
@@ -1815,6 +1856,7 @@ export async function activateNavigationGeneration(
 			expectedByteLength: staging.expectedByteLength,
 			ordinaryImportCounts:
 				staging.ordinaryImportCounts ?? emptyOrdinaryImportCounts(),
+			ordinaryImportPolicyVersion: ORDINARY_IMPORT_POLICY_VERSION,
 		});
 	}
 	await ctx.db.delete(staging._id);
@@ -2054,7 +2096,8 @@ export const navigation = query({
 			!state ||
 			state.projectionId !== projection._id ||
 			state.status !== "ready" ||
-			state.ordinaryImportCounts === undefined
+			state.ordinaryImportCounts === undefined ||
+			state.ordinaryImportPolicyVersion !== ORDINARY_IMPORT_POLICY_VERSION
 		) {
 			const counted =
 				state && state.projectionId === projection._id ? state : undefined;
@@ -2062,7 +2105,7 @@ export const navigation = query({
 				kind: "incomplete",
 				...navigationReadIdentity(projection),
 				canEdit: hasMinimumRole(member.role, "editor"),
-				stepPending: counted?.backfillStepPending ?? false,
+				stepPending: counted ? backfillStepIsPending(counted) : false,
 				progress: {
 					rowCount: counted?.rowCount ?? 0,
 					expectedRowCount: projection.expectedKeyCount,
