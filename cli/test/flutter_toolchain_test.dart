@@ -87,6 +87,7 @@ class FvmRunner implements CommandRunner {
     String executable,
     List<String> arguments, {
     required String workingDirectory,
+    List<int>? stdin,
   }) async {
     calls.add([executable, ...arguments]);
     if (executable == 'fvm' && arguments.join(' ') == '--version') {
