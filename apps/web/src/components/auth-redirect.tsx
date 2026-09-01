@@ -1,4 +1,5 @@
 import { Navigate, useRouterState } from "@tanstack/react-router";
+import { useState } from "react";
 
 export const DEFAULT_AUTH_REDIRECT = "/projects";
 
@@ -24,9 +25,14 @@ export function safeAuthRedirect(redirect: string | undefined) {
 }
 
 export default function AuthRedirect() {
-	const redirect = useRouterState({
+	const currentHref = useRouterState({
 		select: (state) => state.location.href,
 	});
+	// Keep the protected destination that caused this guard to mount. During the
+	// route transition this component can render once with /sign-in as the
+	// current location; following that transient value would recursively nest
+	// the sign-in URL inside its own redirect query.
+	const [redirect] = useState(() => safeAuthRedirect(currentHref));
 
 	return (
 		<Navigate to="/sign-in" search={{ mode: "sign-in", redirect }} replace />
