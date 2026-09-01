@@ -248,7 +248,7 @@ describe("Release Records", () => {
 		expect(deliveryBody.skipped).toEqual([]);
 		expect(
 			deliveryBody.files.find((file) => file.catalogPath === "de.arb")?.content,
-		).toContain('"greeting": "Guten Tag"');
+		).toBe('{"@@locale":"de","greeting":"Guten Tag"}');
 		const captures = await t.run(async (ctx) =>
 			ctx.db.query("releaseDeliveryCaptures").collect(),
 		);
@@ -257,8 +257,33 @@ describe("Release Records", () => {
 			_id: deliveryBody.deliveryCaptureId,
 			recordId: record.recordId,
 			appliedCount: 1,
-			skipped: [],
+			skippedCount: 0,
 		});
+	});
+
+	test("refuses a build page after the recorded Workspace basis changes", async () => {
+		const user = await authenticatedBackend(t, "release-build-race");
+		const { projectId, targetId } = await createCatalog(user);
+		await save(user, projectId, targetId, "Guten Tag");
+		const record = await prepareAndFinish(user, projectId);
+		const started = await user.mutation(api.releaseBundles.build, {
+			recordId: record.recordId,
+		});
+
+		await expect(
+			t.query(internal.releaseBundles.bundleChangePage, {
+				runId: started.runId,
+				paginationOpts: { cursor: null, numItems: 1 },
+			}),
+		).resolves.toMatchObject({ isDone: true });
+
+		await save(user, projectId, targetId, "Hallo wieder");
+		await expect(
+			t.query(internal.releaseBundles.bundleChangePage, {
+				runId: started.runId,
+				paginationOpts: { cursor: null, numItems: 1 },
+			}),
+		).rejects.toThrow("Catalog Workspace changed");
 	});
 
 	test("requires a Baseline and a complete Navigation Index", async () => {

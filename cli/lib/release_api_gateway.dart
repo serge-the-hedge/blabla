@@ -21,7 +21,7 @@ class HttpReleaseGateway implements ReleaseGateway {
   @override
   Future<ReleaseSummary> readRelease(String recordId) async {
     final response = await _request('GET', _endpoint(recordId));
-    return _summary(response);
+    return _decodeResponse(() => _summary(response));
   }
 
   @override
@@ -43,26 +43,28 @@ class HttpReleaseGateway implements ReleaseGateway {
             .toList(),
       }),
     );
-    return ReleaseDeliveryTree(
-      releaseRecord: _record(_requiredObject(response, 'releaseRecord')),
-      files: _requiredList(response, 'files').map((value) {
-        final file = _object(value);
-        return DeliveryTreeFile(
-          catalogPath: _requiredString(file, 'catalogPath'),
-          content: _requiredString(file, 'content'),
-        );
-      }).toList(),
-      applied: _requiredList(
-        response,
-        'applied',
-      ).map((value) => _string(value)).toList(),
-      skipped: _requiredList(response, 'skipped').map((value) {
-        final skipped = _object(value);
-        return SkippedReleaseKey(
-          messageId: _requiredString(skipped, 'messageId'),
-          reason: _requiredString(skipped, 'reason'),
-        );
-      }).toList(),
+    return _decodeResponse(
+      () => ReleaseDeliveryTree(
+        releaseRecord: _record(_requiredObject(response, 'releaseRecord')),
+        files: _requiredList(response, 'files').map((value) {
+          final file = _object(value);
+          return DeliveryTreeFile(
+            catalogPath: _requiredString(file, 'catalogPath'),
+            content: _requiredString(file, 'content'),
+          );
+        }).toList(),
+        applied: _requiredList(
+          response,
+          'applied',
+        ).map((value) => _string(value)).toList(),
+        skipped: _requiredList(response, 'skipped').map((value) {
+          final skipped = _object(value);
+          return SkippedReleaseKey(
+            messageId: _requiredString(skipped, 'messageId'),
+            reason: _requiredString(skipped, 'reason'),
+          );
+        }).toList(),
+      ),
     );
   }
 
@@ -133,6 +135,10 @@ class HttpReleaseGateway implements ReleaseGateway {
           'Blabla returned an invalid existing-locale release response.',
         );
       }
+    } on HandshakeException catch (error) {
+      throw RepositoryAdapterException(
+        'Could not establish a secure connection to Blabla: $error',
+      );
     } on SocketException catch (error) {
       throw RepositoryAdapterException(
         'Could not reach Blabla to read the release: ${error.message}',
@@ -178,6 +184,16 @@ class HttpReleaseGateway implements ReleaseGateway {
     if (_lastCompatibilityWarning == warning) return;
     _lastCompatibilityWarning = warning;
     onWarning?.call(warning);
+  }
+}
+
+T _decodeResponse<T>(T Function() decode) {
+  try {
+    return decode();
+  } on FormatException {
+    throw RepositoryAdapterException(
+      'Blabla returned an invalid existing-locale release response.',
+    );
   }
 }
 

@@ -301,6 +301,86 @@ function readStringLiteral(
 	return { value: JSON.parse(text.slice(start, index)) as string, next: index };
 }
 
+type RawMember = {
+	name: string;
+	nameStart: number;
+	valueStart: number;
+	valueEnd: number;
+};
+
+function jsonValueEnd(text: string, start: number): number {
+	if (text[start] === '"') return readStringLiteral(text, start).next;
+	if (text[start] === "{" || text[start] === "[") {
+		let depth = 0;
+		let index = start;
+		while (index < text.length) {
+			const char = text[index];
+			if (char === '"') {
+				index = readStringLiteral(text, index).next;
+				continue;
+			}
+			if (char === "{" || char === "[") depth++;
+			if (char === "}" || char === "]") {
+				depth--;
+				if (depth === 0) return index + 1;
+			}
+			index++;
+		}
+	}
+	let index = start;
+	while (index < text.length && text[index] !== "," && text[index] !== "}") {
+		index++;
+	}
+	while (index > start && /\s/.test(text[index - 1] as string)) index--;
+	return index;
+}
+
+function readRawMembers(text: string): RawMember[] {
+	const members: RawMember[] = [];
+	let depth = 0;
+	let index = 0;
+	while (index < text.length) {
+		const char = text[index];
+		if (char === "{") {
+			depth++;
+			index++;
+			continue;
+		}
+		if (char === "}") {
+			depth--;
+			index++;
+			continue;
+		}
+		if (char !== '"') {
+			index++;
+			continue;
+		}
+		const nameStart = index;
+		const name = readStringLiteral(text, index);
+		if (depth !== 1) {
+			index = name.next;
+			continue;
+		}
+		let probe = name.next;
+		while (probe < text.length && /\s/.test(text[probe] as string)) probe++;
+		if (text[probe] !== ":") {
+			index = name.next;
+			continue;
+		}
+		probe++;
+		while (probe < text.length && /\s/.test(text[probe] as string)) probe++;
+		const valueEnd = jsonValueEnd(text, probe);
+		members.push({
+			name: name.value,
+			nameStart,
+			valueStart: probe,
+			valueEnd,
+		});
+		index = valueEnd;
+	}
+	return members;
+}
+
 /**
  * The top-level member names, in the order the text holds them.
  *
@@ -310,28 +390,7 @@ function readStringLiteral(
  * file actually has.
  */
 function readMemberNames(text: string): string[] {
-	const names: string[] = [];
-	let depth = 0;
-	let index = 0;
-
-	while (index < text.length) {
-		const char = text[index];
-
-		if (char === '"') {
-			const { value, next } = readStringLiteral(text, index);
-			let probe = next;
-			while (probe < text.length && /\s/.test(text[probe] as string)) probe++;
-			if (depth === 1 && text[probe] === ":") names.push(value);
-			index = next;
-			continue;
-		}
-
-		if (char === "{" || char === "[") depth++;
-		else if (char === "}" || char === "]") depth--;
-		index++;
-	}
-
-	return names;
+	return readRawMembers(text).map((member) => member.name);
 }
 
 /**
@@ -591,4 +650,116 @@ export function serialize(document: CatalogDocument): string {
 
 	if (lines.length === 0) return "{}";
 	return `{\n${lines.join(",\n")}\n}`;
+}
+
+/** Patch message string tokens in the original ARB text. Existing values keep
+ * every unrelated byte; absent target messages are inserted in Catalog Order
+ * using the document's existing one-line or indented layout. */
+export function patchMessageValues(
+	text: string,
+	updates: readonly { id: string; value: string }[],
+): string {
+	const document = parse(text);
+	const updateIds = new Set(updates.map((update) => update.id));
+	if (updateIds.size !== updates.length) {
+		invalid("A Catalog Document patch repeats a message identifier.");
+	}
+	const rawMembers = readRawMembers(text);
+	const rawByName = new Map(rawMembers.map((member) => [member.name, member]));
+	const existingIds = new Set(document.messages.map((message) => message.id));
+	const edits: Array<{ start: number; end: number; replacement: string }> = [];
+	const missing = [];
+	for (const update of updates) {
+		if (update.id.startsWith("@")) {
+			invalid(`A message identifier cannot begin with "@": "${update.id}".`);
+		}
+		const raw = rawByName.get(update.id);
+		if (raw && existingIds.has(update.id)) {
+			edits.push({
+				start: raw.valueStart,
+				end: raw.valueEnd,
+				replacement: escapeString(update.value),
+			});
+		} else {
+			missing.push(update);
+		}
+	}
+
+	const newline = text.includes("\r\n")
+		? "\r\n"
+		: text.includes("\n")
+			? "\n"
+			: "";
+	const insertionGroups = new Map<number, typeof missing>();
+	const existingMessages = document.messages;
+	for (const update of missing.sort((left, right) =>
+		catalogOrderKey(left.id).localeCompare(catalogOrderKey(right.id)),
+	)) {
+		const successor = existingMessages.find(
+			(message) => catalogOrderKey(message.id) > catalogOrderKey(update.id),
+		);
+		const offset = successor
+			? (rawByName.get(successor.id)?.nameStart ?? text.lastIndexOf("}"))
+			: -1;
+		const group = insertionGroups.get(offset) ?? [];
+		group.push(update);
+		insertionGroups.set(offset, group);
+	}
+
+	for (const [successorOffset, group] of insertionGroups) {
+		const pairs = group.map(
+			(update) =>
+				`${escapeString(update.id)}${newline ? ": " : ":"}${escapeString(update.value)}`,
+		);
+		if (successorOffset >= 0) {
+			const lineStart = text.lastIndexOf("\n", successorOffset - 1) + 1;
+			const indentation = text.slice(lineStart, successorOffset);
+			const onOwnLine = newline !== "" && /^\s*$/.test(indentation);
+			edits.push({
+				start: onOwnLine ? lineStart : successorOffset,
+				end: onOwnLine ? lineStart : successorOffset,
+				replacement: onOwnLine
+					? pairs.map((pair) => `${indentation}${pair},${newline}`).join("")
+					: `${pairs.join(",")},`,
+			});
+			continue;
+		}
+		const last = rawMembers[rawMembers.length - 1];
+		if (!last) {
+			const close = text.lastIndexOf("}");
+			edits.push({
+				start: close,
+				end: close,
+				replacement: newline
+					? `  ${pairs.join(`,${newline}  `)}${newline}`
+					: pairs.join(","),
+			});
+			continue;
+		}
+		const lineStart = text.lastIndexOf("\n", last.nameStart - 1) + 1;
+		const indentation = text.slice(lineStart, last.nameStart);
+		edits.push({
+			start: last.valueEnd,
+			end: last.valueEnd,
+			replacement:
+				newline && /^\s*$/.test(indentation)
+					? `,${newline}${indentation}${pairs.join(`,${newline}${indentation}`)}`
+					: `,${pairs.join(",")}`,
+		});
+	}
+
+	let result = text;
+	for (const edit of edits.sort((left, right) => right.start - left.start)) {
+		result = `${result.slice(0, edit.start)}${edit.replacement}${result.slice(edit.end)}`;
+	}
+	const patched = parse(result);
+	for (const update of updates) {
+		if (
+			patched.messages.find((message) => message.id === update.id)?.value !==
+			update.value
+		) {
+			invalid(`Catalog Document patch did not produce "${update.id}".`);
+		}
+	}
+	return result;
 }

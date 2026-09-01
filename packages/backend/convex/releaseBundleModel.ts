@@ -3,7 +3,7 @@ import { ConvexError } from "convex/values";
 import {
 	type CatalogDocument,
 	parse,
-	serialize,
+	patchMessageValues,
 	withMessage,
 	withValue,
 } from "./catalogDocument";
@@ -105,6 +105,10 @@ export function applyReleaseBundleToDeliveryTree(
 
 	const applied: string[] = [];
 	const skipped: DeliveryTreeResult["skipped"] = [];
+	const updatesByCatalogPath = new Map<
+		string,
+		Array<{ id: string; value: string }>
+	>();
 	for (const change of bundle.changes) {
 		const source = documents.get(sourceCatalog.catalogPath);
 		if (!source) invalid("Delivery tree lost its Source catalog.");
@@ -123,11 +127,16 @@ export function applyReleaseBundleToDeliveryTree(
 			}
 			const document = documents.get(value.catalogPath);
 			if (!document) invalid(`Delivery tree is missing ${value.catalogPath}.`);
+			const currentValue = messageValue(document, change.messageId);
+			if (currentValue === value.value) continue;
 			const next =
-				messageValue(document, change.messageId) === undefined
+				currentValue === undefined
 					? withMessage(document, change.messageId, value.value)
 					: withValue(document, change.messageId, value.value);
 			documents.set(value.catalogPath, next);
+			const updates = updatesByCatalogPath.get(value.catalogPath) ?? [];
+			updates.push({ id: change.messageId, value: value.value });
+			updatesByCatalogPath.set(value.catalogPath, updates);
 		}
 		applied.push(change.messageId);
 	}
@@ -137,7 +146,13 @@ export function applyReleaseBundleToDeliveryTree(
 			const document = documents.get(catalog.catalogPath);
 			if (!document)
 				invalid(`Delivery tree is missing ${catalog.catalogPath}.`);
-			return { catalogPath: catalog.catalogPath, content: serialize(document) };
+			return {
+				catalogPath: catalog.catalogPath,
+				content: patchMessageValues(
+					contentByPath.get(catalog.catalogPath) as string,
+					updatesByCatalogPath.get(catalog.catalogPath) ?? [],
+				),
+			};
 		}),
 		applied,
 		skipped,

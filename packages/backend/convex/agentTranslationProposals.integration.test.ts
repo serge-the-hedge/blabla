@@ -328,7 +328,7 @@ describe("Agent Translation Proposals", () => {
 			nextCursor: null,
 		});
 
-		const submit = () =>
+		const submit = (value = "Guten Tag {name}") =>
 			agentRequest(
 				t,
 				token,
@@ -336,7 +336,7 @@ describe("Agent Translation Proposals", () => {
 				{
 					method: "POST",
 					body: JSON.stringify({
-						items: [{ messageId: "greeting", value: "Guten Tag {name}" }],
+						items: [{ messageId: "greeting", value }],
 					}),
 				},
 			);
@@ -352,6 +352,20 @@ describe("Agent Translation Proposals", () => {
 		const retry = await submit();
 		expect(retry.status).toBe(200);
 		expect((await retry.json()).revisions[0]?.revisionId).toBe(revisionId);
+		const correction = await submit("Willkommen {name}");
+		expect(correction.status).toBe(200);
+		const correctionId = (await correction.json()).revisions[0]?.revisionId;
+		const restored = await submit();
+		expect(restored.status).toBe(200);
+		const restoredId = (await restored.json()).revisions[0]?.revisionId;
+		if (!restoredId)
+			throw new Error("Expected the restored candidate revision.");
+		expect(restoredId).not.toBe(revisionId);
+		expect(restoredId).not.toBe(correctionId);
+		const restoredRetry = await submit();
+		expect((await restoredRetry.json()).revisions[0]?.revisionId).toBe(
+			restoredId,
+		);
 
 		const beforeReview = await user.query(
 			api.agentTranslationProposals.getForReview,
@@ -367,7 +381,7 @@ describe("Agent Translation Proposals", () => {
 			],
 		});
 		await user.mutation(api.agentTranslationProposals.reviewCandidate, {
-			candidateRevisionId: revisionId,
+			candidateRevisionId: restoredId,
 			decision: { kind: "accept" },
 		});
 		const reviewed = await user.query(

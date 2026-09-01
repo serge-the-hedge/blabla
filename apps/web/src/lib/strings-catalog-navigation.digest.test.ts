@@ -4,6 +4,7 @@ import {
 	navigateStringsDigests,
 	nextCatalogWorkspaceFocusTarget,
 	type StringsNavigationDigest,
+	translationTaskLocales,
 } from "./strings-catalog-navigation";
 
 function digest(input: {
@@ -131,6 +132,34 @@ describe("navigateStringsDigests", () => {
 		});
 		expect(result.target).toBeUndefined();
 		expect(result.matchingDigests).toHaveLength(3);
+	});
+});
+
+describe("translationTaskLocales", () => {
+	test("offers only target Locales shared by every selected key", () => {
+		const target = (localeId: string, localeCode: string) => ({
+			localeId,
+			localeCode,
+			valueState: "settled" as const,
+			touched: true,
+			confirmedGitContent: true,
+			confirmedContentPreviously: true,
+		});
+		const first = {
+			...digest({ messageId: "first", catalogIndex: 0, corpus: [] }),
+			targets: [target("de-id", "de"), target("fr-id", "fr")],
+		};
+		const second = {
+			...digest({ messageId: "second", catalogIndex: 1, corpus: [] }),
+			targets: [target("de-id", "de")],
+		};
+
+		expect(
+			translationTaskLocales([first, second], new Set(["first", "second"])),
+		).toEqual([{ localeId: "de-id", localeCode: "de" }]);
+		expect(
+			translationTaskLocales([first], new Set(["first", "missing"])),
+		).toEqual([]);
 	});
 });
 

@@ -282,9 +282,15 @@ function StringsRoute() {
 			toast.success(
 				`Translation Task created for ${task.targetCount} ${task.targetCount === 1 ? "key" : "keys"}.`,
 			);
-			await navigate({
+			void navigate({
 				to: "/projects/$projectId/proposals/$proposalId",
 				params: { projectId, proposalId: task.taskId },
+			}).catch((cause) => {
+				toast.error(
+					cause instanceof Error
+						? cause.message
+						: "Task created, but its review page could not be opened.",
+				);
 			});
 		},
 		[createTranslationTask, convexProjectId, navigate, projectId],
