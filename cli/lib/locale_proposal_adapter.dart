@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'command_runner.dart';
 import 'flutter_toolchain.dart';
 import 'repository_policy.dart';
+import 'staging_worktree.dart';
 
 export 'command_runner.dart';
 export 'flutter_toolchain.dart';
@@ -160,7 +161,11 @@ class RepositoryAdapter {
     final branchName = 'blabla/locale-proposal-${artifact.proposalId}';
     await _ensureBranchDoesNotExist(checkout, branchName);
 
-    final staging = await _StagingWorktree.create(_runner, checkout);
+    final staging = await StagingWorktree.create(
+      _runner,
+      checkout,
+      prefix: 'blabla-locale-proposal-',
+    );
     try {
       await _runGenerator(staging.root, request.flutter);
       if ((await _changedPaths(staging.root)).isNotEmpty) {
@@ -619,64 +624,4 @@ bool _isValidIntegrationBranch(String branch) {
       !branch.endsWith('/') &&
       !branch.endsWith('.') &&
       !branch.endsWith('.lock');
-}
-
-class _StagingWorktree {
-  _StagingWorktree._({
-    required this.runner,
-    required this.checkout,
-    required this.root,
-    required this.parent,
-  });
-
-  final CommandRunner runner;
-  final Directory checkout;
-  final Directory root;
-  final Directory parent;
-
-  static Future<_StagingWorktree> create(
-    CommandRunner runner,
-    Directory checkout,
-  ) async {
-    final parent = await Directory.systemTemp.createTemp(
-      'blabla-locale-proposal-',
-    );
-    final root = Directory('${parent.path}${Platform.pathSeparator}checkout');
-    try {
-      final result = await runner.run('git', [
-        'worktree',
-        'add',
-        '--detach',
-        root.path,
-        'HEAD',
-      ], workingDirectory: checkout.path);
-      if (result.exitCode != 0) {
-        throw RepositoryAdapterException(
-          'Could not create a disposable Brickit worktree. ${result.stderr.trim()}',
-        );
-      }
-      return _StagingWorktree._(
-        runner: runner,
-        checkout: checkout,
-        root: root,
-        parent: parent,
-      );
-    } catch (_) {
-      await parent.delete(recursive: true);
-      rethrow;
-    }
-  }
-
-  Future<void> dispose() async {
-    try {
-      await runner.run('git', [
-        'worktree',
-        'remove',
-        '--force',
-        root.path,
-      ], workingDirectory: checkout.path);
-    } finally {
-      if (await parent.exists()) await parent.delete(recursive: true);
-    }
-  }
 }

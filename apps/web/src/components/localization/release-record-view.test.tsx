@@ -140,6 +140,32 @@ describe("Release Record UI", () => {
 		expect(markup).toContain("Show more evidence");
 	});
 
+	test("shows the Release Bundle action only for a ready posture", () => {
+		const ready = renderToStaticMarkup(
+			<ReleaseRecordView
+				record={releaseSummary("ready")}
+				history={[]}
+				evidence={evidence}
+				evidenceStatus="Exhausted"
+				onLoadMoreEvidence={() => undefined}
+				releaseAction={<button type="button">Build release</button>}
+			/>,
+		);
+		const blocked = renderToStaticMarkup(
+			<ReleaseRecordView
+				record={releaseSummary("blocked")}
+				history={[]}
+				evidence={evidence}
+				evidenceStatus="Exhausted"
+				onLoadMoreEvidence={() => undefined}
+				releaseAction={<button type="button">Build release</button>}
+			/>,
+		);
+
+		expect(ready).toContain("Build release");
+		expect(blocked).not.toContain("Build release");
+	});
+
 	test("keeps history loading independent from the current assessment", () => {
 		const markup = renderToStaticMarkup(
 			<ReleaseRecordView

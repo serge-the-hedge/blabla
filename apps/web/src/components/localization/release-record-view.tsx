@@ -196,6 +196,7 @@ export function ReleaseRecordView({
 	evidenceStatus,
 	onLoadMoreEvidence,
 	workAction,
+	releaseAction,
 }: {
 	record: ReleaseSummary;
 	history: ReleaseSummary[] | undefined;
@@ -203,6 +204,7 @@ export function ReleaseRecordView({
 	evidenceStatus: EvidenceStatus;
 	onLoadMoreEvidence: () => void;
 	workAction?: ReactNode;
+	releaseAction?: ReactNode;
 }) {
 	const presentation = releasePresentationFor(record.posture);
 	const hasEvidence =
@@ -253,13 +255,16 @@ export function ReleaseRecordView({
 								className="mt-0.5 size-4 text-emerald-600 dark:text-emerald-500"
 							/>
 							<p className="text-muted-foreground text-xs">
-								No Contract failures or unresolved decisions remain. Bundle
-								construction will arrive in the next Release slice.
+								No Contract failures or unresolved decisions remain. This exact
+								assessment can now become an immutable Release Bundle.
 							</p>
 						</div>
 					)}
 					{presentation.needsWork && workAction ? (
 						<div>{workAction}</div>
+					) : null}
+					{!presentation.needsWork && releaseAction ? (
+						<div>{releaseAction}</div>
 					) : null}
 				</CardContent>
 			</Card>

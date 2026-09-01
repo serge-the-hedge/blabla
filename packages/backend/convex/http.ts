@@ -6,7 +6,7 @@ import type { Id } from "./_generated/dataModel";
 import { type ActionCtx, httpAction } from "./_generated/server";
 import { authComponent, createAuth, getTrustedOrigins } from "./auth";
 import { resend } from "./emails";
-import type { TokenScope } from "./lib";
+import { sha256Hex, type TokenScope } from "./lib";
 import {
 	createOrResumeProposal,
 	finalizeProposal,
@@ -17,6 +17,10 @@ import {
 	stageProposal,
 	templateProposal,
 } from "./localeProposals";
+import {
+	applyReleaseBundleToDeliveryTree,
+	type ReleaseBundleArtifact,
+} from "./releaseBundleModel";
 
 const http = httpRouter();
 const internalApi = internal;
@@ -32,7 +36,8 @@ type AgentRateLimitName =
 	| "agentTranslationProposal";
 type RepositoryAdapterRateLimitName =
 	| "repositorySnapshotContext"
-	| "repositorySnapshotSubmit";
+	| "repositorySnapshotSubmit"
+	| "repositoryReleaseDelivery";
 
 const MAX_SNAPSHOT_FILES = 1_000;
 const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024;
@@ -115,6 +120,17 @@ function optionalJsonArray(
 	if (value === undefined) return [];
 	if (!Array.isArray(value)) throw new Error(`${field} must be an array.`);
 	return value;
+}
+
+function translationTaskCandidateItems(body: Record<string, unknown>) {
+	const items = optionalJsonArray(body, "items");
+	return items.map((item, index) => {
+		if (!isRecord(item)) throw new Error(`items[${index}] must be an object.`);
+		return {
+			messageId: requiredJsonString(item, "messageId"),
+			value: requiredJsonString(item, "value"),
+		};
+	});
 }
 
 type SnapshotFileInput = { catalogPath: string; content: string };
@@ -406,11 +422,12 @@ async function withRepositoryAdapter<T>(
 		projectId: Id<"projects">;
 		tokenId: Id<"apiTokens">;
 	}) => Promise<T>,
+	scope: AgentScope = "snapshot-submission",
 ): Promise<{ value: T; responseHeaders: Record<string, string> }> {
 	const token = readToken(request);
 	const auth = await ctx.runQuery(internalApi.agentApi.authenticateToken, {
 		token,
-		scope: "snapshot-submission",
+		scope,
 	});
 	const compatibility = await ctx.runQuery(
 		internalApi.agentApi.cliCompatibility,
@@ -503,6 +520,44 @@ function routeError(error: unknown) {
 	);
 }
 
+async function storedReleaseBundle(
+	ctx: ActionCtx,
+	storageId: Id<"_storage">,
+	expectedHash: string | undefined,
+): Promise<ReleaseBundleArtifact> {
+	const blob = await ctx.storage.get(storageId);
+	if (!blob) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message: "Release Bundle artifact is missing.",
+		});
+	}
+	const content = await blob.text();
+	if (
+		expectedHash !== undefined &&
+		(await sha256Hex(content)) !== expectedHash
+	) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message: "Release Bundle artifact failed its integrity check.",
+		});
+	}
+	const value: unknown = JSON.parse(content);
+	if (
+		!isRecord(value) ||
+		value.version !== 1 ||
+		!isRecord(value.releaseRecord) ||
+		!Array.isArray(value.catalogs) ||
+		!Array.isArray(value.changes)
+	) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message: "Release Bundle artifact has an invalid shape.",
+		});
+	}
+	return value as ReleaseBundleArtifact;
+}
+
 authComponent.registerRoutesLazy(http, createAuth, {
 	cors: true,
 	trustedOrigins: getTrustedOrigins(),
@@ -581,6 +636,127 @@ http.route({
 							{ runId: result.runId, actor },
 						);
 					},
+				),
+			);
+		} catch (error) {
+			return routeError(error);
+		}
+	}),
+});
+
+http.route({
+	pathPrefix: "/api/repository-adapter/v1/releases/",
+	method: "GET",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const recordId = new URL(request.url).pathname.replace(
+				"/api/repository-adapter/v1/releases/",
+				"",
+			) as Id<"releaseRecords">;
+			if (!recordId || recordId.includes("/")) {
+				throw new Error("Missing Release Record id.");
+			}
+			return agentJson(
+				await withRepositoryAdapter(
+					ctx,
+					request,
+					"repositoryReleaseDelivery",
+					async ({ projectId }) => {
+						const context = await ctx.runQuery(
+							internalApi.releaseBundles.deliveryContext,
+							{ projectId, recordId },
+						);
+						const bundle = await storedReleaseBundle(
+							ctx,
+							context.bundleStorageId,
+							context.bundleHash,
+						);
+						return {
+							releaseRecord: bundle.releaseRecord,
+							catalogs: bundle.catalogs,
+							changeKeyCount: bundle.changes.length,
+						};
+					},
+					"export",
+				),
+			);
+		} catch (error) {
+			return routeError(error);
+		}
+	}),
+});
+
+http.route({
+	pathPrefix: "/api/repository-adapter/v1/releases/",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const suffix = new URL(request.url).pathname.replace(
+				"/api/repository-adapter/v1/releases/",
+				"",
+			);
+			const marker = "/delivery-tree";
+			if (!suffix.endsWith(marker)) {
+				throw new Error("Expected /delivery-tree.");
+			}
+			const recordId = suffix.slice(0, -marker.length) as Id<"releaseRecords">;
+			const body = await jsonObject(request);
+			const files = snapshotFiles(body);
+			return agentJson(
+				await withRepositoryAdapter(
+					ctx,
+					request,
+					"repositoryReleaseDelivery",
+					async ({ projectId, tokenId }) => {
+						const context = await ctx.runQuery(
+							internalApi.releaseBundles.deliveryContext,
+							{ projectId, recordId },
+						);
+						const bundle = await storedReleaseBundle(
+							ctx,
+							context.bundleStorageId,
+							context.bundleHash,
+						);
+						const delivery = applyReleaseBundleToDeliveryTree(bundle, files);
+						const captureContent = JSON.stringify({
+							version: 1,
+							releaseRecordId: recordId,
+							bundleHash: context.bundleHash,
+							files,
+							applied: delivery.applied,
+							skipped: delivery.skipped,
+						});
+						const captureStorageId = await ctx.storage.store(
+							new Blob([captureContent], { type: "application/json" }),
+						);
+						let deliveryCaptureId: Id<"releaseDeliveryCaptures">;
+						try {
+							deliveryCaptureId = await ctx.runMutation(
+								internalApi.releaseBundles.recordDeliveryCapture,
+								{
+									projectId,
+									recordId,
+									runId: context.runId,
+									actor: { kind: "repositoryAdapter", id: tokenId },
+									captureStorageId,
+									captureHash: await sha256Hex(captureContent),
+									captureByteLength: new TextEncoder().encode(captureContent)
+										.byteLength,
+									appliedCount: delivery.applied.length,
+									skipped: delivery.skipped,
+								},
+							);
+						} catch (error) {
+							await ctx.storage.delete(captureStorageId);
+							throw error;
+						}
+						return {
+							releaseRecord: bundle.releaseRecord,
+							...delivery,
+							deliveryCaptureId,
+						};
+					},
+					"export",
 				),
 			);
 		} catch (error) {
@@ -828,6 +1004,140 @@ http.route({
 								})(),
 							},
 						),
+				),
+			);
+		} catch (error) {
+			return routeError(error);
+		}
+	}),
+});
+
+http.route({
+	path: "/api/agent/v1/translation-tasks",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const body = await jsonObject(request);
+			const messageIds = body.messageIds;
+			if (!isStringArray(messageIds)) {
+				throw new Error("messageIds must be an array of strings.");
+			}
+			return agentJson(
+				await withAgent(
+					ctx,
+					request,
+					["read", "propose"],
+					"agentTranslationProposal",
+					async (token) =>
+						await ctx.runMutation(
+							internalApi.agentTranslationProposals.createTaskForAgent,
+							{
+								token,
+								clientTaskKey: requiredJsonString(body, "clientTaskKey"),
+								localeCode: requiredJsonString(body, "localeCode"),
+								messageIds,
+							},
+						),
+				),
+			);
+		} catch (error) {
+			return routeError(error);
+		}
+	}),
+});
+
+http.route({
+	pathPrefix: "/api/agent/v1/translation-tasks/",
+	method: "GET",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const url = new URL(request.url);
+			const taskId = url.pathname.replace(
+				"/api/agent/v1/translation-tasks/",
+				"",
+			) as Id<"agentTranslationProposals">;
+			if (!taskId || taskId.includes("/")) {
+				throw new Error("Missing Translation Task id.");
+			}
+			const cursor = Number(url.searchParams.get("cursor") ?? 0);
+			const limit = Number(url.searchParams.get("limit") ?? 16);
+			return agentJson(
+				await withAgent(
+					ctx,
+					request,
+					"read",
+					"agentTranslationProposal",
+					async (token) =>
+						await ctx.runQuery(
+							internalApi.agentTranslationProposals.taskForAgent,
+							{ token, taskId, cursor, limit },
+						),
+				),
+			);
+		} catch (error) {
+			return routeError(error);
+		}
+	}),
+});
+
+http.route({
+	pathPrefix: "/api/agent/v1/translation-tasks/",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const suffix = new URL(request.url).pathname.replace(
+				"/api/agent/v1/translation-tasks/",
+				"",
+			);
+			const marker = "/candidates";
+			if (!suffix.endsWith(marker)) {
+				throw new Error("Expected /candidates.");
+			}
+			const taskId = suffix.slice(
+				0,
+				-marker.length,
+			) as Id<"agentTranslationProposals">;
+			const body = await jsonObject(request);
+			const submitted = translationTaskCandidateItems(body);
+			return agentJson(
+				await withAgent(
+					ctx,
+					request,
+					["read", "propose"],
+					"agentTranslationProposal",
+					async (token) => {
+						const context = await ctx.runQuery(
+							internalApi.agentTranslationProposals.taskSubmissionContext,
+							{
+								token,
+								taskId,
+								messageIds: submitted.map((item) => item.messageId),
+							},
+						);
+						const byMessageId = new Map(
+							context.map((item) => [item.messageId, item] as const),
+						);
+						const items = await Promise.all(
+							submitted.map(async (item) => {
+								const target = byMessageId.get(item.messageId);
+								if (!target) {
+									throw new Error(`Unknown task key: ${item.messageId}.`);
+								}
+								return {
+									messageId: item.messageId,
+									localeId: target.localeId,
+									value: item.value,
+									clientRevisionKey: `task-v1:${await sha256Hex(`${taskId}\u0000${item.messageId}\u0000${item.value}`)}`,
+									expectedCandidateRevision: target.currentRevision,
+									basis: target.basis,
+								};
+							}),
+						);
+						return await ctx.runMutation(
+							internalApi.agentTranslationProposals.submitRevisions,
+							{ token, proposalId: taskId, items },
+						);
+					},
 				),
 			);
 		} catch (error) {
@@ -1201,7 +1511,7 @@ http.route({
 		json(
 			{
 				error:
-					"Legacy export is retired. Build release output from the Catalog Workspace through a Release Bundle once that workflow is available.",
+					"Legacy export is retired. Build a Ready Release Bundle in the web app and deliver it with the Repository Adapter.",
 			},
 			410,
 		),

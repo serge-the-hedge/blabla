@@ -41,6 +41,20 @@ catalog bytes is idempotent; a descendant commit can advance the accepted
 baseline when the server has the corresponding lineage report. After syncing,
 the web Strings workspace is the place to edit and review translations.
 
+For existing Locales, select one or more keys in Strings and start a Translation
+Task. An agent submits candidates to that frozen task, and a human accepts the
+values in Translation Tasks. Prepare a Release Record, build its immutable
+Release Bundle, then deliver it from the current Brickit integration branch:
+
+```sh
+blabla deliver --release <release-record-id>
+```
+
+The server applies the Release Delta to the checkout's current catalog tree.
+Target drift is replaced with the reviewed value; a changed or missing Source
+value skips the whole key and is reported. The CLI runs Flutter generation in a
+disposable worktree and creates one local `blabla/release-...` review commit.
+
 The Repository Adapter turns one current, finalized Portuguese Locale Proposal
 into a local Brickit review branch. It is deliberately a thin Dart client:
 Blabla supplies the immutable `intl_pt.arb` artifact and its provenance; the
@@ -75,9 +89,9 @@ blabla login --server https://your-blabla.example --token ...
 ```
 
 `BLABLA_API_URL` and `BLABLA_TOKEN` override the stored credentials, which is
-useful for CI and one-off invocations. The token needs the existing `read` and
-`propose` scopes because the current proposal summary and its immutable artifact
-use those Agent API endpoints.
+useful for CI and one-off invocations. The token needs `read` and `propose` for
+translation work and `export` for Release Bundle delivery. The default workspace
+connection includes all three plus snapshot submission.
 
 From the same Brickit checkout, switch to the integration branch before
 delivery. The current project target is `develop`; the adapter refuses a

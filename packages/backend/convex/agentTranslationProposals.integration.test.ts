@@ -287,6 +287,96 @@ describe("Agent Translation Proposals", () => {
 		expect(reviewedProposal?.proposal.status).toBe("accepted");
 	});
 
+	test("lets a human freeze an existing-Locale task and an agent fill it without basis plumbing", async () => {
+		const user = await authenticatedBackend(t, "human-translation-task");
+		const { projectId, targetId, token } = await setupProject(user);
+		const created = await user.mutation(
+			api.agentTranslationProposals.createTask,
+			{
+				projectId,
+				title: "Polish German greeting",
+				localeId: targetId,
+				messageIds: ["greeting"],
+			},
+		);
+		expect(created).toMatchObject({
+			title: "Polish German greeting",
+			localeCode: "de",
+			targetCount: 1,
+		});
+
+		const taskResponse = await agentRequest(
+			t,
+			token,
+			`/api/agent/v1/translation-tasks/${created.taskId}`,
+		);
+		expect(taskResponse.status).toBe(200);
+		expect(await taskResponse.json()).toMatchObject({
+			task: {
+				taskId: created.taskId,
+				localeCode: "de",
+				targetCount: 1,
+				candidateCount: 0,
+			},
+			targets: [
+				expect.objectContaining({
+					messageId: "greeting",
+					sourceValue: "Hello {name}",
+					targetValue: "Hallo {name}",
+				}),
+			],
+			nextCursor: null,
+		});
+
+		const submit = () =>
+			agentRequest(
+				t,
+				token,
+				`/api/agent/v1/translation-tasks/${created.taskId}/candidates`,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						items: [{ messageId: "greeting", value: "Guten Tag {name}" }],
+					}),
+				},
+			);
+		const submitted = await submit();
+		expect(submitted.status).toBe(200);
+		const submittedBody = (await submitted.json()) as {
+			revisions: Array<{
+				revisionId: Id<"agentTranslationCandidateRevisions">;
+			}>;
+		};
+		const revisionId = submittedBody.revisions[0]?.revisionId;
+		if (!revisionId) throw new Error("Expected a task candidate revision.");
+		const retry = await submit();
+		expect(retry.status).toBe(200);
+		expect((await retry.json()).revisions[0]?.revisionId).toBe(revisionId);
+
+		const beforeReview = await user.query(
+			api.agentTranslationProposals.getForReview,
+			{ proposalId: created.taskId },
+		);
+		expect(beforeReview).toMatchObject({
+			proposal: { status: "open", taskScope: { targetCount: 1 } },
+			taskTargets: [expect.objectContaining({ messageId: "greeting" })],
+			candidates: [
+				expect.objectContaining({
+					revision: expect.objectContaining({ value: "Guten Tag {name}" }),
+				}),
+			],
+		});
+		await user.mutation(api.agentTranslationProposals.reviewCandidate, {
+			candidateRevisionId: revisionId,
+			decision: { kind: "accept" },
+		});
+		const reviewed = await user.query(
+			api.agentTranslationProposals.getForReview,
+			{ proposalId: created.taskId },
+		);
+		expect(reviewed?.proposal.status).toBe("accepted");
+	});
+
 	test("rejects an agent blank and rejects stale basis evidence", async () => {
 		const user = await authenticatedBackend(t, "agent-translation-safety");
 		const { projectId, token } = await setupProject(user);

@@ -10,6 +10,7 @@ import {
 	AlertDialogTrigger,
 } from "@blabla/ui/components/alert-dialog";
 import { Button } from "@blabla/ui/components/button";
+import { Checkbox } from "@blabla/ui/components/checkbox";
 import {
 	Empty,
 	EmptyDescription,
@@ -27,6 +28,7 @@ import {
 	CheckCheck,
 	GitBranch,
 	Languages,
+	ListChecks,
 	LoaderCircle,
 	Search,
 	X,
@@ -114,6 +116,12 @@ const QUIET_FIELD =
 export type CommitCatalogValue = (
 	input: CatalogWorkspaceCommit,
 ) => Promise<CatalogWorkspaceCommitReceipt>;
+
+export type CreateTranslationTask = (input: {
+	title: string;
+	localeId: string;
+	messageIds: readonly string[];
+}) => Promise<void>;
 
 /** The compact ordinary-import summary the Navigation read carries: the
  * policy, the conservative category counts, and the current server-owned
@@ -734,6 +742,8 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 	onCommitValue,
 	onMoveFocus,
 	canEdit,
+	selected,
+	onSelectedChange,
 }: {
 	catalogKey: StringsCatalogKey;
 	highlighted: boolean;
@@ -741,6 +751,8 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 	onCommitValue?: CommitCatalogValue;
 	onMoveFocus: MoveCatalogWorkspaceFocus;
 	canEdit: boolean;
+	selected: boolean;
+	onSelectedChange: (messageId: string, selected: boolean) => void;
 }) {
 	// The key's own facts, said once. The change that left five Locales waiting
 	// is one fact, and repeating it under every value was the noise the
@@ -751,11 +763,27 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 		<section
 			data-highlighted={highlighted || undefined}
 			className={cn(
-				"flex flex-col gap-2 border-b py-4",
+				"group/key flex flex-col gap-2 border-b py-4",
+				selected && "-mx-2 bg-muted/25 px-2",
 				highlighted && "-mx-3 bg-muted/40 px-3",
 			)}
 		>
 			<header className="flex items-baseline gap-2">
+				{canEdit ? (
+					<Checkbox
+						checked={selected}
+						onCheckedChange={(checked) =>
+							onSelectedChange(catalogKey.id, checked === true)
+						}
+						aria-label={`${selected ? "Remove" : "Add"} ${catalogKey.id} ${selected ? "from" : "to"} Translation Task`}
+						className={cn(
+							"translate-y-0.5 transition-opacity",
+							selected
+								? "opacity-100"
+								: "opacity-35 focus-visible:opacity-100 group-hover/key:opacity-100",
+						)}
+					/>
+				) : null}
 				<button
 					type="button"
 					onClick={() => onNavigationChange({ query: "", key: catalogKey.id })}
@@ -1150,6 +1178,8 @@ function VirtualizedCatalog({
 	onWindowMessageIdsChange,
 	onNavigationChange,
 	onCommitValue,
+	selectedMessageIds,
+	onSelectedMessageChange,
 }: {
 	digests: readonly StringsNavigationDigest[];
 	targetId: string | undefined;
@@ -1159,6 +1189,8 @@ function VirtualizedCatalog({
 	onWindowMessageIdsChange: (messageIds: string[]) => void;
 	onNavigationChange: (state: StringsCatalogNavigationState) => void;
 	onCommitValue?: CommitCatalogValue;
+	selectedMessageIds: ReadonlySet<string>;
+	onSelectedMessageChange: (messageId: string, selected: boolean) => void;
 }) {
 	const scrollElementRef = useRef<HTMLDivElement>(null);
 	const lastTargetRef = useRef<string | undefined>(undefined);
@@ -1460,6 +1492,8 @@ function VirtualizedCatalog({
 									onCommitValue={onCommitValue}
 									onMoveFocus={onMoveFocus}
 									canEdit={canEdit}
+									selected={selectedMessageIds.has(digest.messageId)}
+									onSelectedChange={onSelectedMessageChange}
 								/>
 							) : (
 								<CatalogKeyPlaceholder height={virtualRow.size} />
@@ -1469,6 +1503,153 @@ function VirtualizedCatalog({
 				})}
 			</div>
 		</section>
+	);
+}
+
+const MAX_TRANSLATION_TASK_KEYS = 32;
+
+function TranslationTaskSelection({
+	selectedMessageIds,
+	locales,
+	onClear,
+	onCreate,
+}: {
+	selectedMessageIds: readonly string[];
+	locales: readonly { localeId: string; localeCode: string }[];
+	onClear: () => void;
+	onCreate: CreateTranslationTask;
+}) {
+	const [open, setOpen] = useState(false);
+	const [localeId, setLocaleId] = useState(locales[0]?.localeId ?? "");
+	const [title, setTitle] = useState("");
+	const [isCreating, setIsCreating] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const selectedLocale =
+		locales.find((locale) => locale.localeId === localeId) ?? locales[0];
+	const openDialog = (nextOpen: boolean) => {
+		setOpen(nextOpen);
+		if (!nextOpen) return;
+		const nextLocale = selectedLocale ?? locales[0];
+		if (nextLocale) setLocaleId(nextLocale.localeId);
+		setTitle(
+			`Improve ${nextLocale?.localeCode ?? "translations"} · ${selectedMessageIds.length} ${selectedMessageIds.length === 1 ? "key" : "keys"}`,
+		);
+		setError(null);
+	};
+	const create = async () => {
+		if (!selectedLocale || title.trim().length === 0 || isCreating) return;
+		setIsCreating(true);
+		setError(null);
+		try {
+			await onCreate({
+				title: title.trim(),
+				localeId: selectedLocale.localeId,
+				messageIds: selectedMessageIds,
+			});
+			setOpen(false);
+			onClear();
+		} catch (cause) {
+			setError(
+				cause instanceof Error
+					? cause.message
+					: "Could not create the Translation Task.",
+			);
+		} finally {
+			setIsCreating(false);
+		}
+	};
+
+	return (
+		<div className="sticky top-2 z-20 flex flex-wrap items-center gap-2 border bg-background/95 px-3 py-2 shadow-sm backdrop-blur supports-backdrop-filter:bg-background/80">
+			<ListChecks aria-hidden="true" className="size-4 text-muted-foreground" />
+			<p className="text-xs">
+				{selectedMessageIds.length} selected
+				{selectedMessageIds.length >= MAX_TRANSLATION_TASK_KEYS
+					? " · task limit reached"
+					: ""}
+			</p>
+			<Button
+				type="button"
+				size="xs"
+				variant="ghost"
+				className="ml-auto"
+				onClick={onClear}
+			>
+				Clear
+			</Button>
+			<AlertDialog open={open} onOpenChange={openDialog}>
+				<AlertDialogTrigger
+					render={<Button type="button" size="xs" variant="default" />}
+				>
+					Start task
+				</AlertDialogTrigger>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Start a Translation Task</AlertDialogTitle>
+						<AlertDialogDescription>
+							Freeze these keys for one existing Locale. An agent can prepare
+							candidates; nothing changes until you review them.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<div className="flex flex-col gap-3">
+						<fieldset className="flex flex-wrap gap-1.5">
+							<legend className="sr-only">Target Locale</legend>
+							{locales.map((locale) => (
+								<Button
+									key={locale.localeId}
+									type="button"
+									size="xs"
+									variant={
+										locale.localeId === selectedLocale?.localeId
+											? "secondary"
+											: "outline"
+									}
+									aria-pressed={locale.localeId === selectedLocale?.localeId}
+									onClick={() => {
+										setLocaleId(locale.localeId);
+										setTitle(
+											`Improve ${locale.localeCode} · ${selectedMessageIds.length} ${selectedMessageIds.length === 1 ? "key" : "keys"}`,
+										);
+									}}
+								>
+									{locale.localeCode}
+								</Button>
+							))}
+						</fieldset>
+						<Input
+							value={title}
+							onChange={(event) => setTitle(event.target.value)}
+							aria-label="Task title"
+							placeholder="Task title"
+						/>
+						<p className="text-muted-foreground text-xs">
+							{selectedMessageIds.length} key
+							{selectedMessageIds.length === 1 ? "" : "s"} ·{" "}
+							{selectedLocale?.localeCode}
+						</p>
+						{error ? (
+							<p className="text-destructive text-xs" role="alert">
+								{error}
+							</p>
+						) : null}
+					</div>
+					<AlertDialogFooter>
+						<AlertDialogCancel disabled={isCreating}>Cancel</AlertDialogCancel>
+						<AlertDialogAction
+							disabled={
+								isCreating || !selectedLocale || title.trim().length === 0
+							}
+							onClick={(event) => {
+								event.preventDefault();
+								void create();
+							}}
+						>
+							{isCreating ? "Creating…" : "Create task"}
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
+		</div>
 	);
 }
 
@@ -1483,6 +1664,7 @@ function StringsCatalogNavigator({
 	onStartOrdinaryImportRun,
 	onStartNavigationBackfill,
 	workHandoff,
+	onCreateTranslationTask,
 }: {
 	navigation: StringsNavigationRead;
 	navigationState: StringsCatalogNavigationState;
@@ -1497,6 +1679,7 @@ function StringsCatalogNavigator({
 	) => void;
 	onStartNavigationBackfill?: () => void;
 	workHandoff?: { keyCount: number; onClear: () => void };
+	onCreateTranslationTask?: CreateTranslationTask;
 }) {
 	// Search and Catalog Scopes stay local over the compact digests: typing
 	// never executes a server query, only the visible window hydrates.
@@ -1519,6 +1702,36 @@ function StringsCatalogNavigator({
 	);
 	const projectionId = navigation.projectionId ?? "";
 	const keyCount = navigation.keyCount ?? matching.matchingDigests.length;
+	const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(
+		() => new Set(),
+	);
+	const onSelectedMessageChange = useCallback(
+		(messageId: string, selected: boolean) => {
+			setSelectedMessageIds((current) => {
+				const next = new Set(current);
+				if (selected) {
+					if (next.size >= MAX_TRANSLATION_TASK_KEYS) return current;
+					next.add(messageId);
+				} else {
+					next.delete(messageId);
+				}
+				return next;
+			});
+		},
+		[],
+	);
+	const taskLocales = useMemo(() => {
+		const locales = new Map<string, string>();
+		for (const digest of navigation.keys ?? []) {
+			for (const target of digest.targets) {
+				locales.set(target.localeId, target.localeCode);
+			}
+		}
+		return [...locales].map(([localeId, localeCode]) => ({
+			localeId,
+			localeCode,
+		}));
+	}, [navigation.keys]);
 
 	if (navigation.kind === "incomplete") {
 		const failed = navigation.status === "failed";
@@ -1606,6 +1819,14 @@ function StringsCatalogNavigator({
 				navigationState={navigationState}
 				onNavigationChange={onNavigationChange}
 			/>
+			{selectedMessageIds.size > 0 && onCreateTranslationTask ? (
+				<TranslationTaskSelection
+					selectedMessageIds={[...selectedMessageIds]}
+					locales={taskLocales}
+					onClear={() => setSelectedMessageIds(new Set())}
+					onCreate={onCreateTranslationTask}
+				/>
+			) : null}
 			<VirtualizedCatalog
 				digests={matching.matchingDigests}
 				targetId={matching.target?.id}
@@ -1615,6 +1836,8 @@ function StringsCatalogNavigator({
 				onWindowMessageIdsChange={onWindowMessageIdsChange}
 				onNavigationChange={onNavigationChange}
 				onCommitValue={onCommitValue}
+				selectedMessageIds={selectedMessageIds}
+				onSelectedMessageChange={onSelectedMessageChange}
 			/>
 		</div>
 	);
@@ -1638,6 +1861,7 @@ export function StringsCatalogView({
 	onStartOrdinaryImportRun,
 	onStartNavigationBackfill,
 	workHandoff,
+	onCreateTranslationTask,
 }: {
 	navigation: StringsNavigationRead | undefined;
 	navigationState: StringsCatalogNavigationState;
@@ -1653,6 +1877,7 @@ export function StringsCatalogView({
 	) => void;
 	onStartNavigationBackfill?: () => void;
 	workHandoff?: { keyCount: number; onClear: () => void };
+	onCreateTranslationTask?: CreateTranslationTask;
 }) {
 	if (navigation === undefined) return <StringsCatalogLoadingRows rows={1} />;
 	if (navigation.kind === "noBaseline")
@@ -1667,6 +1892,7 @@ export function StringsCatalogView({
 
 	return (
 		<StringsCatalogNavigator
+			key={navigation.projectionId}
 			navigation={navigation}
 			navigationState={navigationState}
 			onNavigationChange={onNavigationChange}
@@ -1677,6 +1903,7 @@ export function StringsCatalogView({
 			onStartOrdinaryImportRun={onStartOrdinaryImportRun}
 			onStartNavigationBackfill={onStartNavigationBackfill}
 			workHandoff={workHandoff}
+			onCreateTranslationTask={onCreateTranslationTask}
 		/>
 	);
 }
