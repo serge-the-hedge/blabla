@@ -21,9 +21,9 @@ function ProjectIndexRoute() {
 	useEffect(() => {
 		if (pathname === `/projects/${projectId}`) {
 			navigate({
-				to: "/projects/$projectId/strings",
+				to: "/projects/$projectId/sync",
 				params: { projectId },
-				search: { tag: undefined },
+				search: {},
 				replace: true,
 			});
 		}
@@ -34,6 +34,6 @@ function ProjectIndexRoute() {
 	}
 
 	return (
-		<div className="p-5 text-muted-foreground text-sm">Opening project...</div>
+		<div className="p-5 text-muted-foreground text-sm">Opening project…</div>
 	);
 }

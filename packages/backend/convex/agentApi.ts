@@ -1,8 +1,18 @@
 import { ConvexError, v } from "convex/values";
 
 import type { Doc, Id } from "./_generated/dataModel";
-import { internalMutation, internalQuery } from "./_generated/server";
+import {
+	internalMutation,
+	internalQuery,
+	type MutationCtx,
+	type QueryCtx,
+} from "./_generated/server";
 import { hashToken } from "./apiTokens";
+import {
+	assertBoundedChangeSetSize,
+	MAX_CHANGE_SET_ITEMS,
+	MAX_TAGS_PER_METADATA_CHANGE,
+} from "./changeSetValidation";
 import { summarizeItems } from "./diffs";
 import { buildExportContent } from "./exports";
 import { buildReviewUrl, slugify } from "./lib";
@@ -17,23 +27,35 @@ type ResolvedTranslationProposal = {
 	status: "pending" | "conflicted";
 };
 
+const MAX_CONTEXT_KEYS = 50;
+const MAX_CONTEXT_LOCALES = 20;
+const MAX_SEARCH_RESULTS = 50;
+
+function assertArrayLimit(name: string, length: number, limit: number) {
+	if (length > limit) {
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message: `${name} supports at most ${limit} entries.`,
+		});
+	}
+}
+
 const scopeValidator = v.union(
 	v.literal("read"),
 	v.literal("search"),
 	v.literal("propose"),
 	v.literal("export"),
+	v.literal("snapshot-submission"),
 );
 
 async function authenticate(
-	ctx: any,
+	ctx: QueryCtx | MutationCtx,
 	rawToken: string,
-	scope: "read" | "search" | "propose" | "export",
+	scope: "read" | "search" | "propose" | "export" | "snapshot-submission",
 ) {
 	const token = await ctx.db
 		.query("apiTokens")
-		.withIndex("by_tokenHash", (q: any) =>
-			q.eq("tokenHash", hashToken(rawToken)),
-		)
+		.withIndex("by_tokenHash", (q) => q.eq("tokenHash", hashToken(rawToken)))
 		.unique();
 	if (
 		!token ||
@@ -51,6 +73,26 @@ async function authenticate(
 export const authenticateToken = internalQuery({
 	args: { token: v.string(), scope: scopeValidator },
 	handler: async (ctx, args) => await authenticate(ctx, args.token, args.scope),
+});
+
+/// Returns the project-owned compatibility policy for an already authenticated
+/// Agent API call. The HTTP adapter turns these facts into response headers so
+/// a thin CLI can warn on a version floor and refuse only a protocol break.
+export const cliCompatibility = internalQuery({
+	args: { projectId: v.id("projects") },
+	handler: async (ctx, args) => {
+		const project = await ctx.db.get(args.projectId);
+		if (!project) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Project not found.",
+			});
+		}
+		return {
+			minimumVersion: project.minimumCliVersion,
+			minimumProtocol: project.minimumCliProtocol,
+		};
+	},
 });
 
 export const touchToken = internalMutation({
@@ -153,6 +195,10 @@ export const searchStrings = internalQuery({
 		) {
 			return [];
 		}
+		const limit = Math.min(
+			MAX_SEARCH_RESULTS,
+			Math.max(1, Math.trunc(args.limit ?? 25)),
+		);
 		const keys =
 			args.q && args.q.trim().length > 0
 				? await ctx.db
@@ -160,11 +206,11 @@ export const searchStrings = internalQuery({
 						.withSearchIndex("searchText", (q) =>
 							q.search("searchText", args.q!).eq("projectId", token.projectId),
 						)
-						.take(args.limit ?? 25)
+						.take(limit)
 				: await ctx.db
 						.query("translationKeys")
 						.withIndex("by_project", (q) => q.eq("projectId", token.projectId))
-						.take(args.limit ?? 25);
+						.take(limit);
 		const values = locale
 			? await ctx.db
 					.query("translationValues")
@@ -232,6 +278,12 @@ export const getContext = internalQuery({
 	},
 	handler: async (ctx, args) => {
 		const token = await authenticate(ctx, args.token, "read");
+		assertArrayLimit("Context keys", args.keys.length, MAX_CONTEXT_KEYS);
+		assertArrayLimit(
+			"Context locales",
+			args.locales.length,
+			MAX_CONTEXT_LOCALES,
+		);
 		const keys = await Promise.all(
 			args.keys.map((key) =>
 				ctx.db
@@ -296,6 +348,7 @@ export const createChangeSetFromKeys = internalMutation({
 	},
 	handler: async (ctx, args) => {
 		const token = await authenticate(ctx, args.token, "propose");
+		assertBoundedChangeSetSize(args.items.length);
 		const title = args.title.trim();
 		if (!title) {
 			throw new ConvexError({
@@ -450,8 +503,8 @@ export const createChangeSetFromKeys = internalMutation({
 });
 
 async function resolveSelectionKeys(
-	ctx: any,
-	projectId: any,
+	ctx: MutationCtx,
+	projectId: Id<"projects">,
 	selection: {
 		type: "all" | "keys" | "tag" | "screen";
 		keys?: string[];
@@ -459,35 +512,59 @@ async function resolveSelectionKeys(
 		screen?: string;
 	},
 ) {
-	const allKeys = await ctx.db
-		.query("translationKeys")
-		.withIndex("by_project", (q: any) => q.eq("projectId", projectId))
-		.collect();
-	const activeKeys = allKeys.filter((key: any) => key.archivedAt === undefined);
 	if (selection.type === "keys") {
-		const wanted = new Set(selection.keys ?? []);
-		return activeKeys.filter((key: any) => wanted.has(key.key));
-	}
-	if (selection.type === "tag" && selection.tag) {
-		const tag = await ctx.db
-			.query("tags")
-			.withIndex("by_project_slug", (q: any) =>
-				q.eq("projectId", projectId).eq("slug", slugify(selection.tag!)),
-			)
-			.unique();
-		return tag
-			? activeKeys.filter((key: any) => key.tagIds.includes(tag._id))
-			: [];
+		const requestedKeys = Array.from(new Set(selection.keys ?? []));
+		assertBoundedChangeSetSize(requestedKeys.length);
+		const keys = await Promise.all(
+			requestedKeys.map((key) =>
+				ctx.db
+					.query("translationKeys")
+					.withIndex("by_project_key", (q) =>
+						q.eq("projectId", projectId).eq("key", key),
+					)
+					.unique(),
+			),
+		);
+		return keys.filter(
+			(key): key is NonNullable<typeof key> =>
+				key !== null && key.archivedAt === undefined,
+		);
 	}
 	if (selection.type === "screen" && selection.screen) {
+		const screenSlug = slugify(selection.screen);
 		const screen = await ctx.db
 			.query("screens")
-			.withIndex("by_project_slug", (q: any) =>
-				q.eq("projectId", projectId).eq("slug", slugify(selection.screen!)),
+			.withIndex("by_project_slug", (q) =>
+				q.eq("projectId", projectId).eq("slug", screenSlug),
 			)
 			.unique();
-		return screen
-			? activeKeys.filter((key: any) => key.screenId === screen._id)
+		if (!screen || screen.archivedAt !== undefined) return [];
+		const keys = await ctx.db
+			.query("translationKeys")
+			.withIndex("by_project_screen", (q) =>
+				q.eq("projectId", projectId).eq("screenId", screen._id),
+			)
+			.take(MAX_CHANGE_SET_ITEMS + 1);
+		assertBoundedChangeSetSize(keys.length);
+		return keys.filter((key) => key.archivedAt === undefined);
+	}
+	const activeKeys = await ctx.db
+		.query("translationKeys")
+		.withIndex("by_project_archivedAt", (q) =>
+			q.eq("projectId", projectId).eq("archivedAt", undefined),
+		)
+		.take(MAX_CHANGE_SET_ITEMS + 1);
+	assertBoundedChangeSetSize(activeKeys.length);
+	if (selection.type === "tag" && selection.tag) {
+		const tagSlug = slugify(selection.tag);
+		const tag = await ctx.db
+			.query("tags")
+			.withIndex("by_project_slug", (q) =>
+				q.eq("projectId", projectId).eq("slug", tagSlug),
+			)
+			.unique();
+		return tag && tag.archivedAt === undefined
+			? activeKeys.filter((key) => key.tagIds.includes(tag._id))
 			: [];
 	}
 	return activeKeys;
@@ -513,9 +590,20 @@ export const proposeTagBatch = internalMutation({
 	},
 	handler: async (ctx, args) => {
 		const token = await authenticate(ctx, args.token, "propose");
+		assertArrayLimit(
+			"Tag proposals",
+			args.tagSlugs.length,
+			MAX_TAGS_PER_METADATA_CHANGE,
+		);
 		const tagSlugs = Array.from(
 			new Set(args.tagSlugs.map(slugify).filter(Boolean)),
 		);
+		if (tagSlugs.length > MAX_TAGS_PER_METADATA_CHANGE) {
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message: `Tag proposals support at most ${MAX_TAGS_PER_METADATA_CHANGE} tags.`,
+			});
+		}
 		if (tagSlugs.length === 0) {
 			throw new ConvexError({
 				code: "VALIDATION",
@@ -597,8 +685,9 @@ export const proposeTagBatch = internalMutation({
 		}
 		const items = await ctx.db
 			.query("changeSetItems")
-			.withIndex("by_changeSet", (q: any) => q.eq("changeSetId", changeSetId))
-			.collect();
+			.withIndex("by_changeSet", (q) => q.eq("changeSetId", changeSetId))
+			.take(MAX_CHANGE_SET_ITEMS + 1);
+		assertBoundedChangeSetSize(items.length);
 		await ctx.db.patch(changeSetId, {
 			summary: summarizeItems(items),
 			updatedAt: Date.now(),
@@ -626,7 +715,8 @@ export const getChangeSet = internalQuery({
 		const items = await ctx.db
 			.query("changeSetItems")
 			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
-			.collect();
+			.take(MAX_CHANGE_SET_ITEMS + 1);
+		assertBoundedChangeSetSize(items.length);
 		return {
 			...changeSet,
 			items,

@@ -49,3 +49,7 @@ coverage
 .cache
 tmp
 temp
+
+# Local working directories, not part of the repo
+.scratch/
+reports/brickit-translation-overlay/

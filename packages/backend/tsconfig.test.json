@@ -3,6 +3,6 @@
 	"compilerOptions": {
 		"types": ["node", "bun"]
 	},
-	"include": ["convex/**/*.test.ts", "convex/**/*.spec.ts"],
+	"include": ["convex/**/*.test.ts", "convex/**/*.spec.ts", "test/**/*.ts"],
 	"exclude": ["convex/_generated"]
 }

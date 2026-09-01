@@ -1,13 +1,35 @@
 import { ConvexError, v } from "convex/values";
 
 import type { Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
 import { requireUser } from "./auth";
 import { now, statusForValue } from "./lib";
 import { requireEditor, requireViewer } from "./permissions";
 
+const MAX_TRANSLATIONS_PER_KEY = 50;
+const MAX_KEYS_PER_VALUE_READ = 50;
+const MAX_VALUES_PER_LOCALE_READ = 500;
+
+async function boundedValuesForKey(
+	ctx: QueryCtx | MutationCtx,
+	keyId: Id<"translationKeys">,
+) {
+	const values = await ctx.db
+		.query("translationValues")
+		.withIndex("by_key", (q) => q.eq("keyId", keyId))
+		.take(MAX_TRANSLATIONS_PER_KEY + 1);
+	if (values.length > MAX_TRANSLATIONS_PER_KEY) {
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message: `A key supports at most ${MAX_TRANSLATIONS_PER_KEY} Locale values.`,
+		});
+	}
+	return values;
+}
+
 async function getValue(
-	ctx: any,
+	ctx: QueryCtx | MutationCtx,
 	keyId: Id<"translationKeys">,
 	localeId: Id<"locales">,
 ) {
@@ -19,7 +41,7 @@ async function getValue(
 		});
 	return await ctx.db
 		.query("translationValues")
-		.withIndex("by_project_key_locale", (q: any) =>
+		.withIndex("by_project_key_locale", (q) =>
 			q
 				.eq("projectId", key.projectId)
 				.eq("keyId", keyId)
@@ -28,7 +50,10 @@ async function getValue(
 		.unique();
 }
 
-async function getSourceValue(ctx: any, keyId: Id<"translationKeys">) {
+async function getSourceValue(
+	ctx: QueryCtx | MutationCtx,
+	keyId: Id<"translationKeys">,
+) {
 	const key = await ctx.db.get(keyId);
 	if (!key)
 		throw new ConvexError({
@@ -41,7 +66,7 @@ async function getSourceValue(ctx: any, keyId: Id<"translationKeys">) {
 }
 
 export async function upsertTranslationValue(
-	ctx: any,
+	ctx: MutationCtx,
 	args: {
 		projectId: Id<"projects">;
 		keyId: Id<"translationKeys">;
@@ -111,17 +136,14 @@ export async function upsertTranslationValue(
 	});
 
 	if (project?.sourceLocaleId === args.localeId) {
-		const values = await ctx.db
-			.query("translationValues")
-			.withIndex("by_key", (q: any) => q.eq("keyId", args.keyId))
-			.collect();
+		const values = await boundedValuesForKey(ctx, args.keyId);
 		await Promise.all(
 			values
 				.filter(
-					(value: any) =>
+					(value) =>
 						value.localeId !== args.localeId && value.status !== "missing",
 				)
-				.map((value: any) =>
+				.map((value) =>
 					ctx.db.patch(value._id, {
 						status: "stale",
 						sourceVersion: nextVersion,
@@ -144,10 +166,7 @@ export const listForKey = query({
 				message: "Translation key not found.",
 			});
 		await requireViewer(ctx, key.projectId);
-		return await ctx.db
-			.query("translationValues")
-			.withIndex("by_key", (q) => q.eq("keyId", args.keyId))
-			.collect();
+		return await boundedValuesForKey(ctx, args.keyId);
 	},
 });
 
@@ -155,8 +174,15 @@ export const listForKeys = query({
 	args: { keyIds: v.array(v.id("translationKeys")) },
 	handler: async (ctx, args) => {
 		if (args.keyIds.length === 0) return [];
+		const uniqueKeyIds = Array.from(new Set(args.keyIds));
+		if (uniqueKeyIds.length > MAX_KEYS_PER_VALUE_READ) {
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message: `Read at most ${MAX_KEYS_PER_VALUE_READ} translation keys at once.`,
+			});
+		}
 		const keys = await Promise.all(
-			args.keyIds.map((keyId) => ctx.db.get(keyId)),
+			uniqueKeyIds.map((keyId) => ctx.db.get(keyId)),
 		);
 		const projectId = keys.find((key) => key !== null)?.projectId;
 		if (!projectId)
@@ -171,12 +197,10 @@ export const listForKeys = query({
 			});
 		}
 		await requireViewer(ctx, projectId);
-		const values = await ctx.db
-			.query("translationValues")
-			.withIndex("by_project", (q) => q.eq("projectId", projectId))
-			.collect();
-		const keyIds = new Set(args.keyIds);
-		return values.filter((value) => keyIds.has(value.keyId));
+		const valuesByKey = await Promise.all(
+			uniqueKeyIds.map((keyId) => boundedValuesForKey(ctx, keyId)),
+		);
+		return valuesByKey.flat();
 	},
 });
 
@@ -195,24 +219,31 @@ export const listForLocale = query({
 	},
 	handler: async (ctx, args) => {
 		await requireViewer(ctx, args.projectId);
-		if (args.status) {
-			const status = args.status;
-			return await ctx.db
-				.query("translationValues")
-				.withIndex("by_project_locale_status", (q) =>
-					q
-						.eq("projectId", args.projectId)
-						.eq("localeId", args.localeId)
-						.eq("status", status),
-				)
-				.collect();
+		const status = args.status;
+		const values = status
+			? await ctx.db
+					.query("translationValues")
+					.withIndex("by_project_locale_status", (q) =>
+						q
+							.eq("projectId", args.projectId)
+							.eq("localeId", args.localeId)
+							.eq("status", status),
+					)
+					.take(MAX_VALUES_PER_LOCALE_READ + 1)
+			: await ctx.db
+					.query("translationValues")
+					.withIndex("by_project_locale", (q) =>
+						q.eq("projectId", args.projectId).eq("localeId", args.localeId),
+					)
+					.take(MAX_VALUES_PER_LOCALE_READ + 1);
+		if (values.length > MAX_VALUES_PER_LOCALE_READ) {
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message:
+					"This legacy Locale read is too large; use the bounded Catalog Workspace Navigation read.",
+			});
 		}
-		return await ctx.db
-			.query("translationValues")
-			.withIndex("by_project_locale", (q) =>
-				q.eq("projectId", args.projectId).eq("localeId", args.localeId),
-			)
-			.collect();
+		return values;
 	},
 });
 

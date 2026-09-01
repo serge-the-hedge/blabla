@@ -26,6 +26,7 @@ import type { FormEvent } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { ConfirmAction } from "@/components/confirm-action";
 import {
 	PageHeader,
 	ProjectShell,
@@ -101,6 +102,28 @@ function MembersRoute() {
 		}
 	}
 
+	async function removeProjectMember(member: MemberRow) {
+		try {
+			await removeMember({ memberId: convexId<"projectMembers">(member._id) });
+			toast.success("Member removed");
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Could not remove member",
+			);
+		}
+	}
+
+	async function revokeProjectInvite(invite: InviteRow) {
+		try {
+			await revokeInvite({ inviteId: convexId<"projectInvites">(invite._id) });
+			toast.success("Invite revoked");
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Could not revoke invite",
+			);
+		}
+	}
+
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader
@@ -116,7 +139,10 @@ function MembersRoute() {
 									<FieldLabel htmlFor="member-email">Email</FieldLabel>
 									<Input
 										id="member-email"
+										name="email"
 										type="email"
+										autoComplete="email"
+										spellCheck={false}
 										value={email}
 										onChange={(event) => setEmail(event.target.value)}
 										placeholder="teammate@example.com"
@@ -142,7 +168,7 @@ function MembersRoute() {
 								</Field>
 								<Button type="submit" disabled={!email.trim() || isSubmitting}>
 									<UserPlus data-icon="inline-start" />
-									{isSubmitting ? "Inviting..." : "Invite"}
+									{isSubmitting ? "Inviting…" : "Invite member"}
 								</Button>
 							</FieldGroup>
 						</form>
@@ -188,18 +214,20 @@ function MembersRoute() {
 										</Badge>
 										<Select
 											value={member.role}
-											onValueChange={(value) =>
+											onValueChange={(value) => {
 												updateRole({
 													memberId: convexId<"projectMembers">(member._id),
 													role: value as Role,
-												}).catch((error) =>
-													toast.error(
-														error instanceof Error
-															? error.message
-															: "Role update failed",
-													),
-												)
-											}
+												})
+													.then(() => toast.success("Member role updated"))
+													.catch((error) =>
+														toast.error(
+															error instanceof Error
+																? error.message
+																: "Could not update role",
+														),
+													);
+											}}
 										>
 											<SelectTrigger size="sm" className="w-full">
 												<SelectValue />
@@ -213,23 +241,13 @@ function MembersRoute() {
 											</SelectContent>
 										</Select>
 									</div>
-									<Button
-										size="sm"
-										variant="outline"
-										onClick={() =>
-											removeMember({
-												memberId: convexId<"projectMembers">(member._id),
-											}).catch((error) =>
-												toast.error(
-													error instanceof Error
-														? error.message
-														: "Remove failed",
-												),
-											)
-										}
-									>
-										Remove
-									</Button>
+									<ConfirmAction
+										triggerLabel="Remove"
+										title="Remove this member?"
+										description={`${member.user?.name ?? member.user?.email ?? "This member"} will immediately lose access to the project.`}
+										confirmLabel="Remove member"
+										onConfirm={() => removeProjectMember(member)}
+									/>
 								</div>
 							))}
 						</CardContent>
@@ -264,24 +282,14 @@ function MembersRoute() {
 									>
 										{invite.role}
 									</Badge>
-									<Button
-										size="sm"
-										variant="outline"
+									<ConfirmAction
+										triggerLabel="Revoke"
+										title={`Revoke invite for ${invite.emailLower}?`}
+										description="The pending invite will no longer grant access."
+										confirmLabel="Revoke invite"
 										disabled={invite.acceptedAt !== undefined}
-										onClick={() =>
-											revokeInvite({
-												inviteId: convexId<"projectInvites">(invite._id),
-											}).catch((error) =>
-												toast.error(
-													error instanceof Error
-														? error.message
-														: "Revoke failed",
-												),
-											)
-										}
-									>
-										Revoke
-									</Button>
+										onConfirm={() => revokeProjectInvite(invite)}
+									/>
 								</div>
 							))}
 						</CardContent>

@@ -15,7 +15,7 @@ import {
 } from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
 import { useForm } from "@tanstack/react-form";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -25,22 +25,19 @@ import { BrandWordmark } from "@/components/brand";
 import { authClient } from "@/lib/auth-client";
 import { api } from "@/lib/convex-api";
 
-export default function SignUpForm({
-	onSwitchToSignIn,
-}: {
-	onSwitchToSignIn: () => void;
-}) {
-	const navigate = useNavigate({
-		from: "/",
-	});
+export default function SignUpForm({ redirectTo }: { redirectTo: string }) {
+	const navigate = useNavigate();
 	const acceptPendingInvites = useMutation(api.projects.acceptPendingInvites);
 
 	async function finishSignUp() {
 		const result = await acceptPendingInvites().catch(() => ({ accepted: 0 }));
-		navigate({
-			to: "/projects",
+		await navigate({
+			href: redirectTo,
+			replace: true,
 		});
-		toast.success(result.accepted > 0 ? "Access granted" : "Account created");
+		toast.success(
+			result.accepted > 0 ? "Invitation accepted" : "Account created",
+		);
 	}
 
 	const form = useForm({
@@ -174,7 +171,7 @@ export default function SignUpForm({
 										{isSubmitting ? (
 											<Loader2
 												data-icon="inline-start"
-												className="animate-spin"
+												className="animate-spin motion-reduce:animate-none"
 											/>
 										) : null}
 										{isSubmitting ? "Creating account…" : "Create account"}
@@ -186,10 +183,15 @@ export default function SignUpForm({
 				</CardContent>
 				<CardFooter className="justify-center">
 					<Button
+						nativeButton={false}
 						variant="link"
-						type="button"
-						onClick={onSwitchToSignIn}
 						size="sm"
+						render={
+							<Link
+								to="/sign-in"
+								search={{ mode: "sign-in", redirect: redirectTo }}
+							/>
+						}
 					>
 						Already have an account? Sign in
 					</Button>

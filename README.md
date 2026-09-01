@@ -42,6 +42,46 @@ bun run dev
 Open [http://localhost:3001](http://localhost:3001) in your browser to see the web application.
 Your app will connect to the Convex cloud backend automatically.
 
+## MVP workflow
+
+The product path is intentionally small:
+
+1. Open the project's **Sync** page and add the source and target catalog
+   bindings once.
+2. Open **Settings → API tokens**, create the workspace connection, and run
+   the one-time setup command it gives you.
+3. In the Brickit checkout, update the project's integration branch (`develop`
+   for the current Brickit repository) with the team's normal fast-forward
+   pull, then run `blabla sync` whenever the source commit changes.
+4. Use **Strings** for manual edits and **Translation tasks** to prepare a
+   locale or hand a bounded translation task to an agent.
+5. Review the proposed values in the task before any delivery action.
+6. When a Portuguese proposal is ready, run `blabla deliver-portuguese` from
+   that same integration-branch checkout. The adapter creates a local review
+   branch and prints the exact push and pull-request commands; it never runs
+   them for you.
+
+The setup page is the workflow surface. Project ids, Convex URLs, token scopes,
+snapshot ids, and proposal ids are implementation details unless you open an
+advanced/API view.
+
+An unpublished local checkout needs no CLI installation. The web app shows
+repository-local commands in development:
+
+```bash
+bun run blabla -- login --server https://<deployment>.convex.site --token ...
+git -C /path/to/brickit-flutter fetch origin develop
+git -C /path/to/brickit-flutter switch develop
+git -C /path/to/brickit-flutter pull --ff-only origin develop
+# run the following from this Blabla repository root
+bun run blabla -- sync --checkout /path/to/brickit-flutter
+bun run blabla -- deliver-portuguese --proposal <proposal-id> --checkout /path/to/brickit-flutter
+```
+
+Run them from this repository root. A production build shows the equivalent
+installed-binary commands (`blabla login`, `blabla sync`, and
+`blabla deliver-portuguese`) instead.
+
 ## Development Authentication
 
 This project uses Better Auth through the Convex HTTP site URL. In development,

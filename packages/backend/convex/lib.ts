@@ -1,13 +1,28 @@
 import type { Doc, Id } from "./_generated/dataModel";
 
+/** The branch the Brickit team uses as the localization integration target. */
+export const DEFAULT_INTEGRATION_BRANCH = "develop";
+
 export type Role = "owner" | "editor" | "viewer";
 export type TranslationStatus =
 	| "missing"
 	| "translated"
 	| "needs_review"
 	| "stale";
-export type Actor = { kind: "user" | "agent" | "system"; id: string };
-export type TokenScope = "read" | "search" | "propose" | "export";
+export type Actor = {
+	kind: "user" | "agent" | "system" | "repositoryAdapter";
+	id: string;
+};
+export type HumanActor = {
+	kind: "user" | "agent" | "system";
+	id: string;
+};
+export type TokenScope =
+	| "read"
+	| "search"
+	| "propose"
+	| "export"
+	| "snapshot-submission";
 
 export function slugify(input: string): string {
 	return input
@@ -29,6 +44,18 @@ export function normalizeLocaleCode(input: string): string {
 
 export function now(): number {
 	return Date.now();
+}
+
+/** The same byte-exact SHA-256 identity used by Snapshot evidence and
+ * Catalog Workspace decision provenance. */
+export async function sha256Hex(value: string): Promise<string> {
+	const digest = await crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(value),
+	);
+	return Array.from(new Uint8Array(digest), (byte) =>
+		byte.toString(16).padStart(2, "0"),
+	).join("");
 }
 
 export function makeSearchText(input: {

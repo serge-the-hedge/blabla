@@ -1,4 +1,3 @@
-import { api } from "@blabla/backend/convex/_generated/api";
 import {
 	Card,
 	CardContent,
@@ -14,10 +13,8 @@ import {
 	Unauthenticated,
 	useQuery,
 } from "convex/react";
-import { useState } from "react";
-
-import SignInForm from "@/components/sign-in-form";
-import SignUpForm from "@/components/sign-up-form";
+import AuthRedirect from "@/components/auth-redirect";
+import { api } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/dashboard")({
 	component: RouteComponent,
@@ -25,7 +22,6 @@ export const Route = createFileRoute("/dashboard")({
 
 function PrivateDashboardContent() {
 	const user = useQuery(api.auth.getCurrentUser);
-	const privateData = useQuery(api.privateData.get);
 
 	return (
 		<div className="mx-auto flex h-full max-w-3xl flex-col gap-6 overflow-auto px-6 py-8">
@@ -35,57 +31,36 @@ function PrivateDashboardContent() {
 					Your profile and workspace data.
 				</p>
 			</div>
-			<div className="grid gap-3 md:grid-cols-2">
-				<Card size="sm">
-					<CardHeader>
-						<CardTitle>Profile</CardTitle>
-						<CardDescription>Signed in via Better Auth.</CardDescription>
-					</CardHeader>
-					<CardContent>
-						{user === undefined ? (
-							<Skeleton className="h-12 w-full" />
-						) : (
-							<dl className="grid grid-cols-[80px_1fr] gap-y-2 text-xs">
-								<dt className="text-muted-foreground">Name</dt>
-								<dd>{user?.name ?? "—"}</dd>
-								<dt className="text-muted-foreground">Email</dt>
-								<dd className="truncate font-mono">{user?.email}</dd>
-							</dl>
-						)}
-					</CardContent>
-				</Card>
-				<Card size="sm">
-					<CardHeader>
-						<CardTitle>Private data</CardTitle>
-						<CardDescription>A simple ping from the backend.</CardDescription>
-					</CardHeader>
-					<CardContent>
-						{privateData === undefined ? (
-							<Skeleton className="h-6 w-2/3" />
-						) : (
-							<p className="text-xs">{privateData?.message}</p>
-						)}
-					</CardContent>
-				</Card>
-			</div>
+			<Card size="sm">
+				<CardHeader>
+					<CardTitle>Profile</CardTitle>
+					<CardDescription>Your signed-in account details.</CardDescription>
+				</CardHeader>
+				<CardContent>
+					{user === undefined ? (
+						<Skeleton className="h-12 w-full" />
+					) : (
+						<dl className="grid grid-cols-[80px_1fr] gap-y-2 text-xs">
+							<dt className="text-muted-foreground">Name</dt>
+							<dd>{user?.name ?? "—"}</dd>
+							<dt className="text-muted-foreground">Email</dt>
+							<dd className="truncate font-mono">{user?.email}</dd>
+						</dl>
+					)}
+				</CardContent>
+			</Card>
 		</div>
 	);
 }
 
 function RouteComponent() {
-	const [showSignIn, setShowSignIn] = useState(false);
-
 	return (
 		<>
 			<Authenticated>
 				<PrivateDashboardContent />
 			</Authenticated>
 			<Unauthenticated>
-				{showSignIn ? (
-					<SignInForm onSwitchToSignUp={() => setShowSignIn(false)} />
-				) : (
-					<SignUpForm onSwitchToSignIn={() => setShowSignIn(true)} />
-				)}
+				<AuthRedirect />
 			</Unauthenticated>
 			<AuthLoading>
 				<div className="mx-auto flex max-w-3xl flex-col gap-3 px-6 py-8">

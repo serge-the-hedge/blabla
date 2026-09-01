@@ -1,4 +1,3 @@
-import { api } from "@blabla/backend/convex/_generated/api";
 import { Button } from "@blabla/ui/components/button";
 import {
 	DropdownMenu,
@@ -9,11 +8,13 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@blabla/ui/components/dropdown-menu";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { LogOut } from "lucide-react";
+import { toast } from "sonner";
 
 import { authClient } from "@/lib/auth-client";
+import { api } from "@/lib/convex-api";
 
 function initialsOf(name: string | undefined, email: string | undefined) {
 	if (name?.trim()) {
@@ -31,14 +32,18 @@ export default function UserMenu() {
 
 	return (
 		<DropdownMenu>
-			<DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
+			<DropdownMenuTrigger
+				render={
+					<Button variant="ghost" size="sm" aria-label="Open account menu" />
+				}
+			>
 				<span
 					aria-hidden
 					className="inline-flex size-5 items-center justify-center rounded-full bg-brand text-[10px] text-brand-foreground"
 				>
 					{initials}
 				</span>
-				<span className="max-w-[10rem] truncate">
+				<span className="hidden max-w-[10rem] truncate sm:inline">
 					{user?.name ?? "Account"}
 				</span>
 			</DropdownMenuTrigger>
@@ -51,13 +56,26 @@ export default function UserMenu() {
 						</span>
 					</DropdownMenuLabel>
 					<DropdownMenuSeparator />
+					<DropdownMenuItem render={<Link to="/dashboard" />}>
+						Account
+					</DropdownMenuItem>
+					<DropdownMenuSeparator />
 					<DropdownMenuItem
 						variant="destructive"
 						onClick={() => {
-							authClient.signOut({
+							void authClient.signOut({
 								fetchOptions: {
 									onSuccess: () => {
-										navigate({ to: "/dashboard" });
+										void navigate({
+											to: "/sign-in",
+											search: { mode: "sign-in", redirect: "/projects" },
+											replace: true,
+										});
+									},
+									onError: (context) => {
+										toast.error(
+											context.error.message || "Could not sign out. Try again.",
+										);
 									},
 								},
 							});

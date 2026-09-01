@@ -1,0 +1,111 @@
+import 'dart:io';
+
+import 'package:blabla_cli/locale_proposal_adapter.dart';
+import 'package:test/test.dart';
+
+void main() {
+  test(
+    'explicit SDK wins and reports version plus committed constraint',
+    () async {
+      final fixture = await ToolchainFixture.create();
+      addTearDown(fixture.dispose);
+      final explicit = await fixture.sdk('explicit', 'Flutter 3.44.6');
+      await fixture.sdk('from-environment', 'Flutter 9.9.9');
+
+      final resolved = await FlutterToolchainResolver(
+        environment: {'FLUTTER_ROOT': fixture.path('from-environment')},
+      ).resolve(fixture.checkout, explicitSdk: explicit.path);
+
+      expect(resolved.executable, fixture.path('explicit/bin/flutter'));
+      expect(resolved.version, 'Flutter 3.44.6');
+      expect(resolved.description, contains('environment.flutter: ^3.44.0'));
+    },
+  );
+
+  test('uses fvm for a .fvmrc when no SDK directory is available', () async {
+    final fixture = await ToolchainFixture.create();
+    addTearDown(fixture.dispose);
+    await File(fixture.path('.fvmrc')).writeAsString('3.44.6\n');
+    final runner = FvmRunner();
+
+    final resolved = await FlutterToolchainResolver(
+      environment: const {},
+      runner: runner,
+    ).resolve(fixture.checkout);
+
+    expect(resolved.executable, 'fvm');
+    expect(resolved.argumentsPrefix, const ['flutter']);
+    expect(resolved.sdkPath, '/opt/fvm/3.44.6');
+    expect(resolved.version, 'Flutter 3.44.6');
+    expect(runner.calls, contains(equals(['fvm', '--version'])));
+    expect(runner.calls, contains(equals(['fvm', 'flutter', '--version'])));
+  });
+}
+
+class ToolchainFixture {
+  ToolchainFixture._(this.root);
+
+  final Directory root;
+  Directory get checkout => root;
+
+  static Future<ToolchainFixture> create() async {
+    final root = await Directory.systemTemp.createTemp('blabla-flutter-sdk-');
+    await File('${root.path}/pubspec.yaml').writeAsString('''name: brickit
+environment:
+  sdk: ^3.12.0
+  flutter: ^3.44.0
+''');
+    return ToolchainFixture._(root);
+  }
+
+  Future<Directory> sdk(String name, String version) async {
+    final root = Directory(path(name));
+    final flutter = File('${root.path}/bin/flutter');
+    await flutter.parent.create(recursive: true);
+    await flutter.writeAsString('''#!/bin/sh
+if [ "\$1" = "--version" ]; then
+  echo '$version'
+  exit 0
+fi
+exit 0
+''');
+    final chmod = await Process.run('chmod', ['+x', flutter.path]);
+    if (chmod.exitCode != 0) throw StateError('Could not create fake Flutter.');
+    return root;
+  }
+
+  String path(String relative) => '${root.path}/$relative';
+
+  Future<void> dispose() => root.delete(recursive: true);
+}
+
+class FvmRunner implements CommandRunner {
+  final List<List<String>> calls = [];
+
+  @override
+  Future<CommandResult> run(
+    String executable,
+    List<String> arguments, {
+    required String workingDirectory,
+  }) async {
+    calls.add([executable, ...arguments]);
+    if (executable == 'fvm' && arguments.join(' ') == '--version') {
+      return const CommandResult(exitCode: 0, stdout: '3.2.1\n', stderr: '');
+    }
+    if (executable == 'fvm' && arguments.join(' ') == 'flutter --version') {
+      return const CommandResult(
+        exitCode: 0,
+        stdout: 'Flutter 3.44.6\n',
+        stderr: '',
+      );
+    }
+    if (executable == 'fvm' && arguments.join(' ') == 'api project') {
+      return const CommandResult(
+        exitCode: 0,
+        stdout: '{"project":{"localVersionSymlinkPath":"/opt/fvm/3.44.6"}}',
+        stderr: '',
+      );
+    }
+    return const CommandResult(exitCode: 1, stdout: '', stderr: 'unexpected');
+  }
+}

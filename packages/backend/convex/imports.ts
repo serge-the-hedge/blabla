@@ -1,61 +1,28 @@
 import { ConvexError, v } from "convex/values";
 
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
 import { requireUser } from "./auth";
+import {
+	type FlatMessages,
+	parseArbMessages,
+	parseJsonMessages,
+	validateImportTags,
+} from "./importValidation";
 import { makeSearchText, normalizeLocaleCode, now, slugify } from "./lib";
 import { requireEditor, requireViewer } from "./permissions";
+import { agentRateLimiter } from "./rateLimits";
 import { upsertTranslationValue } from "./values";
 
-type FlatMessages = Record<string, string>;
-
-function flattenJson(value: unknown, prefix = ""): FlatMessages {
-	if (typeof value === "string") {
-		if (!prefix) {
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: "JSON import must be an object with message keys.",
-			});
-		}
-		return { [prefix]: value };
-	}
-	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-	return Object.entries(value as Record<string, unknown>).reduce<FlatMessages>(
-		(acc, [key, child]) => {
-			const nextPrefix = prefix ? `${prefix}.${key}` : key;
-			return { ...acc, ...flattenJson(child, nextPrefix) };
-		},
-		{},
-	);
-}
-
-function parseArb(content: string) {
-	const parsed = JSON.parse(content) as Record<string, unknown>;
-	const messages: FlatMessages = {};
-	const metadata = new Map<
-		string,
-		{ description?: string; placeholders?: unknown }
-	>();
-	for (const [key, value] of Object.entries(parsed)) {
-		if (key.startsWith("@@")) continue;
-		if (key.startsWith("@")) {
-			const messageKey = key.slice(1);
-			const meta = value as { description?: string; placeholders?: unknown };
-			metadata.set(messageKey, {
-				description: meta.description,
-				placeholders: meta.placeholders,
-			});
-		} else if (typeof value === "string") {
-			messages[key] = value;
-		}
-	}
-	return { messages, metadata };
-}
-
-async function findLocale(ctx: any, projectId: Id<"projects">, code: string) {
+async function findLocale(
+	ctx: QueryCtx | MutationCtx,
+	projectId: Id<"projects">,
+	code: string,
+) {
 	const locale = await ctx.db
 		.query("locales")
-		.withIndex("by_project_code", (q: any) =>
+		.withIndex("by_project_code", (q) =>
 			q.eq("projectId", projectId).eq("code", code),
 		)
 		.unique();
@@ -65,26 +32,35 @@ async function findLocale(ctx: any, projectId: Id<"projects">, code: string) {
 	return locale;
 }
 
+function validateOptionalSlug(value: string | undefined, label: string) {
+	if (value === undefined) return;
+	if (!slugify(value) || value.length > 64) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: `${label} must be between 1 and 64 characters.`,
+		});
+	}
+}
+
 async function findOrCreateScreen(
-	ctx: any,
+	ctx: MutationCtx,
 	projectId: Id<"projects">,
 	screenSlug?: string,
 ) {
 	if (!screenSlug) return undefined;
 	const slug = slugify(screenSlug);
-	if (!slug) {
-		throw new ConvexError({
-			code: "VALIDATION",
-			message: "Screen slug is required.",
-		});
-	}
 	const existing = await ctx.db
 		.query("screens")
-		.withIndex("by_project_slug", (q: any) =>
+		.withIndex("by_project_slug", (q) =>
 			q.eq("projectId", projectId).eq("slug", slug),
 		)
 		.unique();
-	if (existing) return existing._id;
+	if (existing) {
+		if (existing.archivedAt !== undefined) {
+			await ctx.db.patch(existing._id, { archivedAt: undefined });
+		}
+		return existing._id;
+	}
 	return await ctx.db.insert("screens", {
 		projectId,
 		name: screenSlug,
@@ -94,21 +70,23 @@ async function findOrCreateScreen(
 }
 
 async function findOrCreateTags(
-	ctx: any,
+	ctx: MutationCtx,
 	projectId: Id<"projects">,
 	tagSlugs?: string[],
 ) {
 	const tagIds: Id<"tags">[] = [];
-	for (const rawSlug of tagSlugs ?? []) {
+	for (const rawSlug of Array.from(new Set(tagSlugs ?? []))) {
 		const slug = slugify(rawSlug);
-		if (!slug) continue;
 		const existing = await ctx.db
 			.query("tags")
-			.withIndex("by_project_slug", (q: any) =>
+			.withIndex("by_project_slug", (q) =>
 				q.eq("projectId", projectId).eq("slug", slug),
 			)
 			.unique();
 		if (existing) {
+			if (existing.archivedAt !== undefined) {
+				await ctx.db.patch(existing._id, { archivedAt: undefined });
+			}
 			tagIds.push(existing._id);
 		} else {
 			tagIds.push(
@@ -124,21 +102,18 @@ async function findOrCreateTags(
 	return tagIds;
 }
 
-async function importMessages(
-	ctx: any,
-	args: {
-		projectId: Id<"projects">;
-		localeCode: string;
-		messages: FlatMessages;
-		metadata?: Map<string, { description?: string; placeholders?: unknown }>;
-		screenSlug?: string;
-		tagSlugs?: string[];
-		mode: "create_missing" | "upsert";
-		actorId: string;
-	},
-) {
-	const localeCode = normalizeLocaleCode(args.localeCode);
-	const locale = await findLocale(ctx, args.projectId, localeCode);
+type ImportArgs = {
+	projectId: Id<"projects">;
+	locale: Doc<"locales">;
+	messages: FlatMessages;
+	metadata?: Map<string, { description?: string; placeholders?: unknown }>;
+	screenSlug?: string;
+	tagSlugs?: string[];
+	mode: "create_missing" | "upsert";
+	actorId: string;
+};
+
+async function importMessages(ctx: MutationCtx, args: ImportArgs) {
 	const screenId = await findOrCreateScreen(
 		ctx,
 		args.projectId,
@@ -146,17 +121,22 @@ async function importMessages(
 	);
 	const screen = screenId ? await ctx.db.get(screenId) : null;
 	const tagIds = await findOrCreateTags(ctx, args.projectId, args.tagSlugs);
+	const hydratedTags = await Promise.all(
+		tagIds.map((tagId) => ctx.db.get(tagId)),
+	);
 	let imported = 0;
 	for (const [messageKey, value] of Object.entries(args.messages)) {
 		const existing = await ctx.db
 			.query("translationKeys")
-			.withIndex("by_project_key", (q: any) =>
+			.withIndex("by_project_key", (q) =>
 				q.eq("projectId", args.projectId).eq("key", messageKey),
 			)
 			.unique();
 		const meta = args.metadata?.get(messageKey);
 		const placeholders =
-			meta?.placeholders && typeof meta.placeholders === "object"
+			meta?.placeholders &&
+			typeof meta.placeholders === "object" &&
+			!Array.isArray(meta.placeholders)
 				? Object.keys(meta.placeholders as Record<string, unknown>).map(
 						(name) => ({ name }),
 					)
@@ -177,15 +157,16 @@ async function importMessages(
 					key: messageKey,
 					description: meta?.description,
 					screen,
-					tags: await Promise.all(
-						tagIds.map((tagId) => ctx.db.get(tagId)),
-					).then((tags) =>
-						tags.filter((tag): tag is NonNullable<typeof tag> => tag !== null),
+					tags: hydratedTags.filter(
+						(tag): tag is NonNullable<typeof tag> => tag !== null,
 					),
 				}),
 			}));
 		if (existing && tagIds.length > 0) {
 			const nextTagIds = Array.from(new Set([...existing.tagIds, ...tagIds]));
+			const nextTags = await Promise.all(
+				nextTagIds.map((tagId) => ctx.db.get(tagId)),
+			);
 			await ctx.db.patch(existing._id, {
 				tagIds: nextTagIds,
 				updatedAt: now(),
@@ -195,20 +176,20 @@ async function importMessages(
 					screen: existing.screenId
 						? await ctx.db.get(existing.screenId)
 						: null,
-					tags: await Promise.all(
-						nextTagIds.map((tagId) => ctx.db.get(tagId)),
-					).then((tags) => tags.filter(Boolean)),
+					tags: nextTags.filter(
+						(tag): tag is NonNullable<typeof tag> => tag !== null,
+					),
 				}),
 			});
 		}
 		if (existing && args.mode === "create_missing") {
 			const liveValue = await ctx.db
 				.query("translationValues")
-				.withIndex("by_project_key_locale", (q: any) =>
+				.withIndex("by_project_key_locale", (q) =>
 					q
 						.eq("projectId", args.projectId)
 						.eq("keyId", keyId)
-						.eq("localeId", locale._id),
+						.eq("localeId", args.locale._id),
 				)
 				.unique();
 			if (liveValue) continue;
@@ -216,7 +197,7 @@ async function importMessages(
 		await upsertTranslationValue(ctx, {
 			projectId: args.projectId,
 			keyId,
-			localeId: locale._id,
+			localeId: args.locale._id,
 			value,
 			actor: { kind: "user", id: args.actorId },
 		});
@@ -239,6 +220,68 @@ export const getJob = query({
 	},
 });
 
+async function executeImport(
+	ctx: MutationCtx,
+	args: {
+		projectId: Id<"projects">;
+		localeCode: string;
+		screenSlug?: string;
+		tagSlugs?: string[];
+		mode?: "create_missing" | "upsert";
+		kind: "json" | "arb";
+		messages: FlatMessages;
+		metadata?: Map<string, { description?: string; placeholders?: unknown }>;
+	},
+) {
+	const user = await requireUser(ctx);
+	await requireEditor(ctx, args.projectId);
+	validateOptionalSlug(args.screenSlug, "Screen slug");
+	validateImportTags(args.tagSlugs);
+	const localeCode = normalizeLocaleCode(args.localeCode);
+	const locale = await findLocale(ctx, args.projectId, localeCode);
+	const limit = await agentRateLimiter.limit(ctx, "importUpload", {
+		key: `${args.projectId}:${user.id}`,
+	});
+	if (!limit.ok) {
+		throw new ConvexError({
+			code: "RATE_LIMITED",
+			message: "Import rate limit exceeded.",
+			retryAfter: limit.retryAfter,
+		});
+	}
+	const mode = args.mode ?? "create_missing";
+	const jobId = await ctx.db.insert("importJobs", {
+		projectId: args.projectId,
+		kind: args.kind,
+		status: "running",
+		input: {
+			localeCode,
+			screenSlug: args.screenSlug,
+			tagSlugs: args.tagSlugs,
+			mode,
+		},
+		createdBy: { kind: "user", id: user.id },
+		createdAt: now(),
+		updatedAt: now(),
+	});
+	const imported = await importMessages(ctx, {
+		projectId: args.projectId,
+		locale,
+		messages: args.messages,
+		metadata: args.metadata,
+		screenSlug: args.screenSlug,
+		tagSlugs: args.tagSlugs,
+		mode,
+		actorId: user.id,
+	});
+	await ctx.db.patch(jobId, {
+		status: "completed",
+		result: { imported },
+		updatedAt: now(),
+	});
+	return jobId;
+}
+
 export const startJsonImport = mutation({
 	args: {
 		projectId: v.id("projects"),
@@ -248,48 +291,12 @@ export const startJsonImport = mutation({
 		tagSlugs: v.optional(v.array(v.string())),
 		mode: v.optional(v.union(v.literal("create_missing"), v.literal("upsert"))),
 	},
-	handler: async (ctx, args) => {
-		const user = await requireUser(ctx);
-		await requireEditor(ctx, args.projectId);
-		const jobId = await ctx.db.insert("importJobs", {
-			projectId: args.projectId,
+	handler: async (ctx, args) =>
+		await executeImport(ctx, {
+			...args,
 			kind: "json",
-			status: "running",
-			input: {
-				localeCode: args.localeCode,
-				screenSlug: args.screenSlug,
-				tagSlugs: args.tagSlugs,
-			},
-			createdBy: { kind: "user", id: user.id },
-			createdAt: now(),
-			updatedAt: now(),
-		});
-		try {
-			const imported = await importMessages(ctx, {
-				projectId: args.projectId,
-				localeCode: args.localeCode,
-				messages: flattenJson(JSON.parse(args.content)),
-				screenSlug: args.screenSlug,
-				tagSlugs: args.tagSlugs,
-				mode: args.mode ?? "upsert",
-				actorId: user.id,
-			});
-			await ctx.db.patch(jobId, {
-				status: "completed",
-				result: { imported },
-				updatedAt: now(),
-			});
-		} catch (error) {
-			await ctx.db.patch(jobId, {
-				status: "failed",
-				result: {
-					error: error instanceof Error ? error.message : "Import failed.",
-				},
-				updatedAt: now(),
-			});
-		}
-		return jobId;
-	},
+			messages: parseJsonMessages(args.content),
+		}),
 });
 
 export const startArbImport = mutation({
@@ -302,47 +309,12 @@ export const startArbImport = mutation({
 		mode: v.optional(v.union(v.literal("create_missing"), v.literal("upsert"))),
 	},
 	handler: async (ctx, args) => {
-		const user = await requireUser(ctx);
-		await requireEditor(ctx, args.projectId);
-		const jobId = await ctx.db.insert("importJobs", {
-			projectId: args.projectId,
+		const parsed = parseArbMessages(args.content);
+		return await executeImport(ctx, {
+			...args,
 			kind: "arb",
-			status: "running",
-			input: {
-				localeCode: args.localeCode,
-				screenSlug: args.screenSlug,
-				tagSlugs: args.tagSlugs,
-			},
-			createdBy: { kind: "user", id: user.id },
-			createdAt: now(),
-			updatedAt: now(),
+			messages: parsed.messages,
+			metadata: parsed.metadata,
 		});
-		try {
-			const parsed = parseArb(args.content);
-			const imported = await importMessages(ctx, {
-				projectId: args.projectId,
-				localeCode: args.localeCode,
-				messages: parsed.messages,
-				metadata: parsed.metadata,
-				screenSlug: args.screenSlug,
-				tagSlugs: args.tagSlugs,
-				mode: args.mode ?? "upsert",
-				actorId: user.id,
-			});
-			await ctx.db.patch(jobId, {
-				status: "completed",
-				result: { imported },
-				updatedAt: now(),
-			});
-		} catch (error) {
-			await ctx.db.patch(jobId, {
-				status: "failed",
-				result: {
-					error: error instanceof Error ? error.message : "Import failed.",
-				},
-				updatedAt: now(),
-			});
-		}
-		return jobId;
 	},
 });

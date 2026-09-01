@@ -1,0 +1,1493 @@
+import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+import {
+	internalMutation,
+	internalQuery,
+	mutation,
+	query,
+} from "./_generated/server";
+import { hasMinimumRole } from "./accessControl";
+import {
+	activeProjectionFor,
+	activeWorkingCatalog,
+	MAX_WORKING_CATALOG_ROWS,
+	readActiveCatalog,
+} from "./catalogProjection";
+import { recomputeNavigationRows } from "./catalogWorkspaceNavigation";
+import {
+	type CatalogWorkspaceValueState,
+	composeWorkspaceKeyCards,
+	currentSourceProposalRows,
+	currentWorkspaceRows,
+	decisionIdentity,
+	decisionRecordMap,
+	encodedSize,
+	isCurrentHeadForRow,
+	sourceChangeMap,
+	translatorConfirmationMap,
+	valueIdentity,
+} from "./catalogWorkspaceView";
+import {
+	assertSourceProposalValueContract,
+	assertTargetValueContract,
+} from "./contractTransforms";
+import { type Actor, now, sha256Hex } from "./lib";
+import {
+	MAX_ORDINARY_CONFIRMATIONS_PER_MUTATION,
+	ORDINARY_IMPORT_CONFIRMATION_POLICY,
+	type OrdinaryImportConfirmationCandidate,
+	ordinaryImportConfirmationCandidateIdentity,
+	ordinaryImportConfirmationPlan,
+} from "./ordinaryImportConfirmations";
+import { requireEditor, requireViewer } from "./permissions";
+import {
+	isCurrentSourceProposalHeadForSource,
+	MAX_SOURCE_PROPOSAL_VALUE_BYTES,
+	publishedResolutionFor,
+	saveSourceProposal,
+	sourceProposalHeadFor,
+	sourceProposalHeadMap,
+	sourceProposalHeadsFor,
+	sourceProposalStatusesFor,
+} from "./sourceProposals";
+
+/** The Baseline Catalog already reserves 8 MiB of the one-query envelope.
+ * Translator-authored heads are capped separately so composing them still has
+ * comfortable Convex read and return headroom. */
+export const MAX_CATALOG_WORKSPACE_VALUE_HEADS = MAX_WORKING_CATALOG_ROWS;
+export const MAX_CATALOG_WORKSPACE_VALUE_HEAD_BYTES = 2 * 1024 * 1024;
+export const MAX_CATALOG_WORKSPACE_VALUE_BYTES = 256 * 1024;
+export const MAX_CATALOG_WORKSPACE_DECISION_RECORDS = MAX_WORKING_CATALOG_ROWS;
+// Brickit's conservative first-baseline confirmation set is about 2.1 MiB of
+// immutable evidence. Four MiB keeps that complete while the 8 MiB projection
+// and all Workspace overlays remain below Convex's transaction envelope.
+export const MAX_CATALOG_WORKSPACE_DECISION_RECORD_BYTES = 4 * 1024 * 1024;
+export const MAX_INTENTIONAL_BLANK_REASON_BYTES = 4 * 1024;
+const MAX_RECONCILED_VALUE_HEADS_PER_MUTATION = 8;
+
+const commitIntentValidator = v.union(
+	v.object({ kind: v.literal("save"), value: v.string() }),
+	v.object({ kind: v.literal("confirm") }),
+	v.object({ kind: v.literal("intentionalBlank"), reason: v.string() }),
+);
+
+const ordinaryImportConfirmationCandidateValidator = v.object({
+	messageId: v.string(),
+	localeId: v.id("locales"),
+	sourceFingerprint: v.string(),
+	valueFingerprint: v.string(),
+});
+
+const ordinaryImportConfirmationCountsValidator = v.object({
+	total: v.number(),
+	eligible: v.number(),
+	empty: v.number(),
+	sourceIdentical: v.number(),
+	repeated: v.number(),
+	modified: v.number(),
+	stale: v.number(),
+	alreadyConfirmed: v.number(),
+	pendingSourceProposal: v.number(),
+});
+
+const ordinaryImportConfirmationPlanValidator = v.object({
+	policy: v.literal(ORDINARY_IMPORT_CONFIRMATION_POLICY),
+	projectionId: v.id("catalogProjections"),
+	snapshotId: v.id("sourceSnapshots"),
+	canConfirm: v.boolean(),
+	counts: ordinaryImportConfirmationCountsValidator,
+	candidates: v.array(ordinaryImportConfirmationCandidateValidator),
+});
+
+type CatalogWorkspaceDecisionRecord = Doc<"catalogWorkspaceDecisionRecords">;
+type CatalogWorkspaceValueHeadInput = {
+	messageId: string;
+	localeId: Id<"locales">;
+	value: string;
+	valueFingerprint?: string;
+	sourceFingerprint: string;
+	basisGitValueFingerprint: string;
+	basisGitValueRevision: number;
+	revision: number;
+	reconciliationGeneration: number;
+	updatedBy: Actor;
+	updatedAt: number;
+};
+type CatalogWorkspaceDecisionBasis = {
+	messageId: string;
+	localeId: Id<"locales">;
+	sourceFingerprint: string;
+	valueFingerprint: string;
+	recordedBy: Actor;
+	recordedAt: number;
+};
+type CatalogWorkspaceDecisionRecordInput =
+	| (CatalogWorkspaceDecisionBasis & {
+			kind: "intentionalBlank";
+			reason: string;
+	  })
+	| (CatalogWorkspaceDecisionBasis & { kind: "translatorConfirmation" });
+
+function valueHeadByteLength(head: CatalogWorkspaceValueHeadInput): number {
+	return encodedSize({
+		messageId: head.messageId,
+		localeId: head.localeId,
+		value: head.value,
+		...(head.valueFingerprint === undefined
+			? {}
+			: { valueFingerprint: head.valueFingerprint }),
+		sourceFingerprint: head.sourceFingerprint,
+		basisGitValueFingerprint: head.basisGitValueFingerprint,
+		basisGitValueRevision: head.basisGitValueRevision,
+		revision: head.revision,
+		reconciliationGeneration: head.reconciliationGeneration,
+		updatedBy: head.updatedBy,
+		updatedAt: head.updatedAt,
+	});
+}
+
+function decisionRecordByteLength(
+	head: CatalogWorkspaceDecisionRecordInput,
+): number {
+	return encodedSize({
+		kind: head.kind,
+		messageId: head.messageId,
+		localeId: head.localeId,
+		sourceFingerprint: head.sourceFingerprint,
+		valueFingerprint: head.valueFingerprint,
+		...(head.kind === "intentionalBlank" ? { reason: head.reason } : {}),
+		recordedBy: head.recordedBy,
+		recordedAt: head.recordedAt,
+	});
+}
+
+async function workspaceStateFor(
+	ctx: QueryCtx | MutationCtx,
+	projectId: Id<"projects">,
+): Promise<Doc<"catalogWorkspaceStates"> | null> {
+	return await ctx.db
+		.query("catalogWorkspaceStates")
+		.withIndex("by_project", (q) => q.eq("projectId", projectId))
+		.unique();
+}
+
+async function workspaceHeadsFor(
+	ctx: QueryCtx | MutationCtx,
+	projectId: Id<"projects">,
+): Promise<Doc<"catalogWorkspaceValueHeads">[]> {
+	const heads = await ctx.db
+		.query("catalogWorkspaceValueHeads")
+		.withIndex("by_project", (q) => q.eq("projectId", projectId))
+		.take(MAX_CATALOG_WORKSPACE_VALUE_HEADS + 1);
+	if (heads.length > MAX_CATALOG_WORKSPACE_VALUE_HEADS) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message: "Catalog Workspace exceeds its supported value-head envelope.",
+		});
+	}
+	return heads;
+}
+
+export async function decisionStateFor(
+	ctx: QueryCtx | MutationCtx,
+	projectId: Id<"projects">,
+): Promise<Doc<"catalogWorkspaceDecisionStates"> | null> {
+	return await ctx.db
+		.query("catalogWorkspaceDecisionStates")
+		.withIndex("by_project", (q) => q.eq("projectId", projectId))
+		.unique();
+}
+
+async function decisionRecordsFor(
+	ctx: QueryCtx | MutationCtx,
+	projectId: Id<"projects">,
+): Promise<CatalogWorkspaceDecisionRecord[]> {
+	const records = await ctx.db
+		.query("catalogWorkspaceDecisionRecords")
+		.withIndex("by_project", (q) => q.eq("projectId", projectId))
+		.take(MAX_CATALOG_WORKSPACE_DECISION_RECORDS + 1);
+	if (records.length > MAX_CATALOG_WORKSPACE_DECISION_RECORDS) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message:
+				"Catalog Workspace exceeds its supported decision-record envelope.",
+		});
+	}
+	return records;
+}
+
+async function gitChangesForProjection(
+	ctx: QueryCtx | MutationCtx,
+	projection: Doc<"catalogProjections">,
+): Promise<Doc<"catalogProjectionGitChanges">[]> {
+	const rows = await ctx.db
+		.query("catalogProjectionGitChanges")
+		.withIndex("by_projection_and_isSource", (q) =>
+			q.eq("projectionId", projection._id).eq("isSource", true),
+		)
+		.take(MAX_WORKING_CATALOG_ROWS + 1);
+	if (rows.length > MAX_WORKING_CATALOG_ROWS) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message:
+				"Catalog Workspace source-change evidence exceeds its projection envelope.",
+		});
+	}
+	return rows;
+}
+
+function assertWorkspaceEnvelope(
+	state: Doc<"catalogWorkspaceStates"> | null,
+	heads: readonly Doc<"catalogWorkspaceValueHeads">[],
+): void {
+	const byteLength = heads.reduce(
+		(total, head) => total + valueHeadByteLength(head),
+		0,
+	);
+	if (
+		byteLength > MAX_CATALOG_WORKSPACE_VALUE_HEAD_BYTES ||
+		heads.length > MAX_CATALOG_WORKSPACE_VALUE_HEADS ||
+		(state === null && heads.length > 0) ||
+		(state !== null &&
+			(!Number.isInteger(state.valueHeadCount) ||
+				!Number.isInteger(state.valueHeadByteLength) ||
+				!Number.isSafeInteger(state.reconciliationGeneration) ||
+				state.valueHeadCount < 0 ||
+				state.valueHeadByteLength < 0 ||
+				state.reconciliationGeneration < 0 ||
+				state.valueHeadCount !== heads.length ||
+				state.valueHeadByteLength !== byteLength))
+	) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message:
+				"Catalog Workspace does not match its declared value-head envelope.",
+		});
+	}
+}
+
+function assertDecisionEnvelope(
+	state: Doc<"catalogWorkspaceDecisionStates"> | null,
+	records: readonly CatalogWorkspaceDecisionRecord[],
+): void {
+	const byteLength = records.reduce(
+		(total, record) => total + decisionRecordByteLength(record),
+		0,
+	);
+	if (
+		byteLength > MAX_CATALOG_WORKSPACE_DECISION_RECORD_BYTES ||
+		records.length > MAX_CATALOG_WORKSPACE_DECISION_RECORDS ||
+		(state === null && records.length > 0) ||
+		(state !== null &&
+			(!Number.isInteger(state.decisionRecordCount) ||
+				!Number.isInteger(state.decisionRecordByteLength) ||
+				state.decisionRecordCount < 0 ||
+				state.decisionRecordByteLength < 0 ||
+				state.decisionRecordCount !== records.length ||
+				state.decisionRecordByteLength !== byteLength))
+	) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message:
+				"Catalog Workspace does not match its declared decision-record envelope.",
+		});
+	}
+}
+
+function headMap(
+	heads: readonly Doc<"catalogWorkspaceValueHeads">[],
+): Map<string, Doc<"catalogWorkspaceValueHeads">> {
+	const result = new Map<string, Doc<"catalogWorkspaceValueHeads">>();
+	for (const head of heads) {
+		const identity = valueIdentity(head);
+		if (result.has(identity)) {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Catalog Workspace contains duplicate Locale value heads.",
+			});
+		}
+		result.set(identity, head);
+	}
+	return result;
+}
+
+function assertIntentionalBlankReason(reason: string): string {
+	const trimmed = reason.trim();
+	if (trimmed.length === 0) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "An Intentional Blank needs a non-empty reason.",
+		});
+	}
+	if (
+		new TextEncoder().encode(trimmed).byteLength >
+		MAX_INTENTIONAL_BLANK_REASON_BYTES
+	) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message:
+				"An Intentional Blank reason exceeds the supported byte envelope.",
+		});
+	}
+	return trimmed;
+}
+
+/** Persist exact human decisions without replacing evidence for different
+ * content. The collection envelope is updated once, which makes one-value and
+ * bounded batch confirmation share the same atomic evidence path. */
+export async function recordDecisions(
+	ctx: MutationCtx,
+	input: {
+		projectId: Id<"projects">;
+		state: Doc<"catalogWorkspaceDecisionStates"> | null;
+		next: readonly CatalogWorkspaceDecisionRecordInput[];
+	},
+): Promise<void> {
+	const identities = new Set<string>();
+	for (const next of input.next) {
+		const identity = decisionIdentity(next);
+		if (identities.has(identity)) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "A decision batch contains a duplicate Locale value.",
+			});
+		}
+		identities.add(identity);
+	}
+	const previous = await Promise.all(
+		input.next.map(
+			async (next) =>
+				await ctx.db
+					.query("catalogWorkspaceDecisionRecords")
+					.withIndex("by_value_identity", (q) =>
+						q
+							.eq("projectId", input.projectId)
+							.eq("messageId", next.messageId)
+							.eq("localeId", next.localeId)
+							.eq("sourceFingerprint", next.sourceFingerprint)
+							.eq("valueFingerprint", next.valueFingerprint),
+					)
+					.unique(),
+		),
+	);
+	if (!input.state && previous.some((record) => record !== null)) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message:
+				"Catalog Workspace decision records are missing their project envelope.",
+		});
+	}
+	const additions = input.next.filter((_, index) => previous[index] === null);
+	if (additions.length === 0) return;
+	const additionalByteLength = additions.reduce(
+		(total, next) => total + decisionRecordByteLength(next),
+		0,
+	);
+	const nextCount = (input.state?.decisionRecordCount ?? 0) + additions.length;
+	const nextTotalByteLength =
+		(input.state?.decisionRecordByteLength ?? 0) + additionalByteLength;
+	if (
+		nextCount > MAX_CATALOG_WORKSPACE_DECISION_RECORDS ||
+		nextTotalByteLength > MAX_CATALOG_WORKSPACE_DECISION_RECORD_BYTES
+	) {
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message:
+				"Catalog Workspace exceeds its supported decision-record envelope.",
+		});
+	}
+	for (const next of additions) {
+		await ctx.db.insert("catalogWorkspaceDecisionRecords", {
+			projectId: input.projectId,
+			...next,
+		});
+	}
+	if (input.state) {
+		await ctx.db.patch(input.state._id, {
+			decisionRecordCount: nextCount,
+			decisionRecordByteLength: nextTotalByteLength,
+		});
+	} else {
+		await ctx.db.insert("catalogWorkspaceDecisionStates", {
+			projectId: input.projectId,
+			decisionRecordCount: nextCount,
+			decisionRecordByteLength: nextTotalByteLength,
+		});
+	}
+}
+
+async function recordDecision(
+	ctx: MutationCtx,
+	input: {
+		projectId: Id<"projects">;
+		state: Doc<"catalogWorkspaceDecisionStates"> | null;
+		next: CatalogWorkspaceDecisionRecordInput;
+	},
+): Promise<void> {
+	await recordDecisions(ctx, { ...input, next: [input.next] });
+}
+
+async function upsertValueHead(
+	ctx: MutationCtx,
+	input: {
+		projectId: Id<"projects">;
+		state: Doc<"catalogWorkspaceStates"> | null;
+		previous: Doc<"catalogWorkspaceValueHeads"> | null;
+		next: CatalogWorkspaceValueHeadInput;
+	},
+): Promise<void> {
+	if (!input.state && input.previous) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message:
+				"Catalog Workspace value heads are missing their project envelope.",
+		});
+	}
+	const previousByteLength = input.previous
+		? valueHeadByteLength(input.previous)
+		: 0;
+	const nextByteLength = valueHeadByteLength(input.next);
+	const nextCount =
+		(input.state?.valueHeadCount ?? 0) + (input.previous ? 0 : 1);
+	const nextTotalByteLength =
+		(input.state?.valueHeadByteLength ?? 0) -
+		previousByteLength +
+		nextByteLength;
+	if (
+		nextCount > MAX_CATALOG_WORKSPACE_VALUE_HEADS ||
+		nextTotalByteLength > MAX_CATALOG_WORKSPACE_VALUE_HEAD_BYTES
+	) {
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message: "Catalog Workspace exceeds its supported value-head envelope.",
+		});
+	}
+	if (input.previous) {
+		await ctx.db.patch(input.previous._id, input.next);
+	} else {
+		await ctx.db.insert("catalogWorkspaceValueHeads", {
+			projectId: input.projectId,
+			...input.next,
+		});
+	}
+	if (input.state) {
+		await ctx.db.patch(input.state._id, {
+			valueHeadCount: nextCount,
+			valueHeadByteLength: nextTotalByteLength,
+		});
+	} else {
+		await ctx.db.insert("catalogWorkspaceStates", {
+			projectId: input.projectId,
+			valueHeadCount: nextCount,
+			valueHeadByteLength: nextTotalByteLength,
+			reconciliationGeneration: 0,
+		});
+	}
+}
+
+async function ensureWorkspaceState(
+	ctx: MutationCtx,
+	projectId: Id<"projects">,
+	state: Doc<"catalogWorkspaceStates"> | null,
+): Promise<void> {
+	if (state) return;
+	await ctx.db.insert("catalogWorkspaceStates", {
+		projectId,
+		valueHeadCount: 0,
+		valueHeadByteLength: 0,
+		reconciliationGeneration: 0,
+	});
+}
+
+function assertReconciliationGeneration(generation: number): void {
+	if (!Number.isSafeInteger(generation) || generation < 0) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message: "Catalog Workspace has an invalid reconciliation generation.",
+		});
+	}
+}
+
+/** Advance the retained-value lifecycle with the Baseline publication that
+ * changed its Git evidence. Cleanup is intentionally deferred and bounded:
+ * visibility compares fingerprints immediately, while this worker reclaims
+ * obsolete durable heads without making publication depend on their volume. */
+export async function advanceWorkspaceReconciliationGeneration(
+	ctx: MutationCtx,
+	projectId: Id<"projects">,
+): Promise<void> {
+	const state = await workspaceStateFor(ctx, projectId);
+	if (!state) return;
+	assertReconciliationGeneration(state.reconciliationGeneration);
+	await ctx.db.patch(state._id, {
+		reconciliationGeneration: state.reconciliationGeneration + 1,
+	});
+	await ctx.scheduler.runAfter(
+		0,
+		internal.catalogWorkspace.reconcileValueHeads,
+		{ projectId },
+	);
+}
+
+export const reconcileValueHeads = internalMutation({
+	args: { projectId: v.id("projects") },
+	handler: async (ctx, args) => {
+		const state = await workspaceStateFor(ctx, args.projectId);
+		if (!state) return null;
+		assertReconciliationGeneration(state.reconciliationGeneration);
+		const projection = await activeProjectionFor(ctx, args.projectId);
+		if (!projection) {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message:
+					"Catalog Workspace cannot reconcile heads without an active Baseline Catalog.",
+			});
+		}
+		const stale = await ctx.db
+			.query("catalogWorkspaceValueHeads")
+			.withIndex("by_project_and_reconciliationGeneration", (q) =>
+				q
+					.eq("projectId", args.projectId)
+					.lt("reconciliationGeneration", state.reconciliationGeneration),
+			)
+			.take(MAX_RECONCILED_VALUE_HEADS_PER_MUTATION + 1);
+		const heads = stale.slice(0, MAX_RECONCILED_VALUE_HEADS_PER_MUTATION);
+		let nextHeadCount = state.valueHeadCount;
+		let nextHeadByteLength = state.valueHeadByteLength;
+		for (const head of heads) {
+			const target = await ctx.db
+				.query("catalogProjectionMessages")
+				.withIndex("by_projection_and_messageId_and_localeId", (q) =>
+					q
+						.eq("projectionId", projection._id)
+						.eq("messageId", head.messageId)
+						.eq("localeId", head.localeId),
+				)
+				.unique();
+			const previousByteLength = valueHeadByteLength(head);
+			if (
+				!target ||
+				target.isSource ||
+				target.gitValueFingerprint !== head.basisGitValueFingerprint ||
+				(target.gitValueRevision ?? 0) !== head.basisGitValueRevision
+			) {
+				await ctx.db.delete(head._id);
+				nextHeadCount--;
+				nextHeadByteLength -= previousByteLength;
+				continue;
+			}
+			const reconciled = {
+				...head,
+				reconciliationGeneration: state.reconciliationGeneration,
+			};
+			await ctx.db.patch(head._id, {
+				reconciliationGeneration: state.reconciliationGeneration,
+			});
+			nextHeadByteLength +=
+				valueHeadByteLength(reconciled) - previousByteLength;
+		}
+		if (nextHeadCount < 0 || nextHeadByteLength < 0) {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Catalog Workspace reconciled an invalid value-head envelope.",
+			});
+		}
+		if (
+			nextHeadCount !== state.valueHeadCount ||
+			nextHeadByteLength !== state.valueHeadByteLength
+		) {
+			await ctx.db.patch(state._id, {
+				valueHeadCount: nextHeadCount,
+				valueHeadByteLength: nextHeadByteLength,
+			});
+		}
+		if (stale.length > MAX_RECONCILED_VALUE_HEADS_PER_MUTATION) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.catalogWorkspace.reconcileValueHeads,
+				args,
+			);
+		}
+		return null;
+	},
+});
+
+async function readOrdinaryImportConfirmationPlan(
+	ctx: QueryCtx | MutationCtx,
+	projectId: Id<"projects">,
+) {
+	const active = await activeWorkingCatalog(ctx, projectId);
+	if (!active) return null;
+	const snapshotId = active.projection.snapshotId;
+	if (!snapshotId) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message:
+				"Ordinary import confirmation requires a published Baseline Snapshot.",
+		});
+	}
+	const [state, heads, decisionState, decisions, sourceProposalHeads] =
+		await Promise.all([
+			workspaceStateFor(ctx, projectId),
+			workspaceHeadsFor(ctx, projectId),
+			decisionStateFor(ctx, projectId),
+			decisionRecordsFor(ctx, projectId),
+			sourceProposalHeadsFor(ctx, projectId),
+		]);
+	assertWorkspaceEnvelope(state, heads);
+	assertDecisionEnvelope(decisionState, decisions);
+	const sourceProposalResolutions = await sourceProposalStatusesFor(
+		ctx,
+		sourceProposalHeads,
+	);
+	const sourceByMessageId = new Map(
+		active.rows
+			.filter((row) => row.isSource)
+			.map((row) => [row.messageId, row] as const),
+	);
+	const pendingSourceMessageIds = new Set(
+		sourceProposalHeads.flatMap((head) => {
+			const source = sourceByMessageId.get(head.messageId);
+			return source &&
+				isCurrentSourceProposalHeadForSource(source, head) &&
+				!sourceProposalResolutions.has(head.proposalId)
+				? [head.messageId]
+				: [];
+		}),
+	);
+	const rows = await Promise.all(
+		active.rows.map(async (row) => ({
+			...row,
+			valueFingerprint: row.valueFingerprint ?? (await sha256Hex(row.value)),
+		})),
+	);
+	return {
+		projection: active.projection,
+		snapshotId,
+		rows,
+		state,
+		decisionState,
+		decisions,
+		plan: ordinaryImportConfirmationPlan({
+			rows,
+			heads,
+			decisions,
+			pendingSourceMessageIds,
+		}),
+	};
+}
+
+async function applyOrdinaryImportConfirmationBatch(
+	ctx: MutationCtx,
+	input: {
+		projectId: Id<"projects">;
+		expectedProjectionId: Id<"catalogProjections">;
+		candidates?: readonly OrdinaryImportConfirmationCandidate[];
+		nextLimit?: number;
+		actor: Actor;
+	},
+): Promise<{ confirmed: number; alreadyConfirmed: number; remaining: number }> {
+	if ((input.candidates === undefined) === (input.nextLimit === undefined)) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message: "An ordinary confirmation batch needs one selection mode.",
+		});
+	}
+	const requestedCount = input.candidates?.length ?? input.nextLimit ?? 0;
+	if (
+		!Number.isSafeInteger(requestedCount) ||
+		requestedCount < 0 ||
+		requestedCount > MAX_ORDINARY_CONFIRMATIONS_PER_MUTATION
+	) {
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message: `Confirm at most ${MAX_ORDINARY_CONFIRMATIONS_PER_MUTATION} ordinary imports per batch.`,
+		});
+	}
+	const result = await readOrdinaryImportConfirmationPlan(ctx, input.projectId);
+	if (!result || result.projection._id !== input.expectedProjectionId) {
+		throw new ConvexError({
+			code: "CONFLICT",
+			message:
+				"The Baseline Catalog changed after this confirmation preview was prepared.",
+		});
+	}
+	const candidates =
+		input.candidates ?? result.plan.candidates.slice(0, input.nextLimit);
+	const eligibleByIdentity = new Map(
+		result.plan.candidates.map((candidate) => [
+			ordinaryImportConfirmationCandidateIdentity(candidate),
+			candidate,
+		]),
+	);
+	const decisionsByIdentity = decisionRecordMap(result.decisions);
+	const requestedIdentities = new Set<string>();
+	const additions: OrdinaryImportConfirmationCandidate[] = [];
+	let alreadyConfirmed = 0;
+	for (const candidate of candidates) {
+		const identity = ordinaryImportConfirmationCandidateIdentity(candidate);
+		if (requestedIdentities.has(identity)) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "A confirmation batch contains a duplicate Locale value.",
+			});
+		}
+		requestedIdentities.add(identity);
+		if (eligibleByIdentity.has(identity)) {
+			additions.push(candidate);
+			continue;
+		}
+		if (decisionsByIdentity.get(identity)?.kind === "translatorConfirmation") {
+			alreadyConfirmed++;
+			continue;
+		}
+		throw new ConvexError({
+			code: "CONFLICT",
+			message:
+				"An ordinary import no longer matches the reviewed confirmation policy.",
+		});
+	}
+
+	const rowByValue = new Map(
+		result.rows.map((row) => [valueIdentity(row), row] as const),
+	);
+	const sourceByMessageId = new Map(
+		result.rows
+			.filter((row) => row.isSource)
+			.map((row) => [row.messageId, row] as const),
+	);
+	for (const candidate of additions) {
+		const target = rowByValue.get(valueIdentity(candidate));
+		const source = sourceByMessageId.get(candidate.messageId);
+		if (!target || target.isSource || !source?.isSource) {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message:
+					"An ordinary import candidate is missing from the active Baseline Catalog.",
+			});
+		}
+		assertTargetValueContract({
+			messageId: candidate.messageId,
+			localeCode: target.localeCode,
+			value: target.value,
+			source,
+		});
+	}
+
+	if (additions.length > 0) {
+		await ensureWorkspaceState(ctx, input.projectId, result.state);
+		const recordedAt = now();
+		await recordDecisions(ctx, {
+			projectId: input.projectId,
+			state: result.decisionState,
+			next: additions.map((candidate) => ({
+				...candidate,
+				kind: "translatorConfirmation" as const,
+				recordedBy: input.actor,
+				recordedAt,
+			})),
+		});
+		// The confirmed keys leave the ordinary-import summary at once.
+		await recomputeNavigationRows(ctx, {
+			projectId: input.projectId,
+			messageIds: [
+				...new Set(additions.map((candidate) => candidate.messageId)),
+			],
+		});
+	}
+	return {
+		confirmed: additions.length,
+		alreadyConfirmed,
+		remaining: result.plan.counts.eligible - additions.length,
+	};
+}
+
+/** Admin automation for an explicitly approved Baseline bootstrap. It records
+ * a truthful system actor and never expands beyond the same ordinary-v1 policy
+ * available to human editors. */
+export const confirmNextOrdinaryImports = internalMutation({
+	args: {
+		projectId: v.id("projects"),
+		expectedProjectionId: v.id("catalogProjections"),
+		limit: v.number(),
+	},
+	returns: v.object({
+		confirmed: v.number(),
+		alreadyConfirmed: v.number(),
+		remaining: v.number(),
+	}),
+	handler: async (ctx, args) => {
+		if (
+			!Number.isSafeInteger(args.limit) ||
+			args.limit < 1 ||
+			args.limit > MAX_ORDINARY_CONFIRMATIONS_PER_MUTATION
+		) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "The ordinary import confirmation batch size is invalid.",
+			});
+		}
+		return await applyOrdinaryImportConfirmationBatch(ctx, {
+			projectId: args.projectId,
+			expectedProjectionId: args.expectedProjectionId,
+			nextLimit: args.limit,
+			actor: { kind: "system", id: ORDINARY_IMPORT_CONFIRMATION_POLICY },
+		});
+	},
+});
+
+/** Apply one reviewed Agent Translation Proposal value through the same
+ * concurrency and contract checks as a direct Catalog Workspace edit. The
+ * proposal module owns evidence and review history; this helper owns the one
+ * current-value write so the two paths cannot drift. */
+export async function applyAgentTargetValue(
+	ctx: MutationCtx,
+	input: {
+		projectId: Id<"projects">;
+		messageId: string;
+		localeId: Id<"locales">;
+		value: string;
+		expectedProjectionId: Id<"catalogProjections">;
+		expectedSnapshotId: Id<"sourceSnapshots">;
+		expectedGitValueFingerprint: string;
+		expectedGitValueRevision: number;
+		expectedWorkspaceRevision: number;
+		expectedSourceFingerprint: string;
+		actor: { kind: "user"; id: string };
+		intentionalBlankReason?: string;
+	},
+): Promise<{ workspaceRevision: number }> {
+	if (
+		!Number.isSafeInteger(input.expectedGitValueRevision) ||
+		input.expectedGitValueRevision < 0 ||
+		!Number.isInteger(input.expectedWorkspaceRevision) ||
+		input.expectedWorkspaceRevision < 0
+	) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Catalog Workspace revisions must be non-negative integers.",
+		});
+	}
+	const [project, projection] = await Promise.all([
+		ctx.db.get(input.projectId),
+		activeProjectionFor(ctx, input.projectId),
+	]);
+	const sourceLocaleId = project?.sourceLocaleId;
+	if (!project || !sourceLocaleId || !projection) {
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message: "No active Baseline Catalog is available for this project.",
+		});
+	}
+	if (
+		projection._id !== input.expectedProjectionId ||
+		projection.snapshotId !== input.expectedSnapshotId
+	) {
+		throw new ConvexError({
+			code: "STALE_BASIS",
+			message: "The Baseline Catalog changed after this proposal revision.",
+		});
+	}
+	const [source, target] = await Promise.all([
+		ctx.db
+			.query("catalogProjectionMessages")
+			.withIndex("by_projection_and_messageId_and_localeId", (q) =>
+				q
+					.eq("projectionId", projection._id)
+					.eq("messageId", input.messageId)
+					.eq("localeId", sourceLocaleId),
+			)
+			.unique(),
+		ctx.db
+			.query("catalogProjectionMessages")
+			.withIndex("by_projection_and_messageId_and_localeId", (q) =>
+				q
+					.eq("projectionId", projection._id)
+					.eq("messageId", input.messageId)
+					.eq("localeId", input.localeId),
+			)
+			.unique(),
+	]);
+	if (!source?.isSource || !target || target.isSource) {
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message:
+				"The reviewed proposal no longer addresses an active target Locale value.",
+		});
+	}
+	if (
+		target.gitValueFingerprint === undefined ||
+		target.gitValueFingerprint !== input.expectedGitValueFingerprint ||
+		(target.gitValueRevision ?? 0) !== input.expectedGitValueRevision
+	) {
+		throw new ConvexError({
+			code: "STALE_BASIS",
+			message: "The Git target value changed after this proposal revision.",
+		});
+	}
+	const sourceProposalHead = await sourceProposalHeadFor(
+		ctx,
+		input.projectId,
+		input.messageId,
+	);
+	const sourceProposalResolution = sourceProposalHead
+		? await publishedResolutionFor(ctx, {
+				_id: sourceProposalHead.proposalId,
+				projectId: input.projectId,
+				messageId: input.messageId,
+			})
+		: null;
+	const effectiveSource =
+		isCurrentSourceProposalHeadForSource(source, sourceProposalHead) &&
+		!sourceProposalResolution
+			? {
+					...source,
+					value: sourceProposalHead.sourceValue,
+					valueFingerprint: sourceProposalHead.sourceFingerprint,
+					sourceFingerprint: sourceProposalHead.sourceFingerprint,
+				}
+			: source;
+	if (effectiveSource.sourceFingerprint !== input.expectedSourceFingerprint) {
+		throw new ConvexError({
+			code: "STALE_BASIS",
+			message: "The Source Contract changed after this proposal revision.",
+		});
+	}
+	const [state, head, decisionState] = await Promise.all([
+		workspaceStateFor(ctx, input.projectId),
+		ctx.db
+			.query("catalogWorkspaceValueHeads")
+			.withIndex("by_project_and_messageId_and_localeId", (q) =>
+				q
+					.eq("projectId", input.projectId)
+					.eq("messageId", input.messageId)
+					.eq("localeId", input.localeId),
+			)
+			.unique(),
+		decisionStateFor(ctx, input.projectId),
+	]);
+	const currentHead = isCurrentHeadForRow(target, head) ? head : undefined;
+	if ((currentHead?.revision ?? 0) !== input.expectedWorkspaceRevision) {
+		throw new ConvexError({
+			code: "STALE_BASIS",
+			message:
+				"The Catalog Workspace value changed after this proposal revision.",
+		});
+	}
+	const timestamp = now();
+	const isIntentionalBlank = input.intentionalBlankReason !== undefined;
+	const intentionalBlankReason = input.intentionalBlankReason;
+	if (isIntentionalBlank) {
+		if (effectiveSource.value.length === 0) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"An Intentional Blank is only meaningful for a non-empty source value.",
+			});
+		}
+		if (intentionalBlankReason === undefined) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "An Intentional Blank requires a reason.",
+			});
+		}
+		assertIntentionalBlankReason(intentionalBlankReason);
+	} else {
+		if (input.value.length === 0) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "A reviewed proposal value cannot be empty.",
+			});
+		}
+		if (
+			new TextEncoder().encode(input.value).byteLength >
+			MAX_CATALOG_WORKSPACE_VALUE_BYTES
+		) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"One Catalog Workspace value exceeds the supported byte envelope.",
+			});
+		}
+		assertTargetValueContract({
+			messageId: input.messageId,
+			localeCode: target.localeCode,
+			value: input.value,
+			source: effectiveSource,
+		});
+	}
+	const nextRevision = (head?.revision ?? 0) + 1;
+	const value = isIntentionalBlank ? "" : input.value;
+	const valueFingerprint = await sha256Hex(value);
+	const nextHead: CatalogWorkspaceValueHeadInput = {
+		messageId: input.messageId,
+		localeId: input.localeId,
+		value,
+		valueFingerprint,
+		sourceFingerprint: effectiveSource.sourceFingerprint,
+		basisGitValueFingerprint: target.gitValueFingerprint,
+		basisGitValueRevision: target.gitValueRevision ?? 0,
+		revision: nextRevision,
+		reconciliationGeneration: state?.reconciliationGeneration ?? 0,
+		updatedBy: input.actor,
+		updatedAt: timestamp,
+	};
+	await upsertValueHead(ctx, {
+		projectId: input.projectId,
+		state,
+		previous: head,
+		next: nextHead,
+	});
+	const valueBasis = {
+		messageId: input.messageId,
+		localeId: input.localeId,
+		sourceFingerprint: effectiveSource.sourceFingerprint,
+		recordedBy: input.actor,
+		recordedAt: timestamp,
+		valueFingerprint,
+	};
+	if (isIntentionalBlank) {
+		if (intentionalBlankReason === undefined) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "An Intentional Blank requires a reason.",
+			});
+		}
+		await recordDecision(ctx, {
+			projectId: input.projectId,
+			state: decisionState,
+			next: {
+				...valueBasis,
+				kind: "intentionalBlank",
+				reason: intentionalBlankReason,
+			},
+		});
+	} else {
+		await recordDecision(ctx, {
+			projectId: input.projectId,
+			state: decisionState,
+			next: { ...valueBasis, kind: "translatorConfirmation" },
+		});
+	}
+	// Keep the Navigation Index atomically current with the accepted proposal.
+	await recomputeNavigationRows(ctx, {
+		projectId: input.projectId,
+		messageIds: [input.messageId],
+	});
+	return { workspaceRevision: nextRevision };
+}
+
+type CatalogWorkspaceCommitInput = {
+	projectId: Id<"projects">;
+	messageId: string;
+	localeId: Id<"locales">;
+	intent:
+		| {
+				kind: "save";
+				value: string;
+		  }
+		| {
+				kind: "confirm";
+		  }
+		| {
+				kind: "intentionalBlank";
+				reason: string;
+		  };
+	expectedGitValueFingerprint: string;
+	expectedGitValueRevision: number;
+	expectedWorkspaceRevision: number;
+	expectedSourceFingerprint?: string;
+};
+
+/** The whole compare-and-save commit body, extracted so the mutation can run
+ * the Navigation Index projector over the touched key in the same transaction
+ * after the canonical write lands. */
+async function commitCatalogWorkspaceValue(
+	ctx: MutationCtx,
+	args: CatalogWorkspaceCommitInput,
+): Promise<{ workspaceRevision: number; sourceFingerprint: string }> {
+	const { userId } = await requireEditor(ctx, args.projectId);
+	if (
+		!Number.isSafeInteger(args.expectedGitValueRevision) ||
+		args.expectedGitValueRevision < 0 ||
+		!Number.isInteger(args.expectedWorkspaceRevision) ||
+		args.expectedWorkspaceRevision < 0
+	) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Catalog Workspace revisions must be non-negative integers.",
+		});
+	}
+	const [project, projection] = await Promise.all([
+		ctx.db.get(args.projectId),
+		activeProjectionFor(ctx, args.projectId),
+	]);
+	const sourceLocaleId = project?.sourceLocaleId;
+	if (!project || !sourceLocaleId || !projection) {
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message: "No active Baseline Catalog is available for this project.",
+		});
+	}
+	const [source, target] = await Promise.all([
+		ctx.db
+			.query("catalogProjectionMessages")
+			.withIndex("by_projection_and_messageId_and_localeId", (q) =>
+				q
+					.eq("projectionId", projection._id)
+					.eq("messageId", args.messageId)
+					.eq("localeId", sourceLocaleId),
+			)
+			.unique(),
+		ctx.db
+			.query("catalogProjectionMessages")
+			.withIndex("by_projection_and_messageId_and_localeId", (q) =>
+				q
+					.eq("projectionId", projection._id)
+					.eq("messageId", args.messageId)
+					.eq("localeId", args.localeId),
+			)
+			.unique(),
+	]);
+	if (!source?.isSource || !target) {
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message:
+				"The requested Catalog Workspace value is not in the active Baseline Catalog.",
+		});
+	}
+	if (target.isSource) {
+		if (target.localeId !== sourceLocaleId || args.intent.kind !== "save") {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"A Source Proposal changes its value only; confirmations and Intentional Blanks apply to targets.",
+			});
+		}
+		const sourceGitValueFingerprint =
+			source.gitValueFingerprint ?? source.sourceFingerprint;
+		if (
+			sourceGitValueFingerprint !== args.expectedGitValueFingerprint ||
+			(source.gitValueRevision ?? 0) !== args.expectedGitValueRevision
+		) {
+			throw new ConvexError({
+				code: "CONFLICT",
+				message:
+					"The Git source value changed before this Source Proposal could be saved.",
+			});
+		}
+		const sourceProposalHead = await sourceProposalHeadFor(
+			ctx,
+			args.projectId,
+			args.messageId,
+		);
+		const sourceProposalResolution = sourceProposalHead
+			? await publishedResolutionFor(ctx, {
+					_id: sourceProposalHead.proposalId,
+					projectId: args.projectId,
+					messageId: args.messageId,
+				})
+			: null;
+		const currentSourceProposal =
+			isCurrentSourceProposalHeadForSource(source, sourceProposalHead) &&
+			!sourceProposalResolution
+				? sourceProposalHead
+				: undefined;
+		if (
+			(currentSourceProposal?.revision ?? 0) !== args.expectedWorkspaceRevision
+		) {
+			throw new ConvexError({
+				code: "CONFLICT",
+				message:
+					"The Source Proposal changed before this Catalog Workspace edit could be saved.",
+			});
+		}
+		if (
+			new TextEncoder().encode(args.intent.value).byteLength >
+			MAX_SOURCE_PROPOSAL_VALUE_BYTES
+		) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"One Source Proposal value exceeds the supported byte envelope.",
+			});
+		}
+		assertSourceProposalValueContract({
+			messageId: args.messageId,
+			localeCode: source.localeCode,
+			value: args.intent.value,
+			source,
+		});
+		if (!projection.snapshotId) {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "A Source Proposal requires a published Baseline Snapshot.",
+			});
+		}
+		const sourceFingerprint = await sha256Hex(args.intent.value);
+		const receipt = await saveSourceProposal(ctx, {
+			project,
+			messageId: args.messageId,
+			sourceValue: args.intent.value,
+			sourceFingerprint,
+			basisGitValueFingerprint: sourceGitValueFingerprint,
+			basisGitValueRevision: source.gitValueRevision ?? 0,
+			evidenceSnapshotId: projection.snapshotId,
+			actor: { kind: "user", id: userId },
+		});
+		return { ...receipt, sourceFingerprint };
+	}
+	if (
+		target.gitValueFingerprint === undefined ||
+		target.gitValueFingerprint !== args.expectedGitValueFingerprint ||
+		(target.gitValueRevision ?? 0) !== args.expectedGitValueRevision
+	) {
+		throw new ConvexError({
+			code: "CONFLICT",
+			message:
+				"The Git value changed before this Catalog Workspace edit could be saved.",
+		});
+	}
+	const sourceProposalHead = await sourceProposalHeadFor(
+		ctx,
+		args.projectId,
+		args.messageId,
+	);
+	const sourceProposalResolution = sourceProposalHead
+		? await publishedResolutionFor(ctx, {
+				_id: sourceProposalHead.proposalId,
+				projectId: args.projectId,
+				messageId: args.messageId,
+			})
+		: null;
+	const effectiveSource =
+		isCurrentSourceProposalHeadForSource(source, sourceProposalHead) &&
+		!sourceProposalResolution
+			? {
+					...source,
+					value: sourceProposalHead.sourceValue,
+					valueFingerprint: sourceProposalHead.sourceFingerprint,
+					sourceFingerprint: sourceProposalHead.sourceFingerprint,
+				}
+			: source;
+	if (
+		args.expectedSourceFingerprint === undefined ||
+		args.expectedSourceFingerprint !== effectiveSource.sourceFingerprint
+	) {
+		throw new ConvexError({
+			code: "CONFLICT",
+			message:
+				"The source value changed before this Catalog Workspace edit could be saved.",
+		});
+	}
+	const targetValueFingerprint =
+		target.valueFingerprint ?? (await sha256Hex(target.value));
+	const [state, head, decisionState] = await Promise.all([
+		workspaceStateFor(ctx, args.projectId),
+		ctx.db
+			.query("catalogWorkspaceValueHeads")
+			.withIndex("by_project_and_messageId_and_localeId", (q) =>
+				q
+					.eq("projectId", args.projectId)
+					.eq("messageId", args.messageId)
+					.eq("localeId", args.localeId),
+			)
+			.unique(),
+		decisionStateFor(ctx, args.projectId),
+	]);
+	let currentHead = isCurrentHeadForRow(target, head) ? head : undefined;
+	if ((currentHead?.revision ?? 0) !== args.expectedWorkspaceRevision) {
+		throw new ConvexError({
+			code: "CONFLICT",
+			message:
+				"The Catalog Workspace value changed before this edit could be saved.",
+		});
+	}
+	const timestamp = now();
+	const currentValue = currentHead?.value ?? target.value;
+	const currentValueFingerprint =
+		currentHead?.valueFingerprint ??
+		(currentHead ? await sha256Hex(currentHead.value) : targetValueFingerprint);
+	const reconciliationGeneration = state?.reconciliationGeneration ?? 0;
+	const actor = { kind: "user" as const, id: userId };
+	const valueBasis = {
+		messageId: args.messageId,
+		localeId: args.localeId,
+		sourceFingerprint: effectiveSource.sourceFingerprint,
+		recordedBy: actor,
+		recordedAt: timestamp,
+	};
+
+	if (args.intent.kind === "confirm") {
+		if (currentValue.length === 0) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"An empty target remains Waiting until an Intentional Blank records its reason.",
+			});
+		}
+		assertTargetValueContract({
+			messageId: args.messageId,
+			localeCode: target.localeCode,
+			value: currentValue,
+			source: effectiveSource,
+		});
+		if (currentHead && currentHead.valueFingerprint === undefined) {
+			await upsertValueHead(ctx, {
+				projectId: args.projectId,
+				state,
+				previous: head,
+				next: { ...currentHead, valueFingerprint: currentValueFingerprint },
+			});
+			currentHead = {
+				...currentHead,
+				valueFingerprint: currentValueFingerprint,
+			};
+		}
+		await ensureWorkspaceState(ctx, args.projectId, state);
+		await recordDecision(ctx, {
+			projectId: args.projectId,
+			state: decisionState,
+			next: {
+				...valueBasis,
+				kind: "translatorConfirmation",
+				valueFingerprint: currentValueFingerprint,
+			},
+		});
+		return {
+			workspaceRevision: currentHead?.revision ?? 0,
+			sourceFingerprint: effectiveSource.sourceFingerprint,
+		};
+	}
+
+	if (args.intent.kind === "save") {
+		if (args.intent.value.length === 0) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"An empty target remains Waiting until an Intentional Blank records its reason.",
+			});
+		}
+		if (
+			new TextEncoder().encode(args.intent.value).byteLength >
+			MAX_CATALOG_WORKSPACE_VALUE_BYTES
+		) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"One Catalog Workspace value exceeds the supported byte envelope.",
+			});
+		}
+		assertTargetValueContract({
+			messageId: args.messageId,
+			localeCode: target.localeCode,
+			value: args.intent.value,
+			source: effectiveSource,
+		});
+		const nextRevision = (head?.revision ?? 0) + 1;
+		const valueFingerprint = await sha256Hex(args.intent.value);
+		const nextHead: CatalogWorkspaceValueHeadInput = {
+			messageId: args.messageId,
+			localeId: args.localeId,
+			value: args.intent.value,
+			valueFingerprint,
+			sourceFingerprint: effectiveSource.sourceFingerprint,
+			basisGitValueFingerprint: target.gitValueFingerprint,
+			basisGitValueRevision: target.gitValueRevision ?? 0,
+			revision: nextRevision,
+			reconciliationGeneration,
+			updatedBy: actor,
+			updatedAt: timestamp,
+		};
+		await upsertValueHead(ctx, {
+			projectId: args.projectId,
+			state,
+			previous: head,
+			next: nextHead,
+		});
+		await recordDecision(ctx, {
+			projectId: args.projectId,
+			state: decisionState,
+			next: {
+				...valueBasis,
+				kind: "translatorConfirmation",
+				valueFingerprint,
+			},
+		});
+		return {
+			workspaceRevision: nextRevision,
+			sourceFingerprint: effectiveSource.sourceFingerprint,
+		};
+	}
+
+	if (effectiveSource.value.length === 0) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message:
+				"An Intentional Blank is only meaningful for a non-empty source value.",
+		});
+	}
+	const reason = assertIntentionalBlankReason(args.intent.reason);
+	const nextRevision = (head?.revision ?? 0) + 1;
+	const valueFingerprint = await sha256Hex("");
+	const nextHead: CatalogWorkspaceValueHeadInput = {
+		messageId: args.messageId,
+		localeId: args.localeId,
+		value: "",
+		valueFingerprint,
+		sourceFingerprint: effectiveSource.sourceFingerprint,
+		basisGitValueFingerprint: target.gitValueFingerprint,
+		basisGitValueRevision: target.gitValueRevision ?? 0,
+		revision: nextRevision,
+		reconciliationGeneration,
+		updatedBy: actor,
+		updatedAt: timestamp,
+	};
+	await upsertValueHead(ctx, {
+		projectId: args.projectId,
+		state,
+		previous: head,
+		next: nextHead,
+	});
+	await recordDecision(ctx, {
+		projectId: args.projectId,
+		state: decisionState,
+		next: {
+			...valueBasis,
+			kind: "intentionalBlank",
+			valueFingerprint,
+			reason,
+		},
+	});
+	return {
+		workspaceRevision: nextRevision,
+		sourceFingerprint: effectiveSource.sourceFingerprint,
+	};
+}
+
+export const commit = mutation({
+	args: {
+		projectId: v.id("projects"),
+		messageId: v.string(),
+		localeId: v.id("locales"),
+		intent: commitIntentValidator,
+		expectedGitValueFingerprint: v.string(),
+		expectedGitValueRevision: v.number(),
+		expectedWorkspaceRevision: v.number(),
+		expectedSourceFingerprint: v.optional(v.string()),
+	},
+	returns: v.object({
+		workspaceRevision: v.number(),
+		sourceFingerprint: v.string(),
+	}),
+	handler: async (ctx, args) => {
+		const receipt = await commitCatalogWorkspaceValue(ctx, args);
+		await recomputeNavigationRows(ctx, {
+			projectId: args.projectId,
+			messageIds: [args.messageId],
+		});
+		return receipt;
+	},
+});

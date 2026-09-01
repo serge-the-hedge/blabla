@@ -140,4 +140,16 @@
 	html {
 		@apply font-sans;
 	}
+	html.dark {
+		color-scheme: dark;
+	}
+	button,
+	a,
+	[role="button"] {
+		touch-action: manipulation;
+	}
+	[data-slot="dropdown-menu-content"],
+	[data-slot="select-content"] {
+		overscroll-behavior: contain;
+	}
 }

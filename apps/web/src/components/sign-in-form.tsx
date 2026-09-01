@@ -15,7 +15,7 @@ import {
 } from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
 import { useForm } from "@tanstack/react-form";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -25,22 +25,17 @@ import { BrandWordmark } from "@/components/brand";
 import { authClient } from "@/lib/auth-client";
 import { api } from "@/lib/convex-api";
 
-export default function SignInForm({
-	onSwitchToSignUp,
-}: {
-	onSwitchToSignUp: () => void;
-}) {
-	const navigate = useNavigate({
-		from: "/",
-	});
+export default function SignInForm({ redirectTo }: { redirectTo: string }) {
+	const navigate = useNavigate();
 	const acceptPendingInvites = useMutation(api.projects.acceptPendingInvites);
 
 	async function finishSignIn() {
 		const result = await acceptPendingInvites().catch(() => ({ accepted: 0 }));
-		navigate({
-			to: "/projects",
+		await navigate({
+			href: redirectTo,
+			replace: true,
 		});
-		toast.success(result.accepted > 0 ? "Access granted" : "Signed in");
+		toast.success(result.accepted > 0 ? "Invitation accepted" : "Signed in");
 	}
 
 	const form = useForm({
@@ -154,7 +149,7 @@ export default function SignInForm({
 										{isSubmitting ? (
 											<Loader2
 												data-icon="inline-start"
-												className="animate-spin"
+												className="animate-spin motion-reduce:animate-none"
 											/>
 										) : null}
 										{isSubmitting ? "Signing in…" : "Sign in"}
@@ -166,10 +161,15 @@ export default function SignInForm({
 				</CardContent>
 				<CardFooter className="justify-center">
 					<Button
+						nativeButton={false}
 						variant="link"
-						type="button"
-						onClick={onSwitchToSignUp}
 						size="sm"
+						render={
+							<Link
+								to="/sign-in"
+								search={{ mode: "sign-up", redirect: redirectTo }}
+							/>
+						}
 					>
 						Need an account? Sign up
 					</Button>
