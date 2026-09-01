@@ -71,13 +71,15 @@ New preview deployments inherit project defaults. Configure these once:
 ```txt
 BETTER_AUTH_SECRET=<a preview-only secret>
 SITE_URL=https://flutte-web.vercel.app
-TRUSTED_ORIGINS=https://flutte-web.vercel.app,https://*.vercel.app
+TRUSTED_ORIGINS=https://flutte-web.vercel.app,https://flutte-*-imperceptibles-projects.vercel.app
 ```
 
 `BETTER_AUTH_URL` is optional. If absent, the backend uses Convex's own
-deployment-specific `CONVEX_SITE_URL`, which is correct for previews. The
-current email/password flow accepts Vercel preview origins; if redirect-based
-auth is added later, previews need a deliberate callback URL strategy.
+deployment-specific `CONVEX_SITE_URL`, which is correct for previews. Keep the
+preview wildcard constrained to this Vercel project and team: trusting
+`https://*.vercel.app` would admit deployments owned by unrelated accounts. If
+redirect-based auth is added later, previews need a deliberate callback URL
+strategy.
 
 Verify:
 
