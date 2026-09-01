@@ -423,6 +423,7 @@ class RepositorySyncAdapter {
       'ls-tree',
       '-r',
       '--name-only',
+      '-z',
       'HEAD',
       '--',
       ...directories.map((directory) => ':(literal)$directory'),
@@ -433,8 +434,8 @@ class RepositorySyncAdapter {
       );
     }
     final committedPaths = treeResult.stdout
-        .split('\n')
-        .map((path) => path.trim())
+        .split('\x00')
+        .where((path) => path.isNotEmpty)
         .where(
           (path) =>
               path.toLowerCase().endsWith('.arb') &&
@@ -499,13 +500,14 @@ class RepositorySyncAdapter {
         'Committed catalog $path is missing from the working tree.',
       );
     }
+    final bytes = await file.readAsBytes();
     final committedHash = await _git(root, ['rev-parse', 'HEAD:$path']);
-    final workingHash = await _runner.run('git', [
-      'hash-object',
-      '--no-filters',
-      '--',
-      path,
-    ], workingDirectory: root.path);
+    final workingHash = await _runner.run(
+      'git',
+      ['hash-object', '--path=$path', '--stdin'],
+      workingDirectory: root.path,
+      stdin: bytes,
+    );
     if (workingHash.exitCode != 0) {
       throw RepositoryAdapterException(
         'Git could not verify catalog $path against HEAD: ${workingHash.stderr.trim()}',
@@ -516,11 +518,10 @@ class RepositorySyncAdapter {
         'Catalog $path does not match its committed blob at HEAD. Commit or discard the catalog change before retrying.',
       );
     }
-    return await _readUtf8(file, path);
+    return _decodeUtf8(bytes, path);
   }
 
-  Future<String> _readUtf8(File file, String path) async {
-    final bytes = await file.readAsBytes();
+  String _decodeUtf8(List<int> bytes, String path) {
     try {
       final content = utf8.decode(bytes, allowMalformed: false);
       // Keep the round-trip check explicit: the server receives the exact

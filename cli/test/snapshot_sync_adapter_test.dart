@@ -189,6 +189,78 @@ void main() {
     },
   );
 
+  test('hashes and submits the same captured catalog bytes', () async {
+    final fixture = await SyncFixture.create();
+    addTearDown(fixture.dispose);
+    const path = 'packages/brickit_generated/lib/l10n/intl_en.arb';
+    final gateway = RecordingSnapshotGateway(_syncContext());
+    final runner = MutatingHashRunner(
+      catalogPath: path,
+      replacement: '{"@@locale":"en","greeting":"Changed during sync"}',
+    );
+
+    await RepositorySyncAdapter(
+      runner: runner,
+    ).sync(checkout: fixture.root, gateway: gateway, write: (_) {});
+
+    expect(runner.mutated, isTrue);
+    expect(
+      gateway.files.singleWhere((file) => file.catalogPath == path).content,
+      '{"@@locale":"en","greeting":"Hello"}',
+    );
+  });
+
+  test('accepts working-tree line endings normalized by Git', () async {
+    final fixture = await SyncFixture.create();
+    addTearDown(fixture.dispose);
+    const path = 'packages/brickit_generated/lib/l10n/intl_en.arb';
+    await fixture.write('.gitattributes', '*.arb text eol=lf\n');
+    await fixture.write(
+      path,
+      '{\n  "@@locale": "en",\n  "greeting": "Hello"\n}\n',
+    );
+    await fixture.git(['add', '.gitattributes', path]);
+    await fixture.git(['commit', '-m', 'normalize catalogs']);
+    await fixture.write(
+      path,
+      '{\r\n  "@@locale": "en",\r\n  "greeting": "Hello"\r\n}\r\n',
+    );
+    final gateway = RecordingSnapshotGateway(_syncContext());
+
+    await RepositorySyncAdapter().sync(
+      checkout: fixture.root,
+      gateway: gateway,
+      write: (_) {},
+    );
+
+    expect(
+      gateway.files.singleWhere((file) => file.catalogPath == path).content,
+      contains('\r\n'),
+    );
+  });
+
+  test(
+    'preserves whitespace and newlines in committed catalog paths',
+    () async {
+      final fixture = await SyncFixture.create();
+      addTearDown(fixture.dispose);
+      const path =
+          'packages/brickit_generated/lib/l10n/ intl_pt\n translation .arb';
+      await fixture.write(path, '{"@@locale":"pt","greeting":"Olá"}');
+      await fixture.git(['add', '--', path]);
+      await fixture.git(['commit', '-m', 'add unusual catalog path']);
+      final gateway = RecordingSnapshotGateway(_syncContext());
+
+      await RepositorySyncAdapter().sync(
+        checkout: fixture.root,
+        gateway: gateway,
+        write: (_) {},
+      );
+
+      expect(gateway.files.map((file) => file.catalogPath), contains(path));
+    },
+  );
+
   test('refuses a catalog replaced by a symbolic link', () async {
     final fixture = await SyncFixture.create();
     addTearDown(fixture.dispose);
@@ -392,6 +464,39 @@ class RecordingSnapshotGateway implements SnapshotSyncGateway {
       diagnostics: [],
       unboundLocaleFileCount: 1,
       absentTargetLocaleCount: 0,
+    );
+  }
+}
+
+class MutatingHashRunner implements CommandRunner {
+  MutatingHashRunner({required this.catalogPath, required this.replacement});
+
+  final String catalogPath;
+  final String replacement;
+  final CommandRunner _delegate = const SystemCommandRunner();
+  bool mutated = false;
+
+  @override
+  Future<CommandResult> run(
+    String executable,
+    List<String> arguments, {
+    required String workingDirectory,
+    List<int>? stdin,
+  }) async {
+    if (!mutated &&
+        executable == 'git' &&
+        arguments.contains('hash-object') &&
+        arguments.contains('--path=$catalogPath')) {
+      mutated = true;
+      await File(
+        '$workingDirectory${Platform.pathSeparator}$catalogPath',
+      ).writeAsString(replacement);
+    }
+    return _delegate.run(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      stdin: stdin,
     );
   }
 }

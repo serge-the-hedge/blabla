@@ -30,6 +30,7 @@ abstract interface class CommandRunner {
     String executable,
     List<String> arguments, {
     required String workingDirectory,
+    List<int>? stdin,
   });
 }
 
@@ -41,8 +42,26 @@ class SystemCommandRunner implements CommandRunner {
     String executable,
     List<String> arguments, {
     required String workingDirectory,
+    List<int>? stdin,
   }) async {
     try {
+      if (stdin != null) {
+        final process = await Process.start(
+          executable,
+          arguments,
+          workingDirectory: workingDirectory,
+          runInShell: false,
+        );
+        final stdout = process.stdout.transform(systemEncoding.decoder).join();
+        final stderr = process.stderr.transform(systemEncoding.decoder).join();
+        process.stdin.add(stdin);
+        await process.stdin.close();
+        return CommandResult(
+          exitCode: await process.exitCode,
+          stdout: await stdout,
+          stderr: await stderr,
+        );
+      }
       final result = await Process.run(
         executable,
         arguments,
