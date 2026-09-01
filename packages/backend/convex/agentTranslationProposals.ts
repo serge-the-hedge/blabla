@@ -134,6 +134,12 @@ const taskTargetValidator = v.object({
 	createdAt: v.number(),
 });
 
+const localeProposalTaskScopeValidator = v.object({
+	localeProposalId: v.id("localeProposals"),
+	localeCode: v.string(),
+	targetCount: v.number(),
+});
+
 const translationWorkPageValidator = v.object({
 	projectionId: v.id("catalogProjections"),
 	items: v.array(
@@ -870,6 +876,95 @@ export const taskForAgent = internalQuery({
 	},
 });
 
+/** Resolve which private adapter backs a Translation Task. HTTP and future UI
+ * callers branch once at this seam; they do not learn proposal basis fields or
+ * manufacture different task identifiers for existing and new Locales. */
+export const taskDescriptorForAgent = internalQuery({
+	args: {
+		token: v.string(),
+		taskId: v.id("agentTranslationProposals"),
+	},
+	returns: v.union(
+		v.object({
+			kind: v.literal("existingLocale"),
+			taskId: v.id("agentTranslationProposals"),
+			title: v.string(),
+			status: v.union(
+				v.literal("open"),
+				v.literal("accepted"),
+				v.literal("rejected"),
+			),
+			localeCode: v.string(),
+			targetCount: v.number(),
+			candidateCount: v.number(),
+		}),
+		v.object({
+			kind: v.literal("newLocale"),
+			taskId: v.id("agentTranslationProposals"),
+			title: v.string(),
+			status: v.union(v.literal("open"), v.literal("accepted")),
+			localeCode: v.string(),
+			targetCount: v.number(),
+			candidateCount: v.number(),
+			localeProposalId: v.id("localeProposals"),
+		}),
+	),
+	handler: async (ctx, args) => {
+		const token = await authenticate(ctx, args.token, "read");
+		const proposal = await proposalForToken(ctx, args.taskId, token._id);
+		if (proposal.taskScope && proposal.target.kind === "catalogWorkspace") {
+			return {
+				kind: "existingLocale" as const,
+				taskId: proposal._id,
+				title: proposal.clientProposalKey,
+				status: proposal.status,
+				localeCode: proposal.taskScope.localeCode,
+				targetCount: proposal.taskScope.targetCount,
+				candidateCount: proposal.candidateCount,
+			};
+		}
+		if (
+			proposal.localeProposalTaskScope &&
+			proposal.target.kind === "localeProposal" &&
+			proposal.localeProposalTaskScope.localeProposalId ===
+				proposal.target.localeProposalId
+		) {
+			const localeProposal = await ctx.db.get(proposal.target.localeProposalId);
+			if (
+				!localeProposal ||
+				localeProposal.projectId !== proposal.projectId ||
+				localeProposal.localeCode !==
+					proposal.localeProposalTaskScope.localeCode ||
+				localeProposal.sourceMessageCount !==
+					proposal.localeProposalTaskScope.targetCount
+			) {
+				throw new ConvexError({
+					code: "INTEGRITY",
+					message:
+						"New-Locale Translation Task no longer matches its Locale Proposal.",
+				});
+			}
+			return {
+				kind: "newLocale" as const,
+				taskId: proposal._id,
+				title: proposal.clientProposalKey,
+				status:
+					localeProposal.status === "ready"
+						? ("accepted" as const)
+						: ("open" as const),
+				localeCode: localeProposal.localeCode,
+				targetCount: localeProposal.sourceMessageCount,
+				candidateCount: localeProposal.stagedValueCount,
+				localeProposalId: localeProposal._id,
+			};
+		}
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message: "Translation Task not found.",
+		});
+	},
+});
+
 export const taskSubmissionContext = internalQuery({
 	args: {
 		token: v.string(),
@@ -1336,6 +1431,7 @@ export const create = internalMutation({
 		token: v.string(),
 		clientProposalKey: v.string(),
 		target: targetValidator,
+		localeProposalTaskScope: v.optional(localeProposalTaskScopeValidator),
 	},
 	handler: async (ctx, args) => {
 		const token = await authenticate(ctx, args.token, "propose");
@@ -1352,6 +1448,26 @@ export const create = internalMutation({
 					message: "Locale Proposal not found for this project.",
 				});
 			}
+			if (
+				args.localeProposalTaskScope &&
+				(args.localeProposalTaskScope.localeProposalId !== localeProposal._id ||
+					args.localeProposalTaskScope.localeCode !==
+						localeProposal.localeCode ||
+					args.localeProposalTaskScope.targetCount !==
+						localeProposal.sourceMessageCount)
+			) {
+				throw new ConvexError({
+					code: "VALIDATION",
+					message:
+						"New-Locale Translation Task scope does not match its Locale Proposal.",
+				});
+			}
+		} else if (args.localeProposalTaskScope) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"Only a Locale Proposal can back a new-Locale Translation Task.",
+			});
 		}
 		const existing = await ctx.db
 			.query("agentTranslationProposals")
@@ -1363,7 +1479,11 @@ export const create = internalMutation({
 			)
 			.unique();
 		if (existing) {
-			if (JSON.stringify(existing.target) !== JSON.stringify(args.target)) {
+			if (
+				JSON.stringify(existing.target) !== JSON.stringify(args.target) ||
+				JSON.stringify(existing.localeProposalTaskScope) !==
+					JSON.stringify(args.localeProposalTaskScope)
+			) {
 				throw new ConvexError({
 					code: "IDEMPOTENCY_KEY_REUSED",
 					message:
@@ -1379,6 +1499,9 @@ export const create = internalMutation({
 			createdBy: { kind: "agent", id: token._id },
 			clientProposalKey: args.clientProposalKey,
 			target: args.target,
+			...(args.localeProposalTaskScope === undefined
+				? {}
+				: { localeProposalTaskScope: args.localeProposalTaskScope }),
 			status: "open",
 			candidateCount: 0,
 			revisionCount: 0,
@@ -1741,13 +1864,36 @@ export const listForReview = query({
 	},
 	handler: async (ctx, args) => {
 		await requireViewer(ctx, args.projectId);
-		return await ctx.db
+		const page = await ctx.db
 			.query("agentTranslationProposals")
 			.withIndex("by_project_and_updatedAt", (q) =>
 				q.eq("projectId", args.projectId),
 			)
 			.order("desc")
 			.paginate(args.paginationOpts);
+		const proposals = await Promise.all(
+			page.page.map(async (proposal) => {
+				const scope = proposal.localeProposalTaskScope;
+				if (!scope) return proposal;
+				const localeProposal = await ctx.db.get(scope.localeProposalId);
+				if (
+					!localeProposal ||
+					localeProposal.projectId !== proposal.projectId ||
+					localeProposal.localeCode !== scope.localeCode
+				) {
+					return proposal;
+				}
+				return {
+					...proposal,
+					status:
+						localeProposal.status === "ready"
+							? ("accepted" as const)
+							: ("open" as const),
+					candidateCount: localeProposal.stagedValueCount,
+				};
+			}),
+		);
+		return { ...page, page: proposals };
 	},
 });
 

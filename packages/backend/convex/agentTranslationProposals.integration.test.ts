@@ -733,6 +733,36 @@ describe("Agent Translation Proposals", () => {
 		expect(reviewed?.proposal.status).toBe("accepted");
 	});
 
+	test("creates the same existing-Locale task through explicit and legacy targets", async () => {
+		const user = await authenticatedBackend(t, "agent-owned-translation-task");
+		const { token } = await setupWorkQueueProject(user);
+		const create = (body: Record<string, unknown>) =>
+			agentRequest(t, token, "/api/agent/v1/translation-tasks", {
+				method: "POST",
+				body: JSON.stringify(body),
+			});
+		const explicit = await create({
+			clientTaskKey: "german-missing-v1",
+			target: { kind: "existingLocale", localeCode: "de" },
+			messageIds: ["missing"],
+		});
+		expect(explicit.status).toBe(200);
+		const task = (await explicit.json()) as {
+			taskId: Id<"agentTranslationProposals">;
+			localeCode: string;
+			targetCount: number;
+		};
+		expect(task).toMatchObject({ localeCode: "de", targetCount: 1 });
+
+		const legacyRetry = await create({
+			clientTaskKey: "german-missing-v1",
+			localeCode: "de",
+			messageIds: ["missing"],
+		});
+		expect(legacyRetry.status).toBe(200);
+		expect(await legacyRetry.json()).toMatchObject({ taskId: task.taskId });
+	});
+
 	test("rejects an agent blank and rejects stale basis evidence", async () => {
 		const user = await authenticatedBackend(t, "agent-translation-safety");
 		const { projectId, token } = await setupProject(user);

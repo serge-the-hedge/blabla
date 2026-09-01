@@ -11,11 +11,14 @@ import { sha256Hex, type TokenScope } from "./lib";
 import {
 	createOrResumeProposal,
 	finalizeProposal,
+	PORTUGUESE_LOCALE_CODE,
 	type ProposalActor,
 	readProposal,
 	readProposalArtifact,
 	reviewProposalValues,
 	stageProposal,
+	stageTaskCandidates,
+	taskProposalPage,
 	templateProposal,
 } from "./localeProposals";
 import {
@@ -151,6 +154,32 @@ function translationTaskCandidateItems(body: Record<string, unknown>) {
 			value: requiredJsonString(item, "value"),
 		};
 	});
+}
+
+type TranslationTaskTargetInput =
+	| { kind: "existingLocale"; localeCode: string }
+	| { kind: "newLocale"; localeCode: string };
+
+/** The explicit target is the durable API. Keep the original top-level
+ * localeCode request readable so existing agents can upgrade independently. */
+function translationTaskTarget(
+	body: Record<string, unknown>,
+): TranslationTaskTargetInput {
+	const target = body.target;
+	if (target === undefined) {
+		return {
+			kind: "existingLocale",
+			localeCode: requiredJsonString(body, "localeCode"),
+		};
+	}
+	if (!isRecord(target)) {
+		throw new Error("target must be an object with a kind and localeCode.");
+	}
+	const localeCode = requiredJsonString(target, "localeCode");
+	if (target.kind === "existingLocale" || target.kind === "newLocale") {
+		return { kind: target.kind, localeCode };
+	}
+	throw new Error("target.kind must be existingLocale or newLocale.");
 }
 
 type SnapshotFileInput = { catalogPath: string; content: string };
@@ -1072,26 +1101,60 @@ http.route({
 	handler: httpAction(async (ctx, request) => {
 		try {
 			const body = await jsonObject(request);
-			const messageIds = body.messageIds;
-			if (!isStringArray(messageIds)) {
-				throw new Error("messageIds must be an array of strings.");
-			}
+			const target = translationTaskTarget(body);
+			const clientTaskKey = requiredJsonString(body, "clientTaskKey");
 			return agentJson(
 				await withAgent(
 					ctx,
 					request,
 					["read", "propose"],
 					"agentTranslationProposal",
-					async (token) =>
-						await ctx.runMutation(
-							internalApi.agentTranslationProposals.createTaskForAgent,
+					async (token, actor) => {
+						if (target.kind === "existingLocale") {
+							const messageIds = body.messageIds;
+							if (!isStringArray(messageIds)) {
+								throw new Error("messageIds must be an array of strings.");
+							}
+							return await ctx.runMutation(
+								internalApi.agentTranslationProposals.createTaskForAgent,
+								{
+									token,
+									clientTaskKey,
+									localeCode: target.localeCode,
+									messageIds,
+								},
+							);
+						}
+						if (target.localeCode !== PORTUGUESE_LOCALE_CODE) {
+							throw new ConvexError({
+								code: "NOT_FOUND",
+								message: `New Locale ${target.localeCode} is not configured for this project.`,
+							});
+						}
+						const proposal = await createOrResumeProposal(ctx, actor);
+						const task = await ctx.runMutation(
+							internalApi.agentTranslationProposals.create,
 							{
 								token,
-								clientTaskKey: requiredJsonString(body, "clientTaskKey"),
-								localeCode: requiredJsonString(body, "localeCode"),
-								messageIds,
+								clientProposalKey: clientTaskKey,
+								target: {
+									kind: "localeProposal",
+									localeProposalId: proposal.proposalId,
+								},
+								localeProposalTaskScope: {
+									localeProposalId: proposal.proposalId,
+									localeCode: proposal.locale.code,
+									targetCount: proposal.progress.total,
+								},
 							},
-						),
+						);
+						return {
+							taskId: task.proposalId,
+							title: clientTaskKey,
+							localeCode: proposal.locale.code,
+							targetCount: proposal.progress.total,
+						};
+					},
 				),
 			);
 		} catch (error) {
@@ -1121,11 +1184,35 @@ http.route({
 					request,
 					"read",
 					"agentTranslationProposal",
-					async (token) =>
-						await ctx.runQuery(
-							internalApi.agentTranslationProposals.taskForAgent,
-							{ token, taskId, cursor, limit },
-						),
+					async (token, actor) => {
+						const descriptor = await ctx.runQuery(
+							internalApi.agentTranslationProposals.taskDescriptorForAgent,
+							{ token, taskId },
+						);
+						if (descriptor.kind === "existingLocale") {
+							return await ctx.runQuery(
+								internalApi.agentTranslationProposals.taskForAgent,
+								{ token, taskId, cursor, limit },
+							);
+						}
+						const page = await taskProposalPage(ctx, actor, {
+							proposalId: descriptor.localeProposalId,
+							cursor,
+							limit,
+						});
+						return {
+							task: {
+								taskId: descriptor.taskId,
+								title: descriptor.title,
+								status: descriptor.status,
+								localeCode: descriptor.localeCode,
+								targetCount: descriptor.targetCount,
+								candidateCount: descriptor.candidateCount,
+							},
+							targets: page.messages,
+							nextCursor: page.continueCursor,
+						};
+					},
 				),
 			);
 		} catch (error) {
@@ -1159,7 +1246,24 @@ http.route({
 					request,
 					["read", "propose"],
 					"agentTranslationProposal",
-					async (token) => {
+					async (token, actor) => {
+						const descriptor = await ctx.runQuery(
+							internalApi.agentTranslationProposals.taskDescriptorForAgent,
+							{ token, taskId },
+						);
+						if (descriptor.kind === "newLocale") {
+							const summary = await stageTaskCandidates(ctx, actor, {
+								proposalId: descriptor.localeProposalId,
+								items: submitted,
+							});
+							return {
+								candidates: submitted.map((item) => ({
+									messageId: item.messageId,
+									status: "awaitingReview" as const,
+								})),
+								progress: summary.progress,
+							};
+						}
 						const context = await ctx.runQuery(
 							internalApi.agentTranslationProposals.taskSubmissionContext,
 							{
@@ -1229,7 +1333,13 @@ http.route({
 							}
 							return result;
 						});
-						return { revisions };
+						return {
+							revisions,
+							candidates: submitted.map((item) => ({
+								messageId: item.messageId,
+								status: "awaitingReview" as const,
+							})),
+						};
 					},
 				),
 			);

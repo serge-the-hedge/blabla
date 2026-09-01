@@ -1651,6 +1651,110 @@ export async function templateProposal(
 	};
 }
 
+/** Translation Task adapter for a complete new Locale. It combines one bounded
+ * Source-template page with any current staged candidate so agents can resume
+ * and correct work through the same task read used for existing Locales. */
+export async function taskProposalPage(
+	ctx: ActionCtx,
+	actor: ProposalActor,
+	args: ProposalPage,
+) {
+	assertProposalPage(args);
+	const { source, document } = await proposalSourceDocument(
+		ctx,
+		actor,
+		args.proposalId,
+	);
+	const sourcePage = document.messages.slice(
+		args.cursor,
+		args.cursor + args.limit,
+	);
+	const stagedValues = await ctx.runQuery(
+		internal.localeProposals.stagedValuesForTemplate,
+		{
+			projectId: actor.projectId,
+			proposalId: args.proposalId,
+			messageIds: sourcePage.map((message) => message.id),
+		},
+	);
+	const stagedByMessageId = new Map(
+		stagedValues.map((value) => [value.messageId, value] as const),
+	);
+	const messages = await Promise.all(
+		sourcePage.map(async (message) => {
+			const staged = stagedByMessageId.get(message.id);
+			return {
+				messageId: message.id,
+				sourceValue: message.value,
+				sourceFingerprint: await sourceFingerprint(message),
+				targetValue: staged?.value ?? "",
+				staged: staged !== undefined,
+				...(message.metadata === undefined
+					? {}
+					: { metadataJson: JSON.stringify(message.metadata) }),
+			};
+		}),
+	);
+	const nextCursor = args.cursor + messages.length;
+	return {
+		proposalId: args.proposalId,
+		sourceSnapshotId: source.snapshotId,
+		messages,
+		isDone: nextCursor >= document.messages.length,
+		continueCursor: nextCursor >= document.messages.length ? null : nextCursor,
+	};
+}
+
+/** New-Locale implementation behind submitCandidates(taskId, items). The task
+ * owns the Source basis, so callers submit only message/value pairs. */
+export async function stageTaskCandidates(
+	ctx: ActionCtx,
+	actor: ProposalActor,
+	args: {
+		proposalId: Id<"localeProposals">;
+		items: Array<{ messageId: string; value: string }>;
+	},
+): Promise<LocaleProposalSummary> {
+	const { source, document } = await proposalSourceDocument(
+		ctx,
+		actor,
+		args.proposalId,
+	);
+	if (!source.isCurrentBaseline) sourceStaleError();
+	if (!actor.tokenId) {
+		throw new ConvexError({
+			code: "UNAUTHORIZED",
+			message: "An API token is required to stage task candidates.",
+		});
+	}
+	const sourceByMessageId = new Map(
+		document.messages.map((message) => [message.id, message] as const),
+	);
+	const items = await Promise.all(
+		args.items.map(async (item) => {
+			const message = sourceByMessageId.get(item.messageId);
+			if (!message) {
+				validationError(
+					`New-Locale task candidate "${item.messageId}" is outside the pinned Source Snapshot.`,
+				);
+			}
+			return {
+				...item,
+				sourceFingerprint: await sourceFingerprint(message),
+			};
+		}),
+	);
+	const validated = await assertStageItems(document, items);
+	await ctx.runMutation(internal.localeProposals.stageBatch, {
+		projectId: actor.projectId,
+		proposalId: args.proposalId,
+		sourceSnapshotId: source.snapshotId,
+		actor: { kind: "agent", id: actor.tokenId },
+		items: validated,
+	});
+	return await readProposal(ctx, actor, args.proposalId);
+}
+
 /** Show the durable submitted values and Intentional Blank reasons through a
  * separate bounded review page, without inflating the immutable source template. */
 export async function reviewProposalValues(
