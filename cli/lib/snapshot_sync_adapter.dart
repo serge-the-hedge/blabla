@@ -351,9 +351,7 @@ class RepositorySyncAdapter {
       );
     }
     final commit = await _git(root, ['rev-parse', 'HEAD']);
-    await _assertCatalogsClean(root, context);
-    final files = await _readFiles(root, context);
-    await _assertCatalogsClean(root, context);
+    final files = await _readCommittedFiles(root, context);
     final capturedHead = await _git(root, ['rev-parse', 'HEAD']);
     if (capturedHead != commit) {
       throw RepositoryAdapterException(
@@ -410,51 +408,57 @@ class RepositorySyncAdapter {
     return branch;
   }
 
-  Future<List<SnapshotFile>> _readFiles(
+  Future<List<SnapshotFile>> _readCommittedFiles(
     Directory root,
     SnapshotSyncContext context,
   ) async {
     final files = <SnapshotFile>[];
-    final knownPaths = <String>{};
     final directories = <String>{};
     for (final binding in context.bindings) {
       _assertRelativePath(binding.catalogPath);
-      knownPaths.add(binding.catalogPath);
       final file = File(_join(root.path, binding.catalogPath));
-      directories.add(file.parent.path);
-      if (!await file.exists()) {
+      directories.add(_relative(root.path, file.parent.path));
+    }
+    final treeResult = await _runner.run('git', [
+      'ls-tree',
+      '-r',
+      '--name-only',
+      'HEAD',
+      '--',
+      ...directories.map((directory) => ':(literal)$directory'),
+    ], workingDirectory: root.path);
+    if (treeResult.exitCode != 0) {
+      throw RepositoryAdapterException(
+        'Git could not enumerate the committed catalog files: ${treeResult.stderr.trim()}',
+      );
+    }
+    final committedPaths = treeResult.stdout
+        .split('\n')
+        .map((path) => path.trim())
+        .where(
+          (path) =>
+              path.toLowerCase().endsWith('.arb') &&
+              directories.contains(_parentPath(path)),
+        )
+        .toSet();
+    for (final binding in context.bindings) {
+      if (!committedPaths.contains(binding.catalogPath)) {
         if (binding.isSource) {
           throw RepositoryAdapterException(
-            'The bound source catalog ${binding.catalogPath} is missing from this checkout.',
+            'The bound source catalog ${binding.catalogPath} is missing from HEAD.',
           );
         }
-        continue;
       }
+    }
+    for (final path in committedPaths) {
       files.add(
         SnapshotFile(
-          catalogPath: binding.catalogPath,
-          content: await _readUtf8(file, binding.catalogPath),
+          catalogPath: path,
+          content: await _readCommittedUtf8(root, path),
         ),
       );
     }
-    for (final directoryPath in directories) {
-      final directory = Directory(directoryPath);
-      if (!await directory.exists()) continue;
-      await for (final entity in directory.list(followLinks: false)) {
-        if (entity is! File || !entity.path.toLowerCase().endsWith('.arb')) {
-          continue;
-        }
-        final relative = _relative(root.path, entity.path);
-        if (knownPaths.contains(relative)) continue;
-        knownPaths.add(relative);
-        files.add(
-          SnapshotFile(
-            catalogPath: relative,
-            content: await _readUtf8(entity, relative),
-          ),
-        );
-      }
-    }
+    files.sort((left, right) => left.catalogPath.compareTo(right.catalogPath));
     if (files.length > context.maxFiles || files.length > _maxFiles) {
       throw RepositoryAdapterException(
         'This checkout contains more than ${context.maxFiles} catalog files. Remove extras or bind them deliberately before syncing.',
@@ -482,43 +486,37 @@ class RepositorySyncAdapter {
     return files;
   }
 
-  /// A Source Snapshot is addressed by a Git commit, so every catalog byte
-  /// submitted for that commit must already be committed. The directory
-  /// pathspecs also catch deleted and untracked sibling ARBs that discovery
-  /// would otherwise omit or submit from the working tree.
-  Future<void> _assertCatalogsClean(
-    Directory root,
-    SnapshotSyncContext context,
-  ) async {
-    final pathspecs = <String>{};
-    for (final binding in context.bindings) {
-      _assertRelativePath(binding.catalogPath);
-      pathspecs.add(binding.catalogPath);
-      final separator = binding.catalogPath.lastIndexOf('/');
-      final directory = separator < 0
-          ? ''
-          : binding.catalogPath.substring(0, separator);
-      pathspecs.add(
-        directory.isEmpty ? ':(glob)*.arb' : ':(glob)$directory/*.arb',
-      );
-    }
-    final result = await _runner.run('git', [
-      'status',
-      '--porcelain=v1',
-      '--untracked-files=all',
-      '--',
-      ...pathspecs,
-    ], workingDirectory: root.path);
-    if (result.exitCode != 0) {
+  Future<String> _readCommittedUtf8(Directory root, String path) async {
+    final file = File(_join(root.path, path));
+    final type = await FileSystemEntity.type(file.path, followLinks: false);
+    if (type == FileSystemEntityType.link) {
       throw RepositoryAdapterException(
-        'Git could not verify that the catalog files are committed: ${result.stderr.trim()}',
+        'Catalog $path is a symbolic link. Source Snapshots require committed regular files.',
       );
     }
-    final dirtyCatalogs = result.stdout.trim();
-    if (dirtyCatalogs.isEmpty) return;
-    throw RepositoryAdapterException(
-      'Sync requires every catalog ARB to match HEAD. Commit or discard these catalog changes before retrying:\n$dirtyCatalogs',
-    );
+    if (type != FileSystemEntityType.file) {
+      throw RepositoryAdapterException(
+        'Committed catalog $path is missing from the working tree.',
+      );
+    }
+    final committedHash = await _git(root, ['rev-parse', 'HEAD:$path']);
+    final workingHash = await _runner.run('git', [
+      'hash-object',
+      '--no-filters',
+      '--',
+      path,
+    ], workingDirectory: root.path);
+    if (workingHash.exitCode != 0) {
+      throw RepositoryAdapterException(
+        'Git could not verify catalog $path against HEAD: ${workingHash.stderr.trim()}',
+      );
+    }
+    if (workingHash.stdout.trim() != committedHash) {
+      throw RepositoryAdapterException(
+        'Catalog $path does not match its committed blob at HEAD. Commit or discard the catalog change before retrying.',
+      );
+    }
+    return await _readUtf8(file, path);
   }
 
   Future<String> _readUtf8(File file, String path) async {
@@ -639,6 +637,11 @@ String _relative(String root, String absolute) {
             .substring(prefix.length)
             .replaceAll(Platform.pathSeparator, '/')
       : absolute.replaceAll(Platform.pathSeparator, '/');
+}
+
+String _parentPath(String path) {
+  final separator = path.lastIndexOf('/');
+  return separator < 0 ? '' : path.substring(0, separator);
 }
 
 String _normalizeRepository(String value) {
