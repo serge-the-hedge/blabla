@@ -26,6 +26,8 @@ jobs:
       - working-directory: cli
         run: dart pub get
       - working-directory: cli
+        run: mkdir -p dist
+      - working-directory: cli
         run: >-
           dart compile exe --define=BLABLA_CLI_VERSION="${GITHUB_REF_NAME#v}"
           bin/blabla.dart -o dist/${{ matrix.artifact }}
