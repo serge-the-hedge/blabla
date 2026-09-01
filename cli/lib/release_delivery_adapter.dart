@@ -2,6 +2,11 @@ import 'dart:io';
 
 import 'command_runner.dart';
 import 'flutter_toolchain.dart';
+import 'locale_proposal_adapter.dart'
+    show
+        LocaleProposalArtifact,
+        LocaleProposalGateway,
+        PortugueseLocaleDelivery;
 import 'staging_worktree.dart';
 
 export 'command_runner.dart';
@@ -100,6 +105,7 @@ class ReleaseDeliveryRequest {
     required this.flutter,
     required this.gateway,
     required this.write,
+    this.localeProposal,
   });
 
   final Directory checkout;
@@ -107,6 +113,17 @@ class ReleaseDeliveryRequest {
   final ResolvedFlutter flutter;
   final ReleaseGateway gateway;
   final void Function(String line) write;
+  final LocaleProposalDeliveryInput? localeProposal;
+}
+
+class LocaleProposalDeliveryInput {
+  const LocaleProposalDeliveryInput({
+    required this.proposalId,
+    required this.gateway,
+  });
+
+  final String proposalId;
+  final LocaleProposalGateway gateway;
 }
 
 class ReleaseDeliveryResult {
@@ -117,6 +134,7 @@ class ReleaseDeliveryResult {
     required this.skipped,
     required this.pullRequestBodyFile,
     required this.pullRequestCommand,
+    this.localeProposalId,
   });
 
   final String branchName;
@@ -125,6 +143,7 @@ class ReleaseDeliveryResult {
   final List<SkippedReleaseKey> skipped;
   final String pullRequestBodyFile;
   final String pullRequestCommand;
+  final String? localeProposalId;
 }
 
 /// Delivers an immutable Release Bundle into the current integration branch.
@@ -135,10 +154,21 @@ class ReleaseRepositoryAdapter {
     : _runner = runner;
 
   final CommandRunner _runner;
+  static const _portuguese = PortugueseLocaleDelivery();
 
   Future<ReleaseDeliveryResult> deliver(ReleaseDeliveryRequest request) async {
     final summary = await request.gateway.readRelease(request.recordId);
     _validateSummary(summary, request.recordId);
+    final localeInput = request.localeProposal;
+    final localeArtifact = localeInput == null
+        ? null
+        : await _portuguese.prepare(
+            localeInput.gateway,
+            localeInput.proposalId,
+          );
+    if (localeArtifact != null) {
+      _validateCombinedProvenance(summary, localeArtifact);
+    }
 
     final checkout = await _repositoryRoot(request.checkout);
     await _ensureReleaseMatchesCheckout(checkout, summary);
@@ -148,7 +178,14 @@ class ReleaseRepositoryAdapter {
         'This checkout is on $currentBranch, but this release delivers into ${summary.releaseRecord.integrationBranch}. Check out ${summary.releaseRecord.integrationBranch} and retry.',
       );
     }
-    await _ensureRelevantPathsAreClean(checkout, summary.catalogs);
+    await _ensureRelevantPathsAreClean(
+      checkout,
+      summary.catalogs,
+      additionalPaths: localeArtifact == null
+          ? const {}
+          : _portuguese.relevantPaths,
+    );
+    if (localeArtifact != null) await _ensureCheckoutIsClean(checkout);
     await _ensureCommitIdentity(checkout);
     final appliedOnto = await _git(checkout, ['rev-parse', 'HEAD']);
     final commitDistance = await _git(checkout, [
@@ -168,6 +205,9 @@ class ReleaseRepositoryAdapter {
       checkout,
       summary.catalogs,
       generatedBefore,
+      additionalPaths: localeArtifact == null
+          ? const {}
+          : {_portuguese.runtimeConstantsPath},
     );
 
     final staging = await StagingWorktree.create(
@@ -180,12 +220,17 @@ class ReleaseRepositoryAdapter {
         staging.root,
         summary.catalogs,
         generatedBefore,
+        additionalPaths: localeArtifact == null
+            ? const {}
+            : {_portuguese.runtimeConstantsPath},
       );
-      await _runGenerator(staging.root, request.flutter);
-      if ((await _changedPaths(staging.root)).isNotEmpty) {
-        throw RepositoryAdapterException(
-          'Flutter localization output is already drifted in this checkout. Regenerate and commit it before delivering this release. ${request.flutter.description}',
-        );
+      if (localeArtifact == null) {
+        await _runGenerator(staging.root, request.flutter);
+        if ((await _changedPaths(staging.root)).isNotEmpty) {
+          throw RepositoryAdapterException(
+            'Flutter localization output is already drifted in this checkout. Regenerate and commit it before delivering this release. ${request.flutter.description}',
+          );
+        }
       }
       final signaturesBefore = await _generatedInterfaceSignatures(
         staging.root,
@@ -199,7 +244,7 @@ class ReleaseRepositoryAdapter {
         inputFiles,
       );
       _validateDelivery(summary, delivery);
-      if (delivery.applied.isEmpty) {
+      if (delivery.applied.isEmpty && localeArtifact == null) {
         final detail = delivery.skipped.isEmpty
             ? 'The Release Bundle contains no applicable catalog changes.'
             : 'Every release key was skipped because its Source Contract changed or disappeared.';
@@ -209,6 +254,9 @@ class ReleaseRepositoryAdapter {
       }
 
       await _writeDeliveryTree(staging.root, delivery.files);
+      if (localeArtifact != null) {
+        await _portuguese.apply(staging.root, localeArtifact);
+      }
       await _runGenerator(staging.root, request.flutter);
       final signaturesAfter = await _generatedInterfaceSignatures(staging.root);
       if (!_sameSet(signaturesBefore, signaturesAfter)) {
@@ -220,19 +268,31 @@ class ReleaseRepositoryAdapter {
         staging.root,
         summary,
         delivery,
+        inputFiles,
         generatedBefore,
         request.flutter,
+        localeArtifact: localeArtifact,
       );
       final candidateFiles = await _readCandidateFiles(
         staging.root,
         changedPaths,
       );
 
-      await _ensureRelevantPathsAreClean(checkout, summary.catalogs);
+      await _ensureRelevantPathsAreClean(
+        checkout,
+        summary.catalogs,
+        additionalPaths: localeArtifact == null
+            ? const {}
+            : _portuguese.relevantPaths,
+      );
+      if (localeArtifact != null) await _ensureCheckoutIsClean(checkout);
       await _assertRegularLocalizationFiles(
         checkout,
         summary.catalogs,
         generatedBefore,
+        additionalPaths: localeArtifact == null
+            ? const {}
+            : {_portuguese.runtimeConstantsPath},
       );
       if (await _git(checkout, ['rev-parse', 'HEAD']) != appliedOnto) {
         throw RepositoryAdapterException(
@@ -241,6 +301,9 @@ class ReleaseRepositoryAdapter {
       }
       final current = await request.gateway.readRelease(request.recordId);
       _validateSameRelease(summary, current);
+      if (localeArtifact != null) {
+        await _portuguese.ensureUnchanged(localeInput!.gateway, localeArtifact);
+      }
 
       await _git(checkout, ['switch', '-c', branchName]);
       await _writeCandidateFiles(checkout, candidateFiles);
@@ -257,23 +320,34 @@ class ReleaseRepositoryAdapter {
           'The local Git index changed while the release was being prepared. No commit was created.',
         );
       }
+      final commitTitle = localeArtifact == null
+          ? 'fix(l10n): deliver reviewed translations'
+          : 'feat(l10n): deliver reviewed translations and Portuguese';
+      final localeTrailers = localeArtifact == null
+          ? ''
+          : '\nBlabla-Locale-Proposal: ${localeArtifact.proposalId}\nBlabla-Source-Snapshot: ${localeArtifact.sourceSnapshot.id}';
       await _git(checkout, [
         'commit',
         '--only',
         '-m',
-        'fix(l10n): deliver reviewed translations\n\nBlabla-Release-Record: ${summary.releaseRecord.id}\nBlabla-Baseline-Commit: ${summary.releaseRecord.baselineCommit}\nBlabla-Applied-Onto: $appliedOnto\nBlabla-Applied-Keys: ${delivery.applied.length}\nBlabla-Skipped-Keys: ${delivery.skipped.length}',
+        '$commitTitle\n\nBlabla-Release-Record: ${summary.releaseRecord.id}\nBlabla-Baseline-Commit: ${summary.releaseRecord.baselineCommit}\nBlabla-Applied-Onto: $appliedOnto\nBlabla-Applied-Keys: ${delivery.applied.length}\nBlabla-Skipped-Keys: ${delivery.skipped.length}$localeTrailers',
         '--',
         ...changedPaths,
       ]);
 
-      final body = _pullRequestBody(summary, delivery, appliedOnto);
+      final body = _pullRequestBody(
+        summary,
+        delivery,
+        appliedOnto,
+        localeArtifact: localeArtifact,
+      );
       final pullRequestBodyFile = await _writePullRequestBody(
         checkout,
         summary.releaseRecord.id,
         body,
       );
       final pullRequestCommand =
-          'gh pr create --base ${summary.releaseRecord.integrationBranch} --head $branchName --title "fix(l10n): deliver reviewed translations" --body-file ${_shellQuote(pullRequestBodyFile)}';
+          'gh pr create --base ${summary.releaseRecord.integrationBranch} --head $branchName --title "$commitTitle" --body-file ${_shellQuote(pullRequestBodyFile)}';
       request.write('Created local branch $branchName.');
       request.write(
         'Git distance from the Baseline (baseline-only, checkout-only): $commitDistance.',
@@ -297,6 +371,7 @@ class ReleaseRepositoryAdapter {
         skipped: delivery.skipped,
         pullRequestBodyFile: pullRequestBodyFile,
         pullRequestCommand: pullRequestCommand,
+        localeProposalId: localeArtifact?.proposalId,
       );
     } finally {
       await staging.dispose();
@@ -359,6 +434,27 @@ class ReleaseRepositoryAdapter {
         )) {
       throw RepositoryAdapterException(
         'Blabla returned an invalid existing-locale delivery tree.',
+      );
+    }
+  }
+
+  void _validateCombinedProvenance(
+    ReleaseSummary summary,
+    LocaleProposalArtifact artifact,
+  ) {
+    final record = summary.releaseRecord;
+    final sourceCatalog = summary.catalogs.singleWhere(
+      (catalog) => catalog.isSource,
+    );
+    if (_normalizeRepository(record.repository) !=
+            _normalizeRepository(artifact.sourceSnapshot.repository) ||
+        record.baselineSnapshotId != artifact.sourceSnapshot.id ||
+        record.baselineCommit != artifact.sourceSnapshot.commit ||
+        record.manifestHash != artifact.sourceSnapshot.manifestHash ||
+        record.integrationBranch != artifact.sourceSnapshot.integrationBranch ||
+        sourceCatalog.catalogPath != artifact.sourceSnapshot.catalogPath) {
+      throw RepositoryAdapterException(
+        'The Release Bundle and Portuguese Locale Proposal do not share the same repository, Baseline, Source Snapshot, and Integration Branch.',
       );
     }
   }
@@ -438,12 +534,14 @@ class ReleaseRepositoryAdapter {
 
   Future<void> _ensureRelevantPathsAreClean(
     Directory checkout,
-    List<BoundCatalog> catalogs,
-  ) async {
+    List<BoundCatalog> catalogs, {
+    Set<String> additionalPaths = const {},
+  }) async {
     final paths = {
       _l10nDirectory,
       _l10nConfigPath,
       ...catalogs.map((catalog) => catalog.catalogPath),
+      ...additionalPaths,
     };
     final output = await _git(checkout, [
       'status',
@@ -454,6 +552,14 @@ class ReleaseRepositoryAdapter {
     if (output.isNotEmpty) {
       throw RepositoryAdapterException(
         'Brickit has uncommitted localization changes. Commit or stash them before delivering this release.',
+      );
+    }
+  }
+
+  Future<void> _ensureCheckoutIsClean(Directory checkout) async {
+    if ((await _git(checkout, ['status', '--porcelain'])).isNotEmpty) {
+      throw RepositoryAdapterException(
+        'Combined localization delivery requires a clean Brickit checkout. Commit or stash all local changes and retry.',
       );
     }
   }
@@ -552,20 +658,56 @@ class ReleaseRepositoryAdapter {
     Directory staging,
     ReleaseSummary summary,
     ReleaseDeliveryTree delivery,
+    List<DeliveryTreeFile> inputFiles,
     Set<String> generatedBefore,
-    ResolvedFlutter flutter,
-  ) async {
+    ResolvedFlutter flutter, {
+    LocaleProposalArtifact? localeArtifact,
+  }) async {
     final changed = await _changedPaths(staging);
     final catalogPaths = summary.catalogs
         .map((catalog) => catalog.catalogPath)
         .toSet();
-    final allowed = {...catalogPaths, ...generatedBefore};
+    final inputByPath = {
+      for (final file in inputFiles) file.catalogPath: file.content,
+    };
+    final changedCatalogPaths = delivery.files
+        .where((file) => inputByPath[file.catalogPath] != file.content)
+        .map((file) => file.catalogPath)
+        .toSet();
+    final sourcePath = summary.catalogs
+        .singleWhere((catalog) => catalog.isSource)
+        .catalogPath;
+    if (changedCatalogPaths.contains(sourcePath)) {
+      throw RepositoryAdapterException(
+        'Blabla returned a delivery tree that changes the Source catalog. Release delivery may only change reviewed target values.',
+      );
+    }
+    final combinedGeneratedPaths = localeArtifact == null
+        ? const <String>{}
+        : {
+            for (final catalog in summary.catalogs.where(
+              (catalog) =>
+                  !catalog.isSource &&
+                  changedCatalogPaths.contains(catalog.catalogPath),
+            ))
+              '$_l10nDirectory/app_localizations_${catalog.localeCode}.dart',
+            _portuguese.generatedLocalizationPath,
+            _portuguese.generatedLocalePath,
+          };
+    final allowed = localeArtifact == null
+        ? {...catalogPaths, ...generatedBefore}
+        : {
+            ...changedCatalogPaths,
+            ...combinedGeneratedPaths,
+            _portuguese.catalogPath,
+            _portuguese.runtimeConstantsPath,
+          };
     if (changed.isEmpty || !allowed.containsAll(changed)) {
       throw RepositoryAdapterException(
         'Flutter generation changed an unexpected surface. Refusing to write the checkout. ${flutter.description}',
       );
     }
-    if (!changed.any(catalogPaths.contains)) {
+    if (localeArtifact == null && !changed.any(catalogPaths.contains)) {
       throw RepositoryAdapterException(
         'The Release Bundle applied no catalog-byte change. No review branch was created.',
       );
@@ -580,6 +722,19 @@ class ReleaseRepositoryAdapter {
           'Flutter generation rewrote ${expected.catalogPath} after Blabla authored it.',
         );
       }
+    }
+    if (localeArtifact != null) {
+      final required = {
+        ...changedCatalogPaths,
+        ...combinedGeneratedPaths,
+        ..._portuguese.expectedChangedPaths,
+      };
+      if (!changed.containsAll(required)) {
+        throw RepositoryAdapterException(
+          'Combined delivery did not produce the complete Portuguese catalog, runtime mapping, and generated localization surface.',
+        );
+      }
+      await _portuguese.verifyGenerated(staging, localeArtifact, flutter);
     }
     return changed.toList()..sort();
   }
@@ -610,20 +765,58 @@ class ReleaseRepositoryAdapter {
     Map<String, List<int>> files,
   ) async {
     for (final entry in files.entries) {
-      final destination = await _regularFile(checkout, entry.key);
+      final destination = await _safeCandidateDestination(checkout, entry.key);
+      await destination.parent.create(recursive: true);
       await destination.writeAsBytes(entry.value, flush: true);
     }
+  }
+
+  Future<File> _safeCandidateDestination(
+    Directory root,
+    String relativePath,
+  ) async {
+    if (!_isSafeRelativePath(relativePath)) {
+      throw RepositoryAdapterException(
+        'Localization path is not a safe repository-relative file: $relativePath.',
+      );
+    }
+    var current = root.path;
+    final segments = relativePath.split('/');
+    for (final segment in segments.take(segments.length - 1)) {
+      current = '$current${Platform.pathSeparator}$segment';
+      if (await FileSystemEntity.type(current, followLinks: false) ==
+          FileSystemEntityType.link) {
+        throw RepositoryAdapterException(
+          'Blabla refuses symlinked localization paths: $relativePath.',
+        );
+      }
+    }
+    final destination = _file(root, relativePath);
+    final destinationType = await FileSystemEntity.type(
+      destination.path,
+      followLinks: false,
+    );
+    if (destinationType == FileSystemEntityType.link ||
+        (destinationType != FileSystemEntityType.notFound &&
+            destinationType != FileSystemEntityType.file)) {
+      throw RepositoryAdapterException(
+        'Blabla refuses a non-file localization destination: $relativePath.',
+      );
+    }
+    return destination;
   }
 
   Future<void> _assertRegularLocalizationFiles(
     Directory checkout,
     List<BoundCatalog> catalogs,
-    Set<String> generatedPaths,
-  ) async {
+    Set<String> generatedPaths, {
+    Set<String> additionalPaths = const {},
+  }) async {
     for (final path in {
       _l10nConfigPath,
       ...catalogs.map((catalog) => catalog.catalogPath),
       ...generatedPaths,
+      ...additionalPaths,
     }) {
       await _regularFile(checkout, path);
     }
@@ -684,8 +877,9 @@ class ReleaseRepositoryAdapter {
   String _pullRequestBody(
     ReleaseSummary summary,
     ReleaseDeliveryTree delivery,
-    String appliedOnto,
-  ) {
+    String appliedOnto, {
+    LocaleProposalArtifact? localeArtifact,
+  }) {
     final skipped = delivery.skipped.isEmpty
         ? '- None'
         : delivery.skipped
@@ -696,7 +890,7 @@ class ReleaseRepositoryAdapter {
 - Release Record: `${summary.releaseRecord.id}`
 - Baseline: `${summary.releaseRecord.baselineCommit}`
 - Applied onto: `$appliedOnto`
-- Applied keys: ${delivery.applied.length}
+- Applied keys: ${delivery.applied.length}${localeArtifact == null ? '' : '\n- Locale Proposal: `${localeArtifact.proposalId}`\n- Source Snapshot: `${localeArtifact.sourceSnapshot.id}`'}
 
 Skipped keys
 

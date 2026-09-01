@@ -462,6 +462,169 @@ void main() {
     },
   );
 
+  test(
+    'delivers existing fixes and Portuguese in one generated provenance commit',
+    () async {
+      final fixture = await BrickitFixture.create();
+      addTearDown(fixture.dispose);
+      await fixture.addGermanCatalog();
+      final summary = await existingLocaleRelease(fixture);
+      final artifact = await combinedPortugueseArtifact(fixture, summary);
+      final output = StringBuffer();
+      final runner = CountingCommandRunner();
+
+      final result = await ReleaseRepositoryAdapter(runner: runner).deliver(
+        ReleaseDeliveryRequest(
+          checkout: fixture.root,
+          recordId: summary.releaseRecord.id,
+          flutter: testFlutter(fixture.flutterExecutable),
+          gateway: StaticReleaseGateway(summary),
+          localeProposal: LocaleProposalDeliveryInput(
+            proposalId: artifact.proposalId,
+            gateway: StaticLocaleProposalGateway(artifact),
+          ),
+          write: output.writeln,
+        ),
+      );
+
+      expect(runner.generationCount, 1);
+      expect(result.localeProposalId, artifact.proposalId);
+      expect(result.branchName, 'blabla/release-release_123');
+      expect(
+        result.changedPaths,
+        unorderedEquals([
+          'packages/brickit_generated/lib/l10n/intl_de.arb',
+          'packages/brickit_generated/lib/l10n/intl_pt.arb',
+          'packages/brickit_generated/lib/l10n/app_localizations.dart',
+          'packages/brickit_generated/lib/l10n/app_localizations_de.dart',
+          'packages/brickit_generated/lib/l10n/app_localizations_pt.dart',
+          'packages/brickit/lib/constants/locale_const.dart',
+        ]),
+      );
+      expect(await fixture.git(['status', '--porcelain']), isEmpty);
+      expect(
+        await fixture.git(['show', '-s', '--format=%B', 'HEAD']),
+        allOf(
+          contains('Blabla-Release-Record: release_123'),
+          contains('Blabla-Locale-Proposal: proposal_pt_123'),
+          contains('Blabla-Source-Snapshot: snapshot_123'),
+        ),
+      );
+      expect(
+        await fixture
+            .file('packages/brickit_generated/lib/l10n/intl_de.arb')
+            .readAsString(),
+        '{"@@locale":"de","welcome":"Guten Tag"}',
+      );
+      expect(
+        await fixture
+            .file('packages/brickit_generated/lib/l10n/intl_pt.arb')
+            .readAsString(),
+        artifact.catalog.content,
+      );
+      expect(
+        await File(result.pullRequestBodyFile).readAsString(),
+        allOf(
+          contains('Release Record: `release_123`'),
+          contains('Locale Proposal: `proposal_pt_123`'),
+          contains('Source Snapshot: `snapshot_123`'),
+        ),
+      );
+      expect(
+        output.toString(),
+        allOf(contains('git push'), contains('gh pr create')),
+      );
+    },
+  );
+
+  test(
+    'rejects mismatched combined provenance before changing checkout',
+    () async {
+      final fixture = await BrickitFixture.create();
+      addTearDown(fixture.dispose);
+      await fixture.addGermanCatalog();
+      final summary = await existingLocaleRelease(fixture);
+      final original = await combinedPortugueseArtifact(fixture, summary);
+      final artifact = LocaleProposalArtifact(
+        version: original.version,
+        proposalId: original.proposalId,
+        sourceSnapshot: SourceSnapshotIdentity(
+          id: 'another_snapshot',
+          repository: original.sourceSnapshot.repository,
+          commit: original.sourceSnapshot.commit,
+          manifestHash: original.sourceSnapshot.manifestHash,
+          catalogPath: original.sourceSnapshot.catalogPath,
+        ),
+        locale: original.locale,
+        catalog: original.catalog,
+      );
+      final head = await fixture.git(['rev-parse', 'HEAD']);
+
+      await expectLater(
+        ReleaseRepositoryAdapter().deliver(
+          ReleaseDeliveryRequest(
+            checkout: fixture.root,
+            recordId: summary.releaseRecord.id,
+            flutter: testFlutter(fixture.flutterExecutable),
+            gateway: StaticReleaseGateway(summary),
+            localeProposal: LocaleProposalDeliveryInput(
+              proposalId: artifact.proposalId,
+              gateway: StaticLocaleProposalGateway(artifact),
+            ),
+            write: (_) {},
+          ),
+        ),
+        throwsA(
+          isA<RepositoryAdapterException>().having(
+            (error) => error.message,
+            'message',
+            contains('do not share'),
+          ),
+        ),
+      );
+
+      expect(await fixture.git(['rev-parse', 'HEAD']), head);
+      expect(await fixture.git(['branch', '--show-current']), 'develop');
+    },
+  );
+
+  test(
+    'still delivers Portuguese when every existing key is skipped',
+    () async {
+      final fixture = await BrickitFixture.create();
+      addTearDown(fixture.dispose);
+      await fixture.addGermanCatalog();
+      final summary = await existingLocaleRelease(fixture);
+      final artifact = await combinedPortugueseArtifact(fixture, summary);
+
+      final result = await ReleaseRepositoryAdapter().deliver(
+        ReleaseDeliveryRequest(
+          checkout: fixture.root,
+          recordId: summary.releaseRecord.id,
+          flutter: testFlutter(fixture.flutterExecutable),
+          gateway: SkippedReleaseGateway(summary),
+          localeProposal: LocaleProposalDeliveryInput(
+            proposalId: artifact.proposalId,
+            gateway: StaticLocaleProposalGateway(artifact),
+          ),
+          write: (_) {},
+        ),
+      );
+
+      expect(result.applied, isEmpty);
+      expect(result.skipped, hasLength(2));
+      expect(
+        result.changedPaths,
+        unorderedEquals([
+          'packages/brickit_generated/lib/l10n/intl_pt.arb',
+          'packages/brickit_generated/lib/l10n/app_localizations.dart',
+          'packages/brickit_generated/lib/l10n/app_localizations_pt.dart',
+          'packages/brickit/lib/constants/locale_const.dart',
+        ]),
+      );
+    },
+  );
+
   test('refuses a tracked symlink before reading a bound catalog', () async {
     final fixture = await BrickitFixture.create();
     addTearDown(fixture.dispose);
@@ -608,6 +771,29 @@ Future<LocaleProposalArtifact> portugueseArtifact(
   );
 }
 
+Future<LocaleProposalArtifact> combinedPortugueseArtifact(
+  BrickitFixture fixture,
+  ReleaseSummary release,
+) async {
+  final original = await portugueseArtifact(fixture);
+  return LocaleProposalArtifact(
+    version: original.version,
+    proposalId: original.proposalId,
+    sourceSnapshot: SourceSnapshotIdentity(
+      id: release.releaseRecord.baselineSnapshotId,
+      repository: release.releaseRecord.repository,
+      commit: release.releaseRecord.baselineCommit,
+      manifestHash: release.releaseRecord.manifestHash,
+      catalogPath: release.catalogs
+          .singleWhere((catalog) => catalog.isSource)
+          .catalogPath,
+      integrationBranch: release.releaseRecord.integrationBranch,
+    ),
+    locale: original.locale,
+    catalog: original.catalog,
+  );
+}
+
 DeliveryRequest requestFor(
   BrickitFixture fixture,
   LocaleProposalArtifact artifact, {
@@ -706,6 +892,50 @@ class StaticReleaseGateway implements ReleaseGateway {
   );
 }
 
+class SkippedReleaseGateway implements ReleaseGateway {
+  SkippedReleaseGateway(this.summary);
+
+  final ReleaseSummary summary;
+
+  @override
+  Future<ReleaseSummary> readRelease(String recordId) async => summary;
+
+  @override
+  Future<ReleaseDeliveryTree> createDeliveryTree(
+    String recordId,
+    List<DeliveryTreeFile> files,
+  ) async => ReleaseDeliveryTree(
+    releaseRecord: summary.releaseRecord,
+    files: files,
+    applied: const [],
+    skipped: const [
+      SkippedReleaseKey(messageId: 'greeting', reason: 'source_changed'),
+      SkippedReleaseKey(messageId: 'farewell', reason: 'missing_source'),
+    ],
+  );
+}
+
+class CountingCommandRunner implements CommandRunner {
+  final _delegate = const SystemCommandRunner();
+  var generationCount = 0;
+
+  @override
+  Future<CommandResult> run(
+    String executable,
+    List<String> arguments, {
+    required String workingDirectory,
+    List<int>? stdin,
+  }) {
+    if (arguments.contains('gen-l10n')) generationCount += 1;
+    return _delegate.run(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      stdin: stdin,
+    );
+  }
+}
+
 class BrickitFixture {
   BrickitFixture._({
     required this.root,
@@ -782,6 +1012,9 @@ if [ ! -f lib/l10n/intl_pt.arb ]; then
   fi
   cp lib/l10n/intl_de.arb lib/l10n/app_localizations_de.dart
   exit 0
+fi
+if [ -f lib/l10n/intl_de.arb ]; then
+  cp lib/l10n/intl_de.arb lib/l10n/app_localizations_de.dart
 fi
 cat > lib/l10n/app_localizations.dart <<'EOF'
 class AppLocalizations {}

@@ -63,6 +63,9 @@ Future<int> runCli(
   }
 
   try {
+    output(
+      'Note: deliver-portuguese is a compatibility command. Prefer `blabla deliver --release <id> --locale-proposal <id>` when shipping existing and new Locale work together.',
+    );
     final options = _options(arguments.skip(1).toList(), const {
       'checkout',
       'proposal',
@@ -137,11 +140,13 @@ Future<int> _deliverRelease(
     final options = _options(arguments, const {
       'checkout',
       'release',
+      'locale-proposal',
       'server',
       'token',
       'flutter-sdk',
     });
     final recordId = _requiredOption(options, 'release');
+    final localeProposalId = options['locale-proposal'];
     final store = CredentialStore();
     BlablaCredentials? storedCredentials;
     Future<BlablaCredentials?> stored() async =>
@@ -187,6 +192,16 @@ Future<int> _deliverRelease(
           token: token,
           onWarning: write,
         ),
+        localeProposal: localeProposalId == null
+            ? null
+            : LocaleProposalDeliveryInput(
+                proposalId: localeProposalId,
+                gateway: HttpLocaleProposalGateway(
+                  baseUrl: server,
+                  token: token,
+                  onWarning: write,
+                ),
+              ),
         write: write,
       ),
     );
@@ -314,7 +329,7 @@ String _requiredOption(Map<String, String> options, String key) {
 
 const _usage = '''Usage:
   blabla sync [options]
-  blabla deliver --release <release-record-id> [options]
+  blabla deliver --release <release-record-id> [--locale-proposal <proposal-id>] [options]
   blabla deliver-portuguese --proposal <proposal-id> [options]
   blabla login --server <url> --token <token>
 
@@ -328,5 +343,6 @@ Options:
                      / .fvmrc through fvm / flutter on PATH)
 
 `deliver` applies a reviewed existing-locale Release Bundle, runs Flutter
-generation in a disposable worktree, and creates one local review commit.
+generation in a disposable worktree, and creates one local review commit. Add
+`--locale-proposal` to include a ready new Locale in that same commit.
 Commands never push or open a pull request.''';

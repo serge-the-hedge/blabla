@@ -56,10 +56,11 @@ The product path is intentionally small:
 4. Use **Strings** for manual edits and **Translation tasks** to prepare a
    locale or hand a bounded translation task to an agent.
 5. Review the proposed values in the task before any delivery action.
-6. When a Portuguese proposal is ready, run `blabla deliver-portuguese` from
-   that same integration-branch checkout. The adapter creates a local review
-   branch and prints the exact push and pull-request commands; it never runs
-   them for you.
+6. Prepare a Release Record for reviewed existing-Locale work. Deliver it from
+   that same integration-branch checkout, adding `--locale-proposal` when a
+   Portuguese task is ready too. The adapter creates one local review branch
+   and prints the exact push and pull-request commands; it never runs them for
+   you.
 
 The setup page is the workflow surface. Project ids, Convex URLs, token scopes,
 snapshot ids, and proposal ids are implementation details unless you open an
@@ -75,12 +76,12 @@ git -C /path/to/brickit-flutter switch develop
 git -C /path/to/brickit-flutter pull --ff-only origin develop
 # run the following from this Blabla repository root
 bun run blabla -- sync --checkout /path/to/brickit-flutter
-bun run blabla -- deliver-portuguese --proposal <proposal-id> --checkout /path/to/brickit-flutter
+bun run blabla -- deliver --release <release-record-id> --locale-proposal <proposal-id> --checkout /path/to/brickit-flutter
 ```
 
 Run them from this repository root. A production build shows the equivalent
-installed-binary commands (`blabla login`, `blabla sync`, and
-`blabla deliver-portuguese`) instead.
+installed-binary commands (`blabla login`, `blabla sync`, and `blabla deliver`)
+instead. `deliver-portuguese` remains available for old new-Locale-only jobs.
 
 ## Development Authentication
 

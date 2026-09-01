@@ -50,15 +50,22 @@ Release Bundle, then deliver it from the current Brickit integration branch:
 blabla deliver --release <release-record-id>
 ```
 
+When a ready Portuguese task belongs to that same Baseline, deliver both jobs
+through the same transaction:
+
+```sh
+blabla deliver --release <release-record-id> --locale-proposal <proposal-id>
+```
+
 The server applies the Release Delta to the checkout's current catalog tree.
 Target drift is replaced with the reviewed value; a changed or missing Source
 value skips the whole key and is reported. The CLI runs Flutter generation in a
 disposable worktree and creates one local `blabla/release-...` review commit.
-
-The Repository Adapter turns one current, finalized Portuguese Locale Proposal
-into a local Brickit review branch. It is deliberately a thin Dart client:
-Blabla supplies the immutable `intl_pt.arb` artifact and its provenance; the
-adapter owns only local Git and Flutter toolchain I/O.
+For combined delivery it validates that both immutable artifacts share the
+same repository, Baseline/Source Snapshot, and integration branch; applies the
+existing-Locale delta; adds the complete `intl_pt.arb`; and runs Flutter
+generation once over the combined tree. Blabla supplies the catalog bytes and
+provenance; the adapter owns only local Git and Flutter toolchain I/O.
 
 It never receives Git credentials, pushes, or opens a pull request.
 
@@ -97,11 +104,15 @@ From the same Brickit checkout, switch to the integration branch before
 delivery. The current project target is `develop`; the adapter refuses a
 different branch and uses `develop` as the pull-request base.
 
-Then run:
+For a combined job, run:
 
 ```sh
-blabla deliver-portuguese --proposal <proposal-id> --checkout /path/to/brickit-flutter
+blabla deliver --release <release-record-id> --locale-proposal <proposal-id> --checkout /path/to/brickit-flutter
 ```
+
+Omit `--locale-proposal` for existing-Locale work only. The old
+`deliver-portuguese --proposal ...` command remains as a deprecated
+compatibility path for an already-prepared Portuguese-only job.
 
 For local CLI development, run the same command through Dart from `cli/`:
 
@@ -109,8 +120,9 @@ For local CLI development, run the same command through Dart from `cli/`:
 dart pub get
 BLABLA_API_URL=https://your-blabla.example \
 BLABLA_TOKEN=... \
-dart run bin/blabla.dart deliver-portuguese \
-  --proposal <proposal-id> \
+dart run bin/blabla.dart deliver \
+  --release <release-record-id> \
+  --locale-proposal <proposal-id> \
   --checkout /path/to/brickit-flutter
 ```
 
