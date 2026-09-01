@@ -130,7 +130,7 @@ void main() {
           isA<RepositoryAdapterException>().having(
             (error) => error.message,
             'message',
-            allOf(contains('match HEAD'), contains('intl_en.arb')),
+            allOf(contains('committed blob'), contains('intl_en.arb')),
           ),
         ),
       );
@@ -139,7 +139,7 @@ void main() {
   );
 
   test(
-    'refuses an untracked sibling catalog before snapshot discovery',
+    'ignores an untracked sibling catalog outside Git Release Truth',
     () async {
       final fixture = await SyncFixture.create();
       addTearDown(fixture.dispose);
@@ -147,6 +147,28 @@ void main() {
         'packages/brickit_generated/lib/l10n/intl_es.arb',
         '{"@@locale":"es","greeting":"Hola"}',
       );
+      final gateway = RecordingSnapshotGateway(_syncContext());
+
+      await RepositorySyncAdapter().sync(
+        checkout: fixture.root,
+        gateway: gateway,
+        write: (_) {},
+      );
+      expect(
+        gateway.files.map((file) => file.catalogPath),
+        isNot(contains('packages/brickit_generated/lib/l10n/intl_es.arb')),
+      );
+    },
+  );
+
+  test(
+    'detects a changed catalog even when Git marks it assume-unchanged',
+    () async {
+      final fixture = await SyncFixture.create();
+      addTearDown(fixture.dispose);
+      const path = 'packages/brickit_generated/lib/l10n/intl_en.arb';
+      await fixture.git(['update-index', '--assume-unchanged', path]);
+      await fixture.write(path, '{"@@locale":"en","greeting":"Hidden"}');
       final gateway = RecordingSnapshotGateway(_syncContext());
 
       await expectLater(
@@ -159,13 +181,39 @@ void main() {
           isA<RepositoryAdapterException>().having(
             (error) => error.message,
             'message',
-            allOf(contains('match HEAD'), contains('intl_es.arb')),
+            allOf(contains('committed blob'), contains('intl_en.arb')),
           ),
         ),
       );
       expect(gateway.commit, isNull);
     },
   );
+
+  test('refuses a catalog replaced by a symbolic link', () async {
+    final fixture = await SyncFixture.create();
+    addTearDown(fixture.dispose);
+    const relative = 'packages/brickit_generated/lib/l10n/intl_en.arb';
+    final path = '${fixture.root.path}${Platform.pathSeparator}$relative';
+    await File(path).delete();
+    await Link(path).create('intl_fr.arb');
+    final gateway = RecordingSnapshotGateway(_syncContext());
+
+    await expectLater(
+      RepositorySyncAdapter().sync(
+        checkout: fixture.root,
+        gateway: gateway,
+        write: (_) {},
+      ),
+      throwsA(
+        isA<RepositoryAdapterException>().having(
+          (error) => error.message,
+          'message',
+          allOf(contains('symbolic link'), contains('intl_en.arb')),
+        ),
+      ),
+    );
+    expect(gateway.commit, isNull);
+  });
 
   test('derives descendant lineage from local Git history', () async {
     final fixture = await SyncFixture.create();
