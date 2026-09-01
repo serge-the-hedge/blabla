@@ -1,9 +1,10 @@
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
+	action,
 	internalMutation,
 	internalQuery,
 	type MutationCtx,
@@ -20,6 +21,7 @@ import {
 import { readyNavigationStateFor } from "./catalogWorkspaceNavigation";
 import { assertTargetValueContract } from "./contractTransforms";
 import { type HumanActor, now, sha256Hex } from "./lib";
+import { finalizeProposal } from "./localeProposals";
 import { requireEditor, requireViewer } from "./permissions";
 import {
 	isCurrentSourceProposalHeadForSource,
@@ -79,7 +81,7 @@ const candidateRevisionInputValidator = v.object({
 	),
 });
 
-const reviewDecisionValidator = v.union(
+export const reviewDecisionValidator = v.union(
 	v.object({ kind: v.literal("accept") }),
 	v.object({ kind: v.literal("acceptWithEdits"), value: v.string() }),
 	v.object({
@@ -88,6 +90,12 @@ const reviewDecisionValidator = v.union(
 	}),
 	v.object({ kind: v.literal("intentionalBlank"), reason: v.string() }),
 );
+
+export type TranslationTaskReviewDecision =
+	| { kind: "accept" }
+	| { kind: "acceptWithEdits"; value: string }
+	| { kind: "reject"; reason?: string }
+	| { kind: "intentionalBlank"; reason: string };
 
 const translationWorkReasonValidator = v.union(
 	v.literal("missing"),
@@ -2349,5 +2357,223 @@ export const reviewCandidate = mutation({
 		const status = await completedProposalStatus(ctx, proposal._id);
 		await ctx.db.patch(proposal._id, { status, updatedAt: now() });
 		return { reviewId, workspaceRevision, decision: args.decision };
+	},
+});
+
+/** Human review command at the Translation Task seam. The caller identifies
+ * only the task and message; the module resolves the current candidate and the
+ * private existing/new-Locale adapter. */
+export const reviewTaskValue = mutation({
+	args: {
+		taskId: v.id("agentTranslationProposals"),
+		messageId: v.string(),
+		decision: reviewDecisionValidator,
+	},
+	returns: v.object({
+		taskId: v.id("agentTranslationProposals"),
+		messageId: v.string(),
+		decision: reviewDecisionValidator,
+	}),
+	handler: async (ctx, args) => {
+		const proposal = await ctx.db.get(args.taskId);
+		if (!proposal) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Translation Task not found.",
+			});
+		}
+		await requireEditor(ctx, proposal.projectId);
+		if (proposal.taskScope && proposal.target.kind === "catalogWorkspace") {
+			const candidate = await ctx.db
+				.query("agentTranslationCandidates")
+				.withIndex("by_proposal_and_messageId_and_localeId", (q) =>
+					q
+						.eq("proposalId", proposal._id)
+						.eq("messageId", args.messageId)
+						.eq("localeId", proposal.taskScope?.localeId),
+				)
+				.unique();
+			if (!candidate?.latestRevisionId) {
+				throw new ConvexError({
+					code: "NOT_FOUND",
+					message: "The task message has no candidate to review.",
+				});
+			}
+			await ctx.runMutation(api.agentTranslationProposals.reviewCandidate, {
+				candidateRevisionId: candidate.latestRevisionId,
+				decision: args.decision,
+			});
+		} else if (
+			proposal.localeProposalTaskScope &&
+			proposal.target.kind === "localeProposal" &&
+			proposal.localeProposalTaskScope.localeProposalId ===
+				proposal.target.localeProposalId
+		) {
+			await ctx.runMutation(api.localeProposals.reviewStagedValue, {
+				projectId: proposal.projectId,
+				proposalId: proposal.target.localeProposalId,
+				messageId: args.messageId,
+				decision: args.decision,
+			});
+		} else {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Translation Task not found.",
+			});
+		}
+		return {
+			taskId: proposal._id,
+			messageId: args.messageId,
+			decision: args.decision,
+		};
+	},
+});
+
+const taskFinalizationContextValidator = v.union(
+	v.object({
+		kind: v.literal("existingLocale"),
+		taskId: v.id("agentTranslationProposals"),
+		projectId: v.id("projects"),
+	}),
+	v.object({
+		kind: v.literal("newLocale"),
+		taskId: v.id("agentTranslationProposals"),
+		projectId: v.id("projects"),
+		localeProposalId: v.id("localeProposals"),
+	}),
+);
+
+type TaskFinalizationContext =
+	| {
+			kind: "existingLocale";
+			taskId: Id<"agentTranslationProposals">;
+			projectId: Id<"projects">;
+	  }
+	| {
+			kind: "newLocale";
+			taskId: Id<"agentTranslationProposals">;
+			projectId: Id<"projects">;
+			localeProposalId: Id<"localeProposals">;
+	  };
+
+type TaskFinalizationResult =
+	| {
+			kind: "existingLocale";
+			taskId: Id<"agentTranslationProposals">;
+			releaseRecordId: Id<"releaseRecords">;
+			releaseStatus: "preparing" | "ready" | "superseded" | "failed";
+	  }
+	| {
+			kind: "newLocale";
+			taskId: Id<"agentTranslationProposals">;
+			localeProposalId: Id<"localeProposals">;
+			deliveryStatus: "ready";
+	  };
+
+export const taskFinalizationContext = internalQuery({
+	args: { taskId: v.id("agentTranslationProposals") },
+	returns: taskFinalizationContextValidator,
+	handler: async (ctx, args): Promise<TaskFinalizationContext> => {
+		const proposal = await ctx.db.get(args.taskId);
+		if (!proposal) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Translation Task not found.",
+			});
+		}
+		await requireEditor(ctx, proposal.projectId);
+		if (proposal.taskScope && proposal.target.kind === "catalogWorkspace") {
+			if (proposal.status === "open") {
+				throw new ConvexError({
+					code: "REVIEW_REQUIRED",
+					message: "Review every existing-Locale task value before finalizing.",
+				});
+			}
+			return {
+				kind: "existingLocale" as const,
+				taskId: proposal._id,
+				projectId: proposal.projectId,
+			};
+		}
+		if (
+			proposal.localeProposalTaskScope &&
+			proposal.target.kind === "localeProposal" &&
+			proposal.localeProposalTaskScope.localeProposalId ===
+				proposal.target.localeProposalId
+		) {
+			return {
+				kind: "newLocale" as const,
+				taskId: proposal._id,
+				projectId: proposal.projectId,
+				localeProposalId: proposal.target.localeProposalId,
+			};
+		}
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message: "Translation Task not found.",
+		});
+	},
+});
+
+/** Finalize reviewed work and return the next durable hand-off. Existing
+ * Locale work starts a Release assessment; new-Locale work creates its ready,
+ * immutable Locale Proposal artifact. Neither path touches Git. */
+export const finalizeTask = action({
+	args: { taskId: v.id("agentTranslationProposals") },
+	returns: v.union(
+		v.object({
+			kind: v.literal("existingLocale"),
+			taskId: v.id("agentTranslationProposals"),
+			releaseRecordId: v.id("releaseRecords"),
+			releaseStatus: v.union(
+				v.literal("preparing"),
+				v.literal("ready"),
+				v.literal("superseded"),
+				v.literal("failed"),
+			),
+		}),
+		v.object({
+			kind: v.literal("newLocale"),
+			taskId: v.id("agentTranslationProposals"),
+			localeProposalId: v.id("localeProposals"),
+			deliveryStatus: v.literal("ready"),
+		}),
+	),
+	handler: async (ctx, args): Promise<TaskFinalizationResult> => {
+		const context: TaskFinalizationContext = await ctx.runQuery(
+			internal.agentTranslationProposals.taskFinalizationContext,
+			args,
+		);
+		if (context.kind === "existingLocale") {
+			const release: {
+				recordId: Id<"releaseRecords">;
+				status: "preparing" | "ready" | "superseded" | "failed";
+			} = await ctx.runMutation(api.releaseRecords.prepare, {
+				projectId: context.projectId,
+			});
+			return {
+				kind: context.kind,
+				taskId: context.taskId,
+				releaseRecordId: release.recordId,
+				releaseStatus: release.status,
+			};
+		}
+		const proposal = await finalizeProposal(
+			ctx,
+			{ projectId: context.projectId },
+			context.localeProposalId,
+		);
+		if (proposal.deliveryStatus !== "ready") {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "The finalized new-Locale task has no ready artifact.",
+			});
+		}
+		return {
+			kind: context.kind,
+			taskId: context.taskId,
+			localeProposalId: context.localeProposalId,
+			deliveryStatus: proposal.deliveryStatus,
+		};
 	},
 });

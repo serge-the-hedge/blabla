@@ -430,6 +430,67 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 		});
 	}, 60_000);
 
+	test("reviews and finalizes a new Locale through task-only human commands", async () => {
+		const user = await authenticatedBackend(t, "new-locale-task-reviewer");
+		const projectId = await createProject(user);
+		await ingestSourceBaseline(user, projectId);
+		const { token } = await proposalToken(user, projectId);
+		const task = await successfulJson<{
+			taskId: Id<"agentTranslationProposals">;
+		}>(
+			await agentRequest(t, token, "/api/agent/v1/translation-tasks", {
+				method: "POST",
+				body: JSON.stringify({
+					clientTaskKey: "portuguese-reviewed-v1",
+					target: { kind: "newLocale", localeCode: "pt" },
+				}),
+			}),
+		);
+		const page = await successfulJson<{
+			targets: Array<{ messageId: string }>;
+		}>(
+			await agentRequest(
+				t,
+				token,
+				`/api/agent/v1/translation-tasks/${task.taskId}`,
+			),
+		);
+		const message = page.targets[0];
+		if (!message) throw new Error("Expected the new-Locale task message.");
+		await successfulJson(
+			await agentRequest(
+				t,
+				token,
+				`/api/agent/v1/translation-tasks/${task.taskId}/candidates`,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						items: [
+							{ messageId: message.messageId, value: "Boas-vindas, {name}!" },
+						],
+					}),
+				},
+			),
+		);
+		await expect(
+			user.mutation(api.agentTranslationProposals.reviewTaskValue, {
+				taskId: task.taskId,
+				messageId: message.messageId,
+				decision: { kind: "accept" },
+			}),
+		).resolves.toMatchObject({ decision: { kind: "accept" } });
+		await expect(
+			user.action(api.agentTranslationProposals.finalizeTask, {
+				taskId: task.taskId,
+			}),
+		).resolves.toMatchObject({
+			kind: "newLocale",
+			taskId: task.taskId,
+			localeProposalId: expect.any(String),
+			deliveryStatus: "ready",
+		});
+	}, 60_000);
+
 	test("rejects an unconfigured new Locale before creating a proposal", async () => {
 		const user = await authenticatedBackend(t, "unsupported-new-locale-owner");
 		const projectId = await createProject(user);

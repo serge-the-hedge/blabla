@@ -61,11 +61,13 @@ function PortugueseLocaleProposalRoute() {
 export function PortugueseLocaleProposalWorkbench({
 	projectId,
 	initialProposalId,
+	taskId,
 	title = "New Locale",
 	showTaskNavigation = false,
 }: {
 	projectId: string;
 	initialProposalId?: string;
+	taskId?: string;
 	title?: string;
 	showTaskNavigation?: boolean;
 }) {
@@ -78,7 +80,11 @@ export function PortugueseLocaleProposalWorkbench({
 	const ensureForReview = useMutation(api.localeProposals.ensureForReview);
 	const stageForReview = useMutation(api.localeProposals.stageForReview);
 	const reviewStagedValue = useMutation(api.localeProposals.reviewStagedValue);
+	const reviewTaskValue = useMutation(
+		api.agentTranslationProposals.reviewTaskValue,
+	);
 	const finalizeForReview = useAction(api.localeProposals.finalizeForReview);
+	const finalizeTask = useAction(api.agentTranslationProposals.finalizeTask);
 	const artifactForReview = useAction(api.localeProposals.artifactForReview);
 	const [proposalId, setProposalId] = useState<string | null>(null);
 	const activeProposalId = initialProposalId ?? proposalId ?? currentProposalId;
@@ -176,15 +182,27 @@ export function PortugueseLocaleProposalWorkbench({
 			);
 		});
 
-	const decide = (messageId: string, decision: ReviewDecision) =>
-		run(`review:${messageId}`, async () => {
-			if (!activeProposalId) return;
-			await reviewStagedValue({
-				projectId: convexProjectId,
-				proposalId: convexId<"localeProposals">(activeProposalId),
+	const reviewValue = async (messageId: string, decision: ReviewDecision) => {
+		if (!activeProposalId) return;
+		if (taskId) {
+			await reviewTaskValue({
+				taskId: convexId<"agentTranslationProposals">(taskId),
 				messageId,
 				decision,
 			});
+			return;
+		}
+		await reviewStagedValue({
+			projectId: convexProjectId,
+			proposalId: convexId<"localeProposals">(activeProposalId),
+			messageId,
+			decision,
+		});
+	};
+
+	const decide = (messageId: string, decision: ReviewDecision) =>
+		run(`review:${messageId}`, async () => {
+			await reviewValue(messageId, decision);
 			setNotice("Human review recorded.");
 		});
 
@@ -192,12 +210,7 @@ export function PortugueseLocaleProposalWorkbench({
 		run("accept-visible", async () => {
 			if (!activeProposalId || visibleAgentCandidates.length === 0) return;
 			for (const message of visibleAgentCandidates) {
-				await reviewStagedValue({
-					projectId: convexProjectId,
-					proposalId: convexId<"localeProposals">(activeProposalId),
-					messageId: message.messageId,
-					decision: { kind: "accept" },
-				});
+				await reviewValue(message.messageId, { kind: "accept" });
 			}
 			const nextCursor = detail?.continueCursor;
 			if (
@@ -237,11 +250,9 @@ export function PortugueseLocaleProposalWorkbench({
 					],
 				});
 			}
-			await reviewStagedValue({
-				projectId: convexProjectId,
-				proposalId: convexId<"localeProposals">(activeProposalId),
-				messageId: message.messageId,
-				decision: { kind: "intentionalBlank", reason },
+			await reviewValue(message.messageId, {
+				kind: "intentionalBlank",
+				reason,
 			});
 			setNotice("Intentional Blank recorded with human review.");
 		});
@@ -249,10 +260,16 @@ export function PortugueseLocaleProposalWorkbench({
 	const finalize = () =>
 		run("finalize", async () => {
 			if (!activeProposalId) return;
-			await finalizeForReview({
-				projectId: convexProjectId,
-				proposalId: convexId<"localeProposals">(activeProposalId),
-			});
+			if (taskId) {
+				await finalizeTask({
+					taskId: convexId<"agentTranslationProposals">(taskId),
+				});
+			} else {
+				await finalizeForReview({
+					projectId: convexProjectId,
+					proposalId: convexId<"localeProposals">(activeProposalId),
+				});
+			}
 			setNotice(
 				"The reviewed Locale Proposal is ready as an immutable artifact.",
 			);

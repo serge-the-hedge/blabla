@@ -11,7 +11,7 @@ import { Input } from "@blabla/ui/components/input";
 import { Skeleton } from "@blabla/ui/components/skeleton";
 import { Textarea } from "@blabla/ui/components/textarea";
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { ArrowLeft, Bot, Check, X } from "lucide-react";
 import { useState } from "react";
 
@@ -116,18 +116,20 @@ function ProposalDetailRoute() {
 	const detail = useQuery(api.agentTranslationProposals.getForReview, {
 		proposalId: convexId<"agentTranslationProposals">(proposalId),
 	});
-	const reviewCandidate = useMutation(
-		api.agentTranslationProposals.reviewCandidate,
+	const reviewTaskValue = useMutation(
+		api.agentTranslationProposals.reviewTaskValue,
 	);
 	const acceptTaskCandidates = useMutation(
 		api.agentTranslationProposals.acceptTaskCandidates,
 	);
+	const finalizeTask = useAction(api.agentTranslationProposals.finalizeTask);
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
 	const [blankReasons, setBlankReasons] = useState<Record<string, string>>({});
 	const [rejectArmed, setRejectArmed] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
 	const [isBatchAccepting, setIsBatchAccepting] = useState(false);
+	const [isFinalizing, setIsFinalizing] = useState(false);
 
 	if (detail === undefined) {
 		return (
@@ -149,6 +151,7 @@ function ProposalDetailRoute() {
 		return (
 			<PortugueseLocaleProposalWorkbench
 				projectId={projectId}
+				taskId={detail.proposal._id}
 				initialProposalId={
 					detail.proposal.localeProposalTaskScope.localeProposalId
 				}
@@ -197,7 +200,7 @@ function ProposalDetailRoute() {
 		}
 	};
 	const decide = async (
-		revisionId: string,
+		messageId: string,
 		decision:
 			| { kind: "accept" }
 			| { kind: "acceptWithEdits"; value: string }
@@ -207,9 +210,9 @@ function ProposalDetailRoute() {
 		setError(null);
 		setNotice(null);
 		try {
-			await reviewCandidate({
-				candidateRevisionId:
-					convexId<"agentTranslationCandidateRevisions">(revisionId),
+			await reviewTaskValue({
+				taskId: convexId<"agentTranslationProposals">(proposalId),
+				messageId,
 				decision,
 			});
 			setRejectArmed(null);
@@ -219,13 +222,35 @@ function ProposalDetailRoute() {
 	};
 	const blankReasonFor = (revisionId: string) =>
 		blankReasons[revisionId]?.trim() ?? "";
+	const taskScope = proposal.taskScope;
+	const finalize = async () => {
+		if (!taskScope || proposal.status === "open" || isFinalizing) return;
+		setError(null);
+		setNotice(null);
+		setIsFinalizing(true);
+		try {
+			const result = await finalizeTask({
+				taskId: convexId<"agentTranslationProposals">(proposal._id),
+			});
+			setNotice(
+				result.kind === "existingLocale"
+					? `Release ${result.releaseRecordId} is ${result.releaseStatus}. Open Release for its assessment and bundle hand-off.`
+					: "The new-Locale artifact is ready.",
+			);
+		} catch (cause) {
+			setError(
+				cause instanceof Error ? cause.message : "Task finalization failed.",
+			);
+		} finally {
+			setIsFinalizing(false);
+		}
+	};
 	const candidateMessageIds = new Set(
 		detail.candidates.map(({ candidate }) => candidate.messageId),
 	);
 	const waitingTaskTargets = detail.taskTargets.filter(
 		(target) => !candidateMessageIds.has(target.messageId),
 	);
-	const taskScope = proposal.taskScope;
 
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
@@ -285,6 +310,37 @@ function ProposalDetailRoute() {
 									: `Accept next ${exactBatchRevisionIds.length} exact`}
 							</Button>
 						) : null}
+					</AlertDescription>
+				</Alert>
+			) : null}
+			{taskScope && proposal.status !== "open" ? (
+				<Alert className="mb-4">
+					<AlertDescription className="flex flex-wrap items-center gap-3">
+						<span className="min-w-0 flex-1">
+							Review is complete. Finalize this task to prepare its durable
+							Release hand-off; Git delivery remains a separate local command.
+						</span>
+						<Button
+							type="button"
+							size="sm"
+							disabled={isFinalizing}
+							onClick={() => void finalize()}
+						>
+							{isFinalizing ? "Preparing…" : "Prepare release"}
+						</Button>
+						<Button
+							nativeButton={false}
+							size="sm"
+							variant="outline"
+							render={
+								<Link
+									to="/projects/$projectId/release"
+									params={{ projectId }}
+								/>
+							}
+						>
+							Open Release
+						</Button>
 					</AlertDescription>
 				</Alert>
 			) : null}
@@ -387,7 +443,7 @@ function ProposalDetailRoute() {
 											isReviewed || !canReview || draft !== revision.value
 										}
 										onClick={() =>
-											void decide(revision._id, { kind: "accept" })
+											void decide(revision.messageId, { kind: "accept" })
 										}
 									>
 										<Check data-icon="inline-start" />
@@ -398,7 +454,7 @@ function ProposalDetailRoute() {
 										variant="secondary"
 										disabled={isReviewed || !canReview || draft.length === 0}
 										onClick={() =>
-											void decide(revision._id, {
+											void decide(revision.messageId, {
 												kind: "acceptWithEdits",
 												value: draft,
 											})
@@ -413,7 +469,7 @@ function ProposalDetailRoute() {
 												variant="destructive"
 												disabled={isReviewed || !canReview}
 												onClick={() =>
-													void decide(revision._id, { kind: "reject" })
+													void decide(revision.messageId, { kind: "reject" })
 												}
 											>
 												<X data-icon="inline-start" />
@@ -446,7 +502,7 @@ function ProposalDetailRoute() {
 											blankReasonFor(revision._id).length === 0
 										}
 										onClick={() =>
-											void decide(revision._id, {
+											void decide(revision.messageId, {
 												kind: "intentionalBlank",
 												reason: blankReasonFor(revision._id),
 											})

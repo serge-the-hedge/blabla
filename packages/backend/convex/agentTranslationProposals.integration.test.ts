@@ -761,6 +761,40 @@ describe("Agent Translation Proposals", () => {
 		});
 		expect(legacyRetry.status).toBe(200);
 		expect(await legacyRetry.json()).toMatchObject({ taskId: task.taskId });
+
+		const submission = await agentRequest(
+			t,
+			token,
+			`/api/agent/v1/translation-tasks/${task.taskId}/candidates`,
+			{
+				method: "POST",
+				body: JSON.stringify({
+					items: [{ messageId: "missing", value: "Übersetzung benötigt" }],
+				}),
+			},
+		);
+		expect(submission.status).toBe(200);
+		await expect(
+			user.mutation(api.agentTranslationProposals.reviewTaskValue, {
+				taskId: task.taskId,
+				messageId: "missing",
+				decision: { kind: "accept" },
+			}),
+		).resolves.toMatchObject({
+			taskId: task.taskId,
+			messageId: "missing",
+			decision: { kind: "accept" },
+		});
+		await expect(
+			user.action(api.agentTranslationProposals.finalizeTask, {
+				taskId: task.taskId,
+			}),
+		).resolves.toMatchObject({
+			kind: "existingLocale",
+			taskId: task.taskId,
+			releaseRecordId: expect.any(String),
+			releaseStatus: "preparing",
+		});
 	});
 
 	test("rejects an agent blank and rejects stale basis evidence", async () => {
