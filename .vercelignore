@@ -1,0 +1,7 @@
+.agents/
+.scratch/
+.turbo/
+cli/
+node_modules/
+reports/
+temp/

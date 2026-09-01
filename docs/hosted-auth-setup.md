@@ -4,7 +4,7 @@ Production uses Vercel's stable project URL while the custom domain is being
 configured:
 
 ```txt
-https://flutte-web-imperceptibles-projects.vercel.app
+https://flutte-web.vercel.app
 ```
 
 The intended custom domain is `https://blabla.seryozha.world`.
@@ -44,7 +44,7 @@ Create this DNS record:
 ```txt
 Type: CNAME
 Name: blabla
-Value: cname.vercel-dns.com
+Value: d84a471e3b5855b6.vercel-dns-017.com.
 ```
 
 Wait until Vercel verifies the domain and provisions HTTPS.
@@ -56,10 +56,10 @@ not in Vercel. Production needs:
 
 ```bash
 cd packages/backend
-bunx convex env set --prod SITE_URL https://flutte-web-imperceptibles-projects.vercel.app
+bunx convex env set --prod SITE_URL https://flutte-web.vercel.app
 bunx convex env set --prod BETTER_AUTH_URL https://polite-fish-670.convex.site
 bunx convex env set --prod TRUSTED_ORIGINS \
-  "https://flutte-web-imperceptibles-projects.vercel.app,https://blabla.seryozha.world"
+  "https://flutte-web.vercel.app,https://blabla.seryozha.world"
 bunx convex env set --prod BETTER_AUTH_SECRET
 ```
 
@@ -70,8 +70,8 @@ New preview deployments inherit project defaults. Configure these once:
 
 ```txt
 BETTER_AUTH_SECRET=<a preview-only secret>
-SITE_URL=https://flutte-web-imperceptibles-projects.vercel.app
-TRUSTED_ORIGINS=https://flutte-web-imperceptibles-projects.vercel.app,https://*.vercel.app
+SITE_URL=https://flutte-web.vercel.app
+TRUSTED_ORIGINS=https://flutte-web.vercel.app,https://*.vercel.app
 ```
 
 `BETTER_AUTH_URL` is optional. If absent, the backend uses Convex's own
@@ -85,7 +85,7 @@ Verify:
 bunx convex env list --prod --names-only
 curl -sS https://polite-fish-670.convex.site/api/auth/ok
 curl -sS -D - \
-  -H "Origin: https://flutte-web-imperceptibles-projects.vercel.app" \
+  -H "Origin: https://flutte-web.vercel.app" \
   https://polite-fish-670.convex.site/api/auth/get-session
 ```
 
@@ -101,7 +101,7 @@ references and avoids reading the catalog through application queries:
 cd packages/backend
 bunx convex export --include-file-storage --path /tmp/blabla-dev.zip
 bunx convex export --prod --include-file-storage --path /tmp/blabla-prod-before.zip
-bunx convex import --prod --replace-all /tmp/blabla-dev.zip
+bunx convex import --prod --replace-all --yes /tmp/blabla-dev.zip
 ```
 
 Inspect production before `--replace-all` and retain the production export as a
