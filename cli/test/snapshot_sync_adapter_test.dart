@@ -109,6 +109,64 @@ void main() {
     expect(gateway.commit, isNull);
   });
 
+  test(
+    'refuses a modified bound catalog instead of mislabeling its bytes',
+    () async {
+      final fixture = await SyncFixture.create();
+      addTearDown(fixture.dispose);
+      await fixture.write(
+        'packages/brickit_generated/lib/l10n/intl_en.arb',
+        '{"@@locale":"en","greeting":"Uncommitted"}',
+      );
+      final gateway = RecordingSnapshotGateway(_syncContext());
+
+      await expectLater(
+        RepositorySyncAdapter().sync(
+          checkout: fixture.root,
+          gateway: gateway,
+          write: (_) {},
+        ),
+        throwsA(
+          isA<RepositoryAdapterException>().having(
+            (error) => error.message,
+            'message',
+            allOf(contains('match HEAD'), contains('intl_en.arb')),
+          ),
+        ),
+      );
+      expect(gateway.commit, isNull);
+    },
+  );
+
+  test(
+    'refuses an untracked sibling catalog before snapshot discovery',
+    () async {
+      final fixture = await SyncFixture.create();
+      addTearDown(fixture.dispose);
+      await fixture.write(
+        'packages/brickit_generated/lib/l10n/intl_es.arb',
+        '{"@@locale":"es","greeting":"Hola"}',
+      );
+      final gateway = RecordingSnapshotGateway(_syncContext());
+
+      await expectLater(
+        RepositorySyncAdapter().sync(
+          checkout: fixture.root,
+          gateway: gateway,
+          write: (_) {},
+        ),
+        throwsA(
+          isA<RepositoryAdapterException>().having(
+            (error) => error.message,
+            'message',
+            allOf(contains('match HEAD'), contains('intl_es.arb')),
+          ),
+        ),
+      );
+      expect(gateway.commit, isNull);
+    },
+  );
+
   test('derives descendant lineage from local Git history', () async {
     final fixture = await SyncFixture.create();
     addTearDown(fixture.dispose);
@@ -236,6 +294,23 @@ void main() {
     ]);
   });
 }
+
+SnapshotSyncContext _syncContext() => SnapshotSyncContext(
+  version: 1,
+  canSubmit: true,
+  setupIssues: const [],
+  repository: null,
+  bindings: const [
+    SnapshotBinding(
+      localeCode: 'en',
+      catalogPath: 'packages/brickit_generated/lib/l10n/intl_en.arb',
+      isSource: true,
+    ),
+  ],
+  baseline: null,
+  maxFiles: 1000,
+  maxBytes: 8 * 1024 * 1024,
+);
 
 class RecordingSnapshotGateway implements SnapshotSyncGateway {
   RecordingSnapshotGateway(this.context);

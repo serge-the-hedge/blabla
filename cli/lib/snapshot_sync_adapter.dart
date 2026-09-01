@@ -351,7 +351,15 @@ class RepositorySyncAdapter {
       );
     }
     final commit = await _git(root, ['rev-parse', 'HEAD']);
+    await _assertCatalogsClean(root, context);
     final files = await _readFiles(root, context);
+    await _assertCatalogsClean(root, context);
+    final capturedHead = await _git(root, ['rev-parse', 'HEAD']);
+    if (capturedHead != commit) {
+      throw RepositoryAdapterException(
+        'Brickit HEAD changed while the catalogs were being read. Retry sync from a stable checkout.',
+      );
+    }
     final lineage = await _lineage(root, context.baseline?.commit, commit);
     final receipt = await gateway.submit(
       repository: repository,
@@ -472,6 +480,45 @@ class RepositorySyncAdapter {
       );
     }
     return files;
+  }
+
+  /// A Source Snapshot is addressed by a Git commit, so every catalog byte
+  /// submitted for that commit must already be committed. The directory
+  /// pathspecs also catch deleted and untracked sibling ARBs that discovery
+  /// would otherwise omit or submit from the working tree.
+  Future<void> _assertCatalogsClean(
+    Directory root,
+    SnapshotSyncContext context,
+  ) async {
+    final pathspecs = <String>{};
+    for (final binding in context.bindings) {
+      _assertRelativePath(binding.catalogPath);
+      pathspecs.add(binding.catalogPath);
+      final separator = binding.catalogPath.lastIndexOf('/');
+      final directory = separator < 0
+          ? ''
+          : binding.catalogPath.substring(0, separator);
+      pathspecs.add(
+        directory.isEmpty ? ':(glob)*.arb' : ':(glob)$directory/*.arb',
+      );
+    }
+    final result = await _runner.run('git', [
+      'status',
+      '--porcelain=v1',
+      '--untracked-files=all',
+      '--',
+      ...pathspecs,
+    ], workingDirectory: root.path);
+    if (result.exitCode != 0) {
+      throw RepositoryAdapterException(
+        'Git could not verify that the catalog files are committed: ${result.stderr.trim()}',
+      );
+    }
+    final dirtyCatalogs = result.stdout.trim();
+    if (dirtyCatalogs.isEmpty) return;
+    throw RepositoryAdapterException(
+      'Sync requires every catalog ARB to match HEAD. Commit or discard these catalog changes before retrying:\n$dirtyCatalogs',
+    );
   }
 
   Future<String> _readUtf8(File file, String path) async {
