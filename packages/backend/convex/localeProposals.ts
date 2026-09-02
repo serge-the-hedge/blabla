@@ -35,6 +35,8 @@ export const MAX_LOCALE_PROPOSAL_STAGE_ITEMS = 16;
 export const MAX_LOCALE_PROPOSAL_STAGE_BYTES = 512 * 1024;
 export const MAX_LOCALE_PROPOSAL_TEMPLATE_ITEMS = 16;
 export const MAX_LOCALE_PROPOSAL_TEMPLATE_BYTES = 512 * 1024;
+export const MAX_LOCALE_PROPOSAL_REVIEW_ITEMS = 48;
+export const MAX_LOCALE_PROPOSAL_REVIEW_SCAN_ITEMS = 64;
 export const MAX_LOCALE_PROPOSAL_ARTIFACT_BYTES = 12 * 1024 * 1024;
 export const MAX_LOCALE_PROPOSAL_DIAGNOSTICS = 128;
 
@@ -83,6 +85,33 @@ type TemplateMessage = {
 	// Kept opaque so large, lossless ARB metadata does not become an unbounded
 	// Convex object in the Agent API response.
 	metadataJson?: string;
+};
+
+const localeProposalReviewFocusValidator = v.union(
+	v.literal("all"),
+	v.literal("awaiting"),
+	v.literal("attention"),
+	v.literal("routine"),
+	v.literal("reviewed"),
+	v.literal("missing"),
+);
+
+type LocaleProposalReviewFocus =
+	| "all"
+	| "awaiting"
+	| "attention"
+	| "routine"
+	| "reviewed"
+	| "missing";
+
+type LocaleProposalReviewFacts = {
+	state: "awaiting" | "reviewed" | "humanDraft" | "missing";
+	sourceIdentical: boolean;
+	sourceEmpty: boolean;
+	blankCandidate: boolean;
+	icu: boolean;
+	edgeWhitespaceMismatch: boolean;
+	staleSource: boolean;
 };
 
 type LocaleProposalSummary = {
@@ -2052,6 +2081,8 @@ export const getForReview = query({
 		taskId: v.optional(v.id("agentTranslationProposals")),
 		cursor: v.optional(v.number()),
 		limit: v.optional(v.number()),
+		focus: v.optional(localeProposalReviewFocusValidator),
+		search: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
 		const proposal = await ctx.db.get(args.proposalId);
@@ -2078,27 +2109,16 @@ export const getForReview = query({
 			proposal,
 		);
 		const projection = await activeProjectionFor(ctx, proposal.projectId);
-		const sourceRows = projection
-			? (
-					await ctx.db
-						.query("catalogProjectionMessages")
-						.withIndex("by_projection", (q) =>
-							q.eq("projectionId", projection._id),
-						)
-						.take(MAX_LOCALE_PROPOSAL_MESSAGES + 1)
-				).filter((row) => row.isSource)
-			: [];
 		if (
 			!projection ||
 			projection.snapshotId !== proposal.sourceSnapshotId ||
-			sourceRows.length > MAX_LOCALE_PROPOSAL_MESSAGES
+			proposal.sourceMessageCount > MAX_LOCALE_PROPOSAL_MESSAGES
 		) {
 			throw new ConvexError({
 				code: "STALE_BASIS",
 				message: "The active source Catalog no longer matches this proposal.",
 			});
 		}
-		sourceRows.sort((left, right) => left.catalogIndex - right.catalogIndex);
 		const snapshot = await ctx.db.get(proposal.sourceSnapshotId);
 		if (!snapshot || snapshot.projectId !== proposal.projectId) {
 			integrityError("Locale Proposal source snapshot evidence is missing.");
@@ -2106,11 +2126,29 @@ export const getForReview = query({
 		const diagnostics = await currentDiagnosticsForProposal(ctx, proposal);
 		const cursor = Math.max(0, Math.trunc(args.cursor ?? 0));
 		const limit = Math.min(
-			MAX_LOCALE_PROPOSAL_TEMPLATE_ITEMS,
-			Math.max(1, Math.trunc(args.limit ?? MAX_LOCALE_PROPOSAL_TEMPLATE_ITEMS)),
+			MAX_LOCALE_PROPOSAL_REVIEW_ITEMS,
+			Math.max(1, Math.trunc(args.limit ?? MAX_LOCALE_PROPOSAL_REVIEW_ITEMS)),
 		);
-		const sourcePage = sourceRows.slice(cursor, cursor + limit);
-		const messages = await Promise.all(
+		const focus: LocaleProposalReviewFocus = args.focus ?? "all";
+		const search = args.search?.trim().toLocaleLowerCase() ?? "";
+		if (new TextEncoder().encode(search).byteLength > 512) {
+			validationError("Locale Proposal review search is too long.");
+		}
+		const scanLimit =
+			focus === "all" && search.length === 0
+				? limit
+				: MAX_LOCALE_PROPOSAL_REVIEW_SCAN_ITEMS;
+		const sourceWindow = await ctx.db
+			.query("catalogProjectionMessages")
+			.withIndex("by_projection_and_isSource_and_catalogIndex", (q) =>
+				q
+					.eq("projectionId", projection._id)
+					.eq("isSource", true)
+					.gte("catalogIndex", cursor),
+			)
+			.take(scanLimit + 1);
+		const sourcePage = sourceWindow.slice(0, scanLimit);
+		const hydratedMessages = await Promise.all(
 			sourcePage.map(async (message) => {
 				const candidate = task
 					? await ctx.db
@@ -2159,10 +2197,51 @@ export const getForReview = query({
 							)
 							.unique()
 					: null;
+				const candidateValue = candidateRevision
+					? candidateRevision.value
+					: !task && value?.updatedBy.kind === "agent"
+						? value.value
+						: undefined;
+				const resolvedReview = candidateRevision ? candidateReview : review;
+				const state: LocaleProposalReviewFacts["state"] =
+					candidateValue !== undefined
+						? resolvedReview
+							? "reviewed"
+							: "awaiting"
+						: value
+							? "humanDraft"
+							: "missing";
+				const leadingWhitespace = (text: string) =>
+					text.match(/^\s*/u)?.[0] ?? "";
+				const trailingWhitespace = (text: string) =>
+					text.match(/\s*$/u)?.[0] ?? "";
+				const facts: LocaleProposalReviewFacts = {
+					state,
+					sourceIdentical:
+						candidateValue !== undefined &&
+						candidateValue.length > 0 &&
+						candidateValue === message.value,
+					sourceEmpty: message.value.length === 0,
+					blankCandidate: candidateValue === "",
+					icu: message.icuType === "icu",
+					edgeWhitespaceMismatch:
+						candidateValue !== undefined &&
+						(leadingWhitespace(candidateValue) !==
+							leadingWhitespace(message.value) ||
+							trailingWhitespace(candidateValue) !==
+								trailingWhitespace(message.value)),
+					staleSource:
+						candidateRevision?.basis.sourceFingerprint !== undefined
+							? candidateRevision.basis.sourceFingerprint !== fingerprint
+							: value !== null && value.sourceFingerprint !== fingerprint,
+				};
 				return {
 					messageId: message.messageId,
+					catalogIndex: message.catalogIndex,
 					sourceValue: message.value,
 					sourceFingerprint: fingerprint,
+					sourceIcuType: message.icuType,
+					facts,
 					value: value
 						? {
 								value: value.value,
@@ -2185,6 +2264,8 @@ export const getForReview = query({
 								revisionId: candidateRevision._id,
 								revision: candidateRevision.revision,
 								value: candidateRevision.value,
+								intentionalBlankReason:
+									candidateRevision.intentionalBlankReason,
 								review: candidateReview
 									? {
 											decision: candidateReview.decision,
@@ -2196,6 +2277,41 @@ export const getForReview = query({
 				};
 			}),
 		);
+		const messages: typeof hydratedMessages = [];
+		let scannedCount = 0;
+		for (const message of hydratedMessages) {
+			scannedCount += 1;
+			const needsAttention =
+				message.facts.sourceIdentical ||
+				message.facts.sourceEmpty ||
+				message.facts.blankCandidate ||
+				message.facts.icu ||
+				message.facts.edgeWhitespaceMismatch ||
+				message.facts.staleSource;
+			const focusMatches =
+				focus === "all" ||
+				(focus === "awaiting" && message.facts.state === "awaiting") ||
+				(focus === "attention" &&
+					message.facts.state === "awaiting" &&
+					needsAttention) ||
+				(focus === "routine" &&
+					message.facts.state === "awaiting" &&
+					!needsAttention) ||
+				(focus === "reviewed" && message.facts.state === "reviewed") ||
+				(focus === "missing" && message.facts.state === "missing");
+			const searchMatches =
+				search.length === 0 ||
+				message.messageId.toLocaleLowerCase().includes(search) ||
+				message.sourceValue.toLocaleLowerCase().includes(search) ||
+				message.candidate?.value.toLocaleLowerCase().includes(search) ||
+				message.value?.value.toLocaleLowerCase().includes(search);
+			if (focusMatches && searchMatches) messages.push(message);
+			if (messages.length >= limit) break;
+		}
+		const lastScanned = sourcePage[scannedCount - 1];
+		const hasMore =
+			lastScanned !== undefined &&
+			(scannedCount < sourcePage.length || sourceWindow.length > scanLimit);
 		return {
 			proposal: proposalSummary(
 				proposal,
@@ -2208,13 +2324,22 @@ export const getForReview = query({
 				code: proposal.localeCode,
 				runtimeLocale: proposal.runtimeLocale,
 			},
+			task: task
+				? {
+						taskId: task._id,
+						status: task.status,
+						candidateCount: task.candidateCount,
+						revisionCount: task.revisionCount,
+						targetCount:
+							task.localeProposalTaskScope?.targetCount ??
+							proposal.sourceMessageCount,
+					}
+				: null,
 			messages,
 			cursor,
-			continueCursor:
-				cursor + messages.length >= sourceRows.length
-					? null
-					: cursor + messages.length,
-			isDone: cursor + messages.length >= sourceRows.length,
+			windowEnd: lastScanned?.catalogIndex ?? cursor,
+			continueCursor: hasMore ? lastScanned.catalogIndex + 1 : null,
+			isDone: !hasMore,
 			diagnostics,
 			isCurrentBaseline: source.isCurrentBaseline,
 		};

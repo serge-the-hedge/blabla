@@ -55,7 +55,7 @@ const corsHeaders = {
 	"Access-Control-Allow-Headers":
 		"Content-Type, Authorization, X-Blabla-CLI-Version, X-Blabla-CLI-Protocol",
 	"Access-Control-Expose-Headers":
-		"X-Blabla-Minimum-CLI-Version, X-Blabla-Minimum-CLI-Protocol",
+		"X-Blabla-Minimum-CLI-Version, X-Blabla-Minimum-CLI-Protocol, Retry-After",
 };
 
 function json(
@@ -152,10 +152,32 @@ function translationTaskCandidateItems(body: Record<string, unknown>) {
 	const items = optionalJsonArray(body, "items");
 	return items.map((item, index) => {
 		if (!isRecord(item)) throw new Error(`items[${index}] must be an object.`);
-		return {
-			messageId: requiredJsonString(item, "messageId"),
-			value: requiredJsonString(item, "value"),
-		};
+		const candidate = item.candidate;
+		if (candidate === undefined) {
+			return {
+				messageId: requiredJsonString(item, "messageId"),
+				value: requiredJsonString(item, "value"),
+			};
+		}
+		if (!isRecord(candidate)) {
+			throw new Error(`items[${index}].candidate must be an object.`);
+		}
+		if (candidate.kind === "value") {
+			return {
+				messageId: requiredJsonString(item, "messageId"),
+				value: requiredJsonString(candidate, "value"),
+			};
+		}
+		if (candidate.kind === "intentionalBlank") {
+			return {
+				messageId: requiredJsonString(item, "messageId"),
+				value: "",
+				intentionalBlankReason: requiredJsonString(candidate, "reason"),
+			};
+		}
+		throw new Error(
+			`items[${index}].candidate.kind must be value or intentionalBlank.`,
+		);
 	});
 }
 
@@ -573,6 +595,10 @@ function routeError(error: unknown) {
 		typeof details?.diagnosticCount === "number"
 			? details.diagnosticCount
 			: undefined;
+	const retryAfter =
+		typeof details?.retryAfter === "number" && details.retryAfter >= 0
+			? details.retryAfter
+			: undefined;
 	const isAuthError =
 		code === "UNAUTHORIZED" ||
 		/\b(Missing bearer|Invalid\b.*\b(token|bearer|authorization))\b/i.test(
@@ -583,19 +609,25 @@ function routeError(error: unknown) {
 		? 401
 		: code === "CLI_UPGRADE_REQUIRED"
 			? 426
-			: code === "REPOSITORY_MISMATCH" || code === "CONFLICT"
-				? 409
-				: code === "LIMIT_EXCEEDED"
-					? 413
-					: 400;
+			: code === "RATE_LIMITED"
+				? 429
+				: code === "REPOSITORY_MISMATCH" || code === "CONFLICT"
+					? 409
+					: code === "LIMIT_EXCEEDED"
+						? 413
+						: 400;
 	return json(
 		{
 			error: message,
 			...(code === undefined ? {} : { code }),
 			...(diagnosticCount === undefined ? {} : { diagnosticCount }),
 			...(diagnostics === undefined ? {} : { diagnostics }),
+			...(retryAfter === undefined ? {} : { retryAfter }),
 		},
 		status,
+		retryAfter === undefined
+			? {}
+			: { "Retry-After": String(Math.max(1, Math.ceil(retryAfter / 1_000))) },
 	);
 }
 
@@ -1127,6 +1159,37 @@ http.route({
 
 http.route({
 	path: "/api/agent/v1/translation-tasks",
+	method: "GET",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const status = new URL(request.url).searchParams.get("status");
+			if (
+				status !== null &&
+				status !== "open" &&
+				status !== "accepted" &&
+				status !== "rejected"
+			) {
+				throw new Error("status must be open, accepted, or rejected.");
+			}
+			return agentJson(
+				await withAgent(ctx, request, "read", "agentRead", async (token) => ({
+					tasks: await ctx.runQuery(
+						internalApi.agentTranslationProposals.listTasksForAgent,
+						{
+							token,
+							...(status === null ? {} : { status }),
+						},
+					),
+				})),
+			);
+		} catch (error) {
+			return routeError(error);
+		}
+	}),
+});
+
+http.route({
+	path: "/api/agent/v1/translation-tasks",
 	method: "POST",
 	handler: httpAction(async (ctx, request) => {
 		try {
@@ -1344,7 +1407,11 @@ http.route({
 										if (!target) {
 											throw new Error(`Unknown task key: ${item.messageId}.`);
 										}
-										if (target.currentCandidate?.value === item.value) {
+										if (
+											target.currentCandidate?.value === item.value &&
+											target.currentCandidate.intentionalBlankReason ===
+												item.intentionalBlankReason
+										) {
 											existingResults.set(item.messageId, {
 												candidateId: target.currentCandidate.candidateId,
 												revisionId: target.currentCandidate.revisionId,
@@ -1356,7 +1423,12 @@ http.route({
 										return {
 											messageId: item.messageId,
 											value: item.value,
-											clientRevisionKey: `task-v1:${await sha256Hex(`${taskId}\u0000${item.messageId}\u0000${item.value}\u0000${target.currentRevision}`)}`,
+											...(item.intentionalBlankReason === undefined
+												? {}
+												: {
+														intentionalBlankReason: item.intentionalBlankReason,
+													}),
+											clientRevisionKey: `task-v1:${await sha256Hex(`${taskId}\u0000${item.messageId}\u0000${item.value}\u0000${item.intentionalBlankReason ?? ""}\u0000${target.currentRevision}`)}`,
 											expectedCandidateRevision: target.currentRevision,
 											basis: target.basis,
 										};
@@ -1422,7 +1494,11 @@ http.route({
 									if (!target) {
 										throw new Error(`Unknown task key: ${item.messageId}.`);
 									}
-									if (target.currentCandidate?.value === item.value) {
+									if (
+										target.currentCandidate?.value === item.value &&
+										target.currentCandidate.intentionalBlankReason ===
+											item.intentionalBlankReason
+									) {
 										existingResults.set(item.messageId, {
 											candidateId: target.currentCandidate.candidateId,
 											revisionId: target.currentCandidate.revisionId,
@@ -1435,7 +1511,12 @@ http.route({
 										messageId: item.messageId,
 										localeId: target.localeId,
 										value: item.value,
-										clientRevisionKey: `task-v1:${await sha256Hex(`${taskId}\u0000${item.messageId}\u0000${item.value}\u0000${target.currentRevision}`)}`,
+										...(item.intentionalBlankReason === undefined
+											? {}
+											: {
+													intentionalBlankReason: item.intentionalBlankReason,
+												}),
+										clientRevisionKey: `task-v1:${await sha256Hex(`${taskId}\u0000${item.messageId}\u0000${item.value}\u0000${item.intentionalBlankReason ?? ""}\u0000${target.currentRevision}`)}`,
 										expectedCandidateRevision: target.currentRevision,
 										basis: target.basis,
 									};
