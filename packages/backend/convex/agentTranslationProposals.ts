@@ -384,35 +384,51 @@ async function tasksForOwner(
 	projectId: Id<"projects">,
 	createdByTokenId: Id<"apiTokens"> | undefined,
 ) {
-	const tasks = await ctx.db
-		.query("agentTranslationProposals")
-		.withIndex("by_project_and_token_and_clientProposalKey", (q) =>
-			q.eq("projectId", projectId).eq("createdByTokenId", createdByTokenId),
-		)
-		.take(MAX_TRANSLATION_TASKS_PER_OWNER + 1);
+	const [existingLocaleTasks, newLocaleTasks] = await Promise.all([
+		ctx.db
+			.query("agentTranslationProposals")
+			.withIndex("by_owner_and_existingTask", (q) =>
+				q
+					.eq("projectId", projectId)
+					.eq("createdByTokenId", createdByTokenId)
+					.gt("taskScope.localeId", undefined),
+			)
+			.take(MAX_TRANSLATION_TASKS_PER_OWNER + 1),
+		ctx.db
+			.query("agentTranslationProposals")
+			.withIndex("by_owner_and_newLocaleTask", (q) =>
+				q
+					.eq("projectId", projectId)
+					.eq("createdByTokenId", createdByTokenId)
+					.gt("localeProposalTaskScope.localeProposalId", undefined),
+			)
+			.take(MAX_TRANSLATION_TASKS_PER_OWNER + 1),
+	]);
+	const tasks = [...existingLocaleTasks, ...newLocaleTasks];
 	if (tasks.length > MAX_TRANSLATION_TASKS_PER_OWNER) {
 		throw new ConvexError({
 			code: "LIMIT_EXCEEDED",
 			message: "Translation Task history exceeds its list envelope.",
 		});
 	}
-	return tasks.filter(
-		(task) =>
-			task.taskScope !== undefined ||
-			task.localeProposalTaskScope !== undefined,
-	);
+	return tasks;
 }
 
-function newLocaleTaskForProposal(
-	tasks: readonly Doc<"agentTranslationProposals">[],
+async function newLocaleTaskForOwner(
+	ctx: QueryCtx | MutationCtx,
+	projectId: Id<"projects">,
+	createdByTokenId: Id<"apiTokens"> | undefined,
 	localeProposalId: Id<"localeProposals">,
 ) {
-	return tasks.find(
-		(task) =>
-			task.target.kind === "localeProposal" &&
-			task.target.localeProposalId === localeProposalId &&
-			task.localeProposalTaskScope?.localeProposalId === localeProposalId,
-	);
+	return await ctx.db
+		.query("agentTranslationProposals")
+		.withIndex("by_owner_and_newLocaleTask", (q) =>
+			q
+				.eq("projectId", projectId)
+				.eq("createdByTokenId", createdByTokenId)
+				.eq("localeProposalTaskScope.localeProposalId", localeProposalId),
+		)
+		.unique();
 }
 
 async function currentWorkspaceTarget(
@@ -778,8 +794,10 @@ async function createNewLocaleTaskForHuman(
 		});
 	}
 	const title = input.title.trim();
-	const existingTask = newLocaleTaskForProposal(
-		await tasksForOwner(ctx, input.projectId, undefined),
+	const existingTask = await newLocaleTaskForOwner(
+		ctx,
+		input.projectId,
+		undefined,
 		localeProposal._id,
 	);
 	if (existingTask) {
@@ -1951,14 +1969,21 @@ export const create = internalMutation({
 			return proposalSummary(existing);
 		}
 		if (localeProposal && args.localeProposalTaskScope) {
-			const [projectTasks, tokenTasks] = await Promise.all([
-				tasksForOwner(ctx, token.projectId, undefined),
-				tasksForOwner(ctx, token.projectId, token._id),
+			const [projectTask, tokenTask] = await Promise.all([
+				newLocaleTaskForOwner(
+					ctx,
+					token.projectId,
+					undefined,
+					localeProposal._id,
+				),
+				newLocaleTaskForOwner(
+					ctx,
+					token.projectId,
+					token._id,
+					localeProposal._id,
+				),
 			]);
-			const existingTask = newLocaleTaskForProposal(
-				[...projectTasks, ...tokenTasks],
-				localeProposal._id,
-			);
+			const existingTask = projectTask ?? tokenTask;
 			if (existingTask) {
 				if (localeProposal.status !== "draft") {
 					throw new ConvexError({

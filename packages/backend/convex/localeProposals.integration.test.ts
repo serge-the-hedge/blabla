@@ -1016,6 +1016,50 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 		expect(agentResume.taskId).toBe(first.taskId);
 	});
 
+	test("does not count ordinary proposal history as task history", async () => {
+		const user = await authenticatedBackend(t, "new-locale-task-history");
+		const projectId = await createProject(user);
+		await ingestSourceBaseline(user, projectId);
+		const { token, tokenId } = await proposalToken(user, projectId);
+		await t.run(async (ctx) => {
+			for (let index = 0; index < 129; index += 1) {
+				await ctx.db.insert("agentTranslationProposals", {
+					projectId,
+					createdByTokenId: tokenId,
+					createdBy: { kind: "agent", id: tokenId },
+					clientProposalKey: `ordinary-${index}`,
+					target: { kind: "catalogWorkspace" },
+					status: "open",
+					candidateCount: 0,
+					revisionCount: 0,
+					retainedByteLength: 0,
+					createdAt: index,
+					updatedAt: index,
+				});
+			}
+		});
+
+		const created = await agentRequest(
+			t,
+			token,
+			"/api/agent/v1/translation-tasks",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					clientTaskKey: "portuguese-after-ordinary-history",
+					target: { kind: "newLocale", localeCode: "pt" },
+				}),
+			},
+		);
+		expect(created.status).toBe(200);
+		const listed = await successfulJson<{ tasks: Array<{ kind: string }> }>(
+			await agentRequest(t, token, "/api/agent/v1/translation-tasks"),
+		);
+		expect(listed.tasks).toEqual([
+			expect.objectContaining({ kind: "newLocale" }),
+		]);
+	}, 60_000);
+
 	test("rejects an unconfigured new Locale before creating a proposal", async () => {
 		const user = await authenticatedBackend(t, "unsupported-new-locale-owner");
 		const projectId = await createProject(user);

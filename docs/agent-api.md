@@ -298,8 +298,10 @@ fails before a Locale Proposal is created.
 The same task shape is created from the Strings UI when an editor selects keys
 and chooses **Start task**. A project-scoped propose token can fill a
 human-created task; token-owned tasks remain private to their creating token.
-Only one task can own a complete new-Locale proposal. Creating it again—even
-with a different title—resumes the existing task.
+For a given token, only one visible task can own a complete new-Locale
+proposal. Creating it again—even with a different title—resumes the existing
+task visible to that token; different tokens can own separate private tasks for
+the same proposal.
 
 A new-Locale task remains `open` while candidates are proposed and reviewed.
 It becomes `accepted` only when finalization creates the immutable delivery

@@ -2034,6 +2034,7 @@ export const reviewStagedValue = mutation({
 		projectId: v.id("projects"),
 		proposalId: v.id("localeProposals"),
 		messageId: v.string(),
+		expectedValueFingerprint: v.optional(v.string()),
 		decision: v.union(
 			v.object({ kind: v.literal("accept") }),
 			v.object({ kind: v.literal("acceptWithEdits"), value: v.string() }),
@@ -2062,13 +2063,24 @@ export const reviewStagedValue = mutation({
 				message: "Submitted Locale Proposal value not found.",
 			});
 		}
+		const valueFingerprint = await sha256Hex(value.value);
+		if (
+			args.expectedValueFingerprint !== undefined &&
+			args.expectedValueFingerprint !== valueFingerprint
+		) {
+			throw new ConvexError({
+				code: "STALE_BASIS",
+				message:
+					"The Locale Proposal value changed; review its current revision before deciding.",
+			});
+		}
 		return await ctx.runMutation(internal.localeProposals.applyReviewedValue, {
 			projectId: args.projectId,
 			proposalId: args.proposalId,
 			messageId: args.messageId,
 			sourceSnapshotId: proposal.sourceSnapshotId,
 			sourceFingerprint: value.sourceFingerprint,
-			candidateValueFingerprint: await sha256Hex(value.value),
+			candidateValueFingerprint: valueFingerprint,
 			decision: args.decision,
 			reviewer: { kind: "user", id: userId },
 		});

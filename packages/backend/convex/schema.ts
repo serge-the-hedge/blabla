@@ -1567,6 +1567,16 @@ export default defineSchema({
 			"createdByTokenId",
 			"clientProposalKey",
 		])
+		.index("by_owner_and_existingTask", [
+			"projectId",
+			"createdByTokenId",
+			"taskScope.localeId",
+		])
+		.index("by_owner_and_newLocaleTask", [
+			"projectId",
+			"createdByTokenId",
+			"localeProposalTaskScope.localeProposalId",
+		])
 		.index("by_project_and_updatedAt", ["projectId", "updatedAt"]),
 
 	// A Translation Task freezes a small, human-legible work scope without
