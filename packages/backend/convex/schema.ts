@@ -734,6 +734,14 @@ export default defineSchema({
 		// Catalog Order access lets the Navigation staging worker and the Window
 		// read walk one bounded catalogIndex range instead of scanning keys.
 		.index("by_projection_and_catalogIndex", ["projectionId", "catalogIndex"])
+		// Locale Proposal review walks source rows in Catalog Order. Keeping the
+		// source discriminator in the index prevents every review page from reading
+		// every target-Locale row in the projection first.
+		.index("by_projection_and_isSource_and_catalogIndex", [
+			"projectionId",
+			"isSource",
+			"catalogIndex",
+		])
 		.index("by_projection_and_messageId_and_localeId", [
 			"projectionId",
 			"messageId",
@@ -1613,6 +1621,9 @@ export default defineSchema({
 		revision: v.number(),
 		clientRevisionKey: v.string(),
 		value: v.string(),
+		// An agent may propose an Intentional Blank and explain why, but only a
+		// human review decision can apply it to either task adapter.
+		intentionalBlankReason: v.optional(v.string()),
 		valueFingerprint: v.string(),
 		basis: agentTranslationCandidateBasis,
 		createdBy: actor,

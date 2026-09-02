@@ -97,6 +97,7 @@ async function setupWorkQueueProject(user: AuthenticatedBackend) {
 				content: JSON.stringify({
 					"@@locale": "en",
 					missing: "Needs translation",
+					emptySource: "",
 					echo: "Brickit",
 					repeated: "Continue",
 					unrelatedOne: "First shared label",
@@ -326,6 +327,7 @@ describe("Agent Translation Proposals", () => {
 		expect(items.some((item) => item.messageId.startsWith("unrelated"))).toBe(
 			false,
 		);
+		expect(items.some((item) => item.messageId === "emptySource")).toBe(false);
 
 		const missingGerman = await agentRequest(
 			t,
@@ -917,5 +919,28 @@ describe("Agent Translation Proposals", () => {
 		);
 		expect(stale.status).toBe(400);
 		expect(await stale.json()).toMatchObject({ code: "STALE_BASIS" });
+	});
+
+	test("returns retryable HTTP semantics when an agent rate limit is reached", async () => {
+		const user = await authenticatedBackend(t, "agent-translation-rate-limit");
+		const { token } = await setupProject(user);
+		const request = () =>
+			agentRequest(t, token, "/api/agent/v1/translation-proposals", {
+				method: "POST",
+				body: JSON.stringify({
+					clientProposalKey: "rate-limit-idempotent-proposal",
+					target: { kind: "catalogWorkspace" },
+				}),
+			});
+		for (let attempt = 0; attempt < 12; attempt += 1) {
+			expect((await request()).status).toBe(200);
+		}
+		const limited = await request();
+		expect(limited.status).toBe(429);
+		expect(Number(limited.headers.get("Retry-After"))).toBeGreaterThan(0);
+		expect(await limited.json()).toMatchObject({
+			code: "RATE_LIMITED",
+			retryAfter: expect.any(Number),
+		});
 	});
 });

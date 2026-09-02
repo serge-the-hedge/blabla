@@ -39,6 +39,7 @@ import {
 const MAX_PROPOSAL_CLIENT_KEY_BYTES = 256;
 const MAX_REVISION_CLIENT_KEY_BYTES = 256;
 const MAX_CANDIDATE_VALUE_BYTES = 256 * 1024;
+const MAX_INTENTIONAL_BLANK_REASON_BYTES = 4 * 1024;
 const MAX_SUBMISSION_ITEMS = 16;
 const MAX_SUBMISSION_BYTES = 512 * 1024;
 const MAX_REVIEW_CANDIDATES = 128;
@@ -55,6 +56,7 @@ const MAX_WORK_QUEUE_SCAN_ROWS = 64;
 const MAX_WORK_QUEUE_RESPONSE_BYTES = 768 * 1024;
 const MAX_TASK_TARGETS = 32;
 const MAX_TASK_TITLE_BYTES = 256;
+const MAX_TRANSLATION_TASKS_PER_OWNER = 128;
 
 const targetValidator = v.union(
 	v.object({ kind: v.literal("catalogWorkspace") }),
@@ -68,6 +70,7 @@ const candidateRevisionInputValidator = v.object({
 	messageId: v.string(),
 	localeId: v.optional(v.id("locales")),
 	value: v.string(),
+	intentionalBlankReason: v.optional(v.string()),
 	clientRevisionKey: v.string(),
 	expectedCandidateRevision: v.number(),
 	basis: v.union(
@@ -168,6 +171,7 @@ type CandidateRevisionInput = {
 	messageId: string;
 	localeId?: Id<"locales">;
 	value: string;
+	intentionalBlankReason?: string;
 	clientRevisionKey: string;
 	expectedCandidateRevision: number;
 	basis:
@@ -373,6 +377,42 @@ function proposalSummary(proposal: {
 		createdAt: proposal.createdAt,
 		updatedAt: proposal.updatedAt,
 	};
+}
+
+async function tasksForOwner(
+	ctx: QueryCtx | MutationCtx,
+	projectId: Id<"projects">,
+	createdByTokenId: Id<"apiTokens"> | undefined,
+) {
+	const tasks = await ctx.db
+		.query("agentTranslationProposals")
+		.withIndex("by_project_and_token_and_clientProposalKey", (q) =>
+			q.eq("projectId", projectId).eq("createdByTokenId", createdByTokenId),
+		)
+		.take(MAX_TRANSLATION_TASKS_PER_OWNER + 1);
+	if (tasks.length > MAX_TRANSLATION_TASKS_PER_OWNER) {
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message: "Translation Task history exceeds its list envelope.",
+		});
+	}
+	return tasks.filter(
+		(task) =>
+			task.taskScope !== undefined ||
+			task.localeProposalTaskScope !== undefined,
+	);
+}
+
+function newLocaleTaskForProposal(
+	tasks: readonly Doc<"agentTranslationProposals">[],
+	localeProposalId: Id<"localeProposals">,
+) {
+	return tasks.find(
+		(task) =>
+			task.target.kind === "localeProposal" &&
+			task.target.localeProposalId === localeProposalId &&
+			task.localeProposalTaskScope?.localeProposalId === localeProposalId,
+	);
 }
 
 async function currentWorkspaceTarget(
@@ -738,6 +778,28 @@ async function createNewLocaleTaskForHuman(
 		});
 	}
 	const title = input.title.trim();
+	const existingTask = newLocaleTaskForProposal(
+		await tasksForOwner(ctx, input.projectId, undefined),
+		localeProposal._id,
+	);
+	if (existingTask) {
+		if (
+			localeProposal.status !== "draft" &&
+			existingTask.clientProposalKey !== title
+		) {
+			throw new ConvexError({
+				code: "BAD_STATE",
+				message:
+					"This new Locale is already finalized; resume its completed task instead of creating another.",
+			});
+		}
+		return {
+			taskId: existingTask._id,
+			title: existingTask.clientProposalKey,
+			localeCode: localeProposal.localeCode,
+			targetCount: localeProposal.sourceMessageCount,
+		};
+	}
 	const existing = await ctx.db
 		.query("agentTranslationProposals")
 		.withIndex("by_project_and_token_and_clientProposalKey", (q) =>
@@ -1099,6 +1161,86 @@ export const taskDescriptorForAgent = internalQuery({
 	},
 });
 
+/** Enumerate the bounded Translation Task inbox visible to one project token.
+ * Token-owned tasks stay private to that token; human-created tasks are the
+ * project work queue any current propose token may resume. */
+export const listTasksForAgent = internalQuery({
+	args: {
+		token: v.string(),
+		status: v.optional(
+			v.union(v.literal("open"), v.literal("accepted"), v.literal("rejected")),
+		),
+	},
+	returns: v.array(
+		v.object({
+			kind: v.union(v.literal("existingLocale"), v.literal("newLocale")),
+			taskId: v.id("agentTranslationProposals"),
+			title: v.string(),
+			status: v.union(
+				v.literal("open"),
+				v.literal("accepted"),
+				v.literal("rejected"),
+			),
+			localeCode: v.string(),
+			targetCount: v.number(),
+			candidateCount: v.number(),
+			ownership: v.union(v.literal("token"), v.literal("project")),
+			updatedAt: v.number(),
+		}),
+	),
+	handler: async (ctx, args) => {
+		const token = await authenticate(ctx, args.token, "read");
+		const [projectTasks, tokenTasks] = await Promise.all([
+			tasksForOwner(ctx, token.projectId, undefined),
+			tasksForOwner(ctx, token.projectId, token._id),
+		]);
+		return [...projectTasks, ...tokenTasks]
+			.filter(
+				(task) => args.status === undefined || task.status === args.status,
+			)
+			.sort((left, right) => right.updatedAt - left.updatedAt)
+			.map((task) => {
+				if (task.taskScope) {
+					return {
+						kind: "existingLocale" as const,
+						taskId: task._id,
+						title: task.clientProposalKey,
+						status: task.status,
+						localeCode: task.taskScope.localeCode,
+						targetCount: task.taskScope.targetCount,
+						candidateCount: task.candidateCount,
+						ownership:
+							task.createdByTokenId === undefined
+								? ("project" as const)
+								: ("token" as const),
+						updatedAt: task.updatedAt,
+					};
+				}
+				const scope = task.localeProposalTaskScope;
+				if (!scope) {
+					throw new ConvexError({
+						code: "INTEGRITY",
+						message: "Translation Task lost its target scope.",
+					});
+				}
+				return {
+					kind: "newLocale" as const,
+					taskId: task._id,
+					title: task.clientProposalKey,
+					status: task.status,
+					localeCode: scope.localeCode,
+					targetCount: scope.targetCount,
+					candidateCount: task.candidateCount,
+					ownership:
+						task.createdByTokenId === undefined
+							? ("project" as const)
+							: ("token" as const),
+					updatedAt: task.updatedAt,
+				};
+			});
+	},
+});
+
 export const taskSubmissionContext = internalQuery({
 	args: {
 		token: v.string(),
@@ -1117,6 +1259,7 @@ export const taskSubmissionContext = internalQuery({
 					revisionId: v.id("agentTranslationCandidateRevisions"),
 					revision: v.number(),
 					value: v.string(),
+					intentionalBlankReason: v.optional(v.string()),
 				}),
 				v.null(),
 			),
@@ -1189,6 +1332,7 @@ export const taskSubmissionContext = internalQuery({
 								revisionId: currentCandidate._id,
 								revision: currentCandidate.revision,
 								value: currentCandidate.value,
+								intentionalBlankReason: currentCandidate.intentionalBlankReason,
 							}
 						: null,
 			});
@@ -1222,6 +1366,7 @@ export const newLocaleTaskSubmissionContext = internalQuery({
 					revisionId: v.id("agentTranslationCandidateRevisions"),
 					revision: v.number(),
 					value: v.string(),
+					intentionalBlankReason: v.optional(v.string()),
 				}),
 				v.null(),
 			),
@@ -1294,6 +1439,7 @@ export const newLocaleTaskSubmissionContext = internalQuery({
 								revisionId: currentCandidate._id,
 								revision: currentCandidate.revision,
 								value: currentCandidate.value,
+								intentionalBlankReason: currentCandidate.intentionalBlankReason,
 							}
 						: null,
 			});
@@ -1314,6 +1460,7 @@ export const newLocaleTaskCandidatesForAgent = internalQuery({
 			revisionId: v.id("agentTranslationCandidateRevisions"),
 			revision: v.number(),
 			value: v.string(),
+			intentionalBlankReason: v.optional(v.string()),
 		}),
 	),
 	handler: async (ctx, args) => {
@@ -1360,6 +1507,7 @@ export const newLocaleTaskCandidatesForAgent = internalQuery({
 					revisionId: revision._id,
 					revision: revision.revision,
 					value: revision.value,
+					intentionalBlankReason: revision.intentionalBlankReason,
 				});
 			}
 		}
@@ -1633,6 +1781,10 @@ export const workspaceWorkPage = internalQuery({
 					row.messageId,
 					target.localeId,
 				);
+				// An empty Source value is source-data evidence, not untranslated
+				// target work and not an Intentional Blank. Keep it out of every
+				// translation-repair reason instead of asking agents to invent text.
+				if (current.source.value.length === 0) continue;
 				const item = {
 					messageId: row.messageId,
 					localeCode: target.localeCode,
@@ -1724,6 +1876,7 @@ function assertBasisMatches(
 
 function revisionByteLength(input: {
 	value: string;
+	intentionalBlankReason?: string;
 	clientRevisionKey: string;
 	basis: CandidateRevisionInput["basis"];
 }): number {
@@ -1797,6 +1950,26 @@ export const create = internalMutation({
 			}
 			return proposalSummary(existing);
 		}
+		if (localeProposal && args.localeProposalTaskScope) {
+			const [projectTasks, tokenTasks] = await Promise.all([
+				tasksForOwner(ctx, token.projectId, undefined),
+				tasksForOwner(ctx, token.projectId, token._id),
+			]);
+			const existingTask = newLocaleTaskForProposal(
+				[...projectTasks, ...tokenTasks],
+				localeProposal._id,
+			);
+			if (existingTask) {
+				if (localeProposal.status !== "draft") {
+					throw new ConvexError({
+						code: "BAD_STATE",
+						message:
+							"This new Locale is already finalized; resume its completed task instead of creating another.",
+					});
+				}
+				return proposalSummary(existingTask);
+			}
+		}
 		if (
 			args.localeProposalTaskScope !== undefined &&
 			localeProposal?.status !== "draft"
@@ -1868,11 +2041,25 @@ export const submitRevisions = internalMutation({
 				"clientRevisionKey",
 				MAX_REVISION_CLIENT_KEY_BYTES,
 			);
+			const intentionalBlankReason = item.intentionalBlankReason?.trim();
 			if (item.value.trim().length === 0) {
+				if (item.value.length !== 0 || !intentionalBlankReason) {
+					throw new ConvexError({
+						code: "VALIDATION",
+						message:
+							"An empty candidate must be an Intentional Blank with a reason.",
+					});
+				}
+				assertBoundedString(
+					intentionalBlankReason,
+					"intentionalBlankReason",
+					MAX_INTENTIONAL_BLANK_REASON_BYTES,
+				);
+			} else if (intentionalBlankReason !== undefined) {
 				throw new ConvexError({
 					code: "VALIDATION",
 					message:
-						"Agent candidate values must be non-empty; intentional blanks are human-only.",
+						"Only an empty candidate can carry an Intentional Blank reason.",
 				});
 			}
 			if (
@@ -1976,6 +2163,7 @@ export const submitRevisions = internalMutation({
 			if (existingRevision) {
 				if (
 					existingRevision.value !== item.value ||
+					existingRevision.intentionalBlankReason !== intentionalBlankReason ||
 					JSON.stringify(existingRevision.basis) !== JSON.stringify(item.basis)
 				) {
 					throw new ConvexError({
@@ -2000,12 +2188,14 @@ export const submitRevisions = internalMutation({
 					item.localeId as Id<"locales">,
 				);
 				assertBasisMatches(item, current);
-				assertTargetValueContract({
-					messageId: item.messageId,
-					localeCode: current.target.localeCode,
-					value: item.value,
-					source: current.source,
-				});
+				if (intentionalBlankReason === undefined) {
+					assertTargetValueContract({
+						messageId: item.messageId,
+						localeCode: current.target.localeCode,
+						value: item.value,
+						source: current.source,
+					});
+				}
 			} else {
 				const current = await currentLocaleProposalTarget(
 					ctx,
@@ -2023,12 +2213,14 @@ export const submitRevisions = internalMutation({
 							"The Locale Proposal source basis changed; refresh before proposing.",
 					});
 				}
-				assertTargetValueContract({
-					messageId: item.messageId,
-					localeCode: current.localeProposal.localeCode,
-					value: item.value,
-					source: current.source.source,
-				});
+				if (intentionalBlankReason === undefined) {
+					assertTargetValueContract({
+						messageId: item.messageId,
+						localeCode: current.localeProposal.localeCode,
+						value: item.value,
+						source: current.source.source,
+					});
+				}
 			}
 			const currentRevision = candidate?.currentRevision ?? 0;
 			if (item.expectedCandidateRevision !== currentRevision) {
@@ -2057,6 +2249,9 @@ export const submitRevisions = internalMutation({
 			const valueFingerprint = await sha256Hex(item.value);
 			const retainedBytes = revisionByteLength({
 				value: item.value,
+				...(intentionalBlankReason === undefined
+					? {}
+					: { intentionalBlankReason }),
 				clientRevisionKey: item.clientRevisionKey,
 				basis: item.basis,
 			});
@@ -2096,6 +2291,9 @@ export const submitRevisions = internalMutation({
 					revision,
 					clientRevisionKey: item.clientRevisionKey,
 					value: item.value,
+					...(intentionalBlankReason === undefined
+						? {}
+						: { intentionalBlankReason }),
 					valueFingerprint,
 					basis: item.basis,
 					createdBy: { kind: "agent", id: token._id },
@@ -2367,17 +2565,10 @@ async function completedProposalStatus(
 	proposalId: Id<"agentTranslationProposals">,
 ): Promise<"open" | "accepted" | "rejected"> {
 	const proposal = await ctx.db.get(proposalId);
-	if (
-		proposal?.localeProposalTaskScope &&
-		proposal.target.kind === "localeProposal"
-	) {
-		const localeProposal = await ctx.db.get(proposal.target.localeProposalId);
-		return localeProposal?.projectId === proposal.projectId &&
-			localeProposal.stagedValueCount ===
-				proposal.localeProposalTaskScope.targetCount
-			? "accepted"
-			: "open";
-	}
+	// A complete new-Locale task is only complete once finalization creates its
+	// immutable artifact. Keeping it open during review also avoids rescanning
+	// the whole task after every accepted batch.
+	if (proposal?.localeProposalTaskScope) return "open";
 	const candidates = await ctx.db
 		.query("agentTranslationCandidates")
 		.withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
@@ -2470,6 +2661,16 @@ export const acceptTaskCandidates = mutation({
 				throw new ConvexError({
 					code: "NOT_FOUND",
 					message: "Task candidate revision not found.",
+				});
+			}
+			if (
+				revision.value.length === 0 ||
+				revision.intentionalBlankReason !== undefined
+			) {
+				throw new ConvexError({
+					code: "VALIDATION",
+					message:
+						"An Intentional Blank candidate must be reviewed individually with its reason.",
 				});
 			}
 			if (

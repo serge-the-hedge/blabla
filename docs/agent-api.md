@@ -20,6 +20,11 @@ Authentication:
 Authorization: Bearer <project_api_token>
 ```
 
+Rate-limited requests return `429`, a JSON `retryAfter` duration in
+milliseconds, and the standard `Retry-After` response header in seconds. Honor
+the header and retry with backoff; do not treat a rate limit as validation
+failure.
+
 ## Human Setup
 
 1. Open the project in the web app.
@@ -111,9 +116,9 @@ changes the working catalog.
    `{ "kind": "completeCatalog" }`.
 2. Page its exact Source Snapshot template with
    `GET /translation-tasks/:id?cursor=...&limit=...`.
-3. Submit at most 16 `{ "messageId", "value" }` candidates at a time to
-   `POST /translation-tasks/:id/candidates`. The server owns and validates the
-   pinned Source evidence; callers do not copy fingerprints or Convex ids.
+3. Submit at most 16 value or Intentional Blank candidates at a time to
+	 `POST /translation-tasks/:id/candidates`. The server owns and validates the
+	 pinned Source evidence; callers do not copy fingerprints or Convex ids.
 4. Review values from the task in
    `/projects/:projectId/proposals/:taskId`. It mounts the same new-Locale
    workbench as the lower-level Portuguese route. Agent values remain awaiting
@@ -122,12 +127,7 @@ changes the working catalog.
 
 The `/locale-proposals/pt` endpoints remain available as a lower-level
 compatibility interface for clients that need explicit fingerprints,
-Intentional Blank preparation, diagnostics, finalization, or artifact access.
-7. Call `POST /locale-proposals/pt/finalize`. A rejected finalization records
-   its bounded diagnostics on the proposal; read them with
-   `GET /locale-proposals/pt?proposalId=...` after correcting the values.
-8. Read the immutable delivery artifact from
-   `GET /locale-proposals/pt/artifact?proposalId=...`.
+diagnostics, finalization, or artifact access.
 
 The proposal is pinned to the accepted Baseline Snapshot. If Git advances,
 staging and finalization return `STALE_SOURCE`; start a fresh proposal for the
@@ -298,6 +298,20 @@ fails before a Locale Proposal is created.
 The same task shape is created from the Strings UI when an editor selects keys
 and chooses **Start task**. A project-scoped propose token can fill a
 human-created task; token-owned tasks remain private to their creating token.
+Only one task can own a complete new-Locale proposal. Creating it again—even
+with a different title—resumes the existing task.
+
+A new-Locale task remains `open` while candidates are proposed and reviewed.
+It becomes `accepted` only when finalization creates the immutable delivery
+artifact; staging the final review batch is not itself task completion.
+
+### `GET /translation-tasks`
+
+Returns the bounded task inbox visible to the current token: project tasks
+created by a human and private tasks created by that token. Optional `status`
+is `open`, `accepted`, or `rejected`. Each row states its task kind, ownership,
+Locale, frozen target count, candidate count, and update time. Use this endpoint
+to discover and resume work instead of guessing task ids or creating duplicates.
 
 ### `GET /translation-tasks/:id`
 
@@ -311,16 +325,30 @@ workspace, and Convex-id basis fields are not exposed.
 
 ### `POST /translation-tasks/:id/candidates`
 
-Submits values without exposing Convex ids or asking the agent to copy internal
-basis facts:
+Submits candidate decisions without exposing Convex ids or asking the agent to
+copy internal basis facts. The explicit shape is:
 
 ```json
 {
-  "items": [
-    { "messageId": "checkout.payButton", "value": "Jetzt bezahlen" }
-  ]
+	"items": [
+		{
+			"messageId": "checkout.payButton",
+			"candidate": { "kind": "value", "value": "Jetzt bezahlen" }
+		},
+		{
+			"messageId": "checkout.optionalLabel",
+			"candidate": {
+				"kind": "intentionalBlank",
+				"reason": "This label is not shown in this Locale."
+			}
+		}
+	]
 }
 ```
+
+The original `{ "messageId", "value" }` item remains readable for compatibility.
+An Intentional Blank candidate and its reason remain inert, cannot be exact-batch
+accepted, and must be confirmed individually by a human.
 
 An exact retry is safe. A correction appends an immutable revision and makes it
 the candidate's current revision. The

@@ -7,6 +7,7 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@blabla/ui/components/card";
+import { Checkbox } from "@blabla/ui/components/checkbox";
 import {
 	Empty,
 	EmptyDescription,
@@ -22,13 +23,16 @@ import { useAction, useMutation, useQuery } from "convex/react";
 import {
 	ArrowLeft,
 	Check,
+	ChevronDown,
 	Download,
 	Languages,
 	Save,
+	Search,
 	Sparkles,
+	TriangleAlert,
 	X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 
 import {
 	PageHeader,
@@ -48,6 +52,14 @@ type ReviewDecision =
 	| { kind: "acceptWithEdits"; value: string }
 	| { kind: "reject" }
 	| { kind: "intentionalBlank"; reason: string };
+
+type ReviewFocus =
+	| "awaiting"
+	| "attention"
+	| "routine"
+	| "reviewed"
+	| "missing"
+	| "all";
 
 function PortugueseLocaleProposalRoute() {
 	const { projectId } = useParams({
@@ -92,6 +104,10 @@ export function PortugueseLocaleProposalWorkbench({
 	const [proposalId, setProposalId] = useState<string | null>(null);
 	const activeProposalId = initialProposalId ?? proposalId ?? currentProposalId;
 	const [cursor, setCursor] = useState(0);
+	const [cursorHistory, setCursorHistory] = useState<number[]>([]);
+	const [focus, setFocus] = useState<ReviewFocus>(taskId ? "awaiting" : "all");
+	const [search, setSearch] = useState("");
+	const deferredSearch = useDeferredValue(search);
 	const detail = useQuery(
 		api.localeProposals.getForReview,
 		activeProposalId
@@ -103,7 +119,9 @@ export function PortugueseLocaleProposalWorkbench({
 							}
 						: {}),
 					cursor,
-					limit: 16,
+					limit: 48,
+					focus,
+					...(deferredSearch.trim() ? { search: deferredSearch.trim() } : {}),
 				}
 			: "skip",
 	);
@@ -112,18 +130,37 @@ export function PortugueseLocaleProposalWorkbench({
 	const [busy, setBusy] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
+	const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(
+		() => new Set(),
+	);
+	const [expandedMessageId, setExpandedMessageId] = useState<string | null>(
+		null,
+	);
 
 	// A different proposal is a different editing session, even though this
 	// effect only writes local state and the dependency is not read in its body.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset on proposal identity
 	useEffect(() => {
 		setCursor(0);
+		setCursorHistory([]);
 		setDrafts({});
 		setBlankReasons({});
+		setSelectedMessageIds(new Set());
+		setExpandedMessageId(null);
 		setBusy(null);
 		setError(null);
 		setNotice(null);
 	}, [activeProposalId]);
+
+	// Review filters are server-backed catalog scans. Reset their cursor so a
+	// new question always starts at the beginning of Catalog Order.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset on filter identity
+	useEffect(() => {
+		setCursor(0);
+		setCursorHistory([]);
+		setSelectedMessageIds(new Set());
+		setExpandedMessageId(null);
+	}, [focus, deferredSearch]);
 
 	const dirtyItems = useMemo(() => {
 		if (!detail) return [];
@@ -142,7 +179,7 @@ export function PortugueseLocaleProposalWorkbench({
 			];
 		});
 	}, [detail, drafts]);
-	const visibleAgentCandidates = useMemo(() => {
+	const selectableAgentCandidates = useMemo(() => {
 		if (!detail) return [];
 		return detail.messages.filter((message) => {
 			const taskCandidateValue = message.candidate?.value;
@@ -152,27 +189,24 @@ export function PortugueseLocaleProposalWorkbench({
 					: undefined;
 			const value = taskCandidateValue ?? legacyAgentValue;
 			return (
-				(message.candidate
-					? message.candidate.review === null
-					: message.review === null) &&
+				message.facts.state === "awaiting" &&
 				value !== undefined &&
 				value.length > 0 &&
+				!message.facts.staleSource &&
 				(drafts[message.messageId] ?? value) === value
 			);
 		});
 	}, [detail, drafts, taskId]);
-	const visibleAgentBlanks = useMemo(
-		() =>
-			detail?.messages.some(
-				(message) =>
-					(message.candidate?.review === null &&
-						message.candidate.value.length === 0) ||
-					(!taskId &&
-						message.review === null &&
-						message.value?.updatedBy.kind === "agent" &&
-						message.value.value.length === 0),
-			) ?? false,
-		[detail, taskId],
+	const routineAgentCandidates = selectableAgentCandidates.filter(
+		(message) =>
+			!message.facts.sourceIdentical &&
+			!message.facts.sourceEmpty &&
+			!message.facts.blankCandidate &&
+			!message.facts.icu &&
+			!message.facts.edgeWhitespaceMismatch,
+	);
+	const selectedAgentCandidates = selectableAgentCandidates.filter((message) =>
+		selectedMessageIds.has(message.messageId),
 	);
 
 	const run = async (label: string, task: () => Promise<void>) => {
@@ -202,11 +236,13 @@ export function PortugueseLocaleProposalWorkbench({
 	const saveVisible = () =>
 		run("save", async () => {
 			if (!activeProposalId || dirtyItems.length === 0) return;
-			await stageForReview({
-				projectId: convexProjectId,
-				proposalId: convexId<"localeProposals">(activeProposalId),
-				items: dirtyItems,
-			});
+			for (let offset = 0; offset < dirtyItems.length; offset += 16) {
+				await stageForReview({
+					projectId: convexProjectId,
+					proposalId: convexId<"localeProposals">(activeProposalId),
+					items: dirtyItems.slice(offset, offset + 16),
+				});
+			}
 			setNotice(
 				`${dirtyItems.length} manual value${dirtyItems.length === 1 ? "" : "s"} saved.`,
 			);
@@ -245,48 +281,95 @@ export function PortugueseLocaleProposalWorkbench({
 			setNotice("Human review recorded.");
 		});
 
-	const acceptVisibleAgentCandidates = () =>
-		run("accept-visible", async () => {
-			if (!activeProposalId || visibleAgentCandidates.length === 0) return;
+	const acceptSelectedAgentCandidates = () =>
+		run("accept-selected", async () => {
+			if (!activeProposalId || selectedAgentCandidates.length === 0) return;
+			let accepted = 0;
 			if (taskId) {
-				const candidateRevisionIds = visibleAgentCandidates.flatMap(
+				const candidateRevisionIds = selectedAgentCandidates.flatMap(
 					(message) =>
 						message.candidate ? [message.candidate.revisionId] : [],
 				);
 				if (candidateRevisionIds.length === 0) return;
-				await acceptTaskCandidates({
-					proposalId: convexId<"agentTranslationProposals">(taskId),
-					candidateRevisionIds: candidateRevisionIds.map((revisionId) =>
-						convexId<"agentTranslationCandidateRevisions">(revisionId),
-					),
-				});
+				for (
+					let offset = 0;
+					offset < candidateRevisionIds.length;
+					offset += 16
+				) {
+					const result = await acceptTaskCandidates({
+						proposalId: convexId<"agentTranslationProposals">(taskId),
+						candidateRevisionIds: candidateRevisionIds
+							.slice(offset, offset + 16)
+							.map((revisionId) =>
+								convexId<"agentTranslationCandidateRevisions">(revisionId),
+							),
+					});
+					accepted += result.accepted;
+				}
 			} else {
-				for (const message of visibleAgentCandidates) {
+				for (const message of selectedAgentCandidates) {
 					if (!message.value) continue;
 					await reviewValue(message.messageId, message.value.reviewToken, {
 						kind: "accept",
 					});
+					accepted += 1;
 				}
 			}
-			const nextCursor = detail?.continueCursor;
-			if (
-				!visibleAgentBlanks &&
-				nextCursor !== null &&
-				nextCursor !== undefined
-			) {
-				setCursor(nextCursor);
-			}
+			setSelectedMessageIds(new Set());
 			setNotice(
-				`${visibleAgentCandidates.length} visible agent candidate${visibleAgentCandidates.length === 1 ? "" : "s"} accepted.`,
+				`${accepted} selected candidate${accepted === 1 ? "" : "s"} accepted with human confirmation.`,
 			);
 		});
+
+	const selectRoutinePage = () => {
+		setSelectedMessageIds(
+			new Set(routineAgentCandidates.map((message) => message.messageId)),
+		);
+	};
+
+	const goNext = (nextCursor: number) => {
+		setCursorHistory((history) => [...history, cursor]);
+		setCursor(nextCursor);
+		setSelectedMessageIds(new Set());
+		setExpandedMessageId(null);
+	};
+
+	const goPrevious = () => {
+		const previousCursor = cursorHistory.at(-1);
+		if (previousCursor === undefined) return;
+		setCursorHistory((history) => history.slice(0, -1));
+		setCursor(previousCursor);
+		setSelectedMessageIds(new Set());
+		setExpandedMessageId(null);
+	};
+
+	// Sparse server-side filters can produce an empty bounded scan window. Walk
+	// it automatically so search and attention filters feel continuous.
+	useEffect(() => {
+		if (
+			detail &&
+			detail.messages.length === 0 &&
+			detail.continueCursor !== null &&
+			busy === null
+		) {
+			setCursorHistory((history) => [...history, cursor]);
+			setCursor(detail.continueCursor);
+			setSelectedMessageIds(new Set());
+			setExpandedMessageId(null);
+		}
+	}, [detail, busy, cursor]);
 
 	const markIntentionalBlank = (
 		message: NonNullable<typeof detail>["messages"][number],
 	) =>
 		run(`blank:${message.messageId}`, async () => {
 			if (!activeProposalId) return;
-			const reason = blankReasons[message.messageId]?.trim();
+			const reason = (
+				blankReasons[message.messageId] ??
+				message.candidate?.intentionalBlankReason ??
+				message.value?.intentionalBlankReason ??
+				""
+			).trim();
 			if (!reason) {
 				throw new Error(
 					"Add a reason before marking a value intentionally blank.",
@@ -439,13 +522,13 @@ export function PortugueseLocaleProposalWorkbench({
 			) : (
 				<div className="flex flex-col gap-4">
 					<Card>
-						<CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between">
+						<CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
 							<div>
 								<CardTitle className="text-base">Portuguese · pt-BR</CardTitle>
 								<p className="mt-1 text-muted-foreground text-sm">
-									{detail.proposal.progress.staged} of{" "}
-									{detail.proposal.progress.total} source messages prepared ·{" "}
-									{detail.proposal.sourceSnapshot.commit}
+									Pinned to {detail.proposal.sourceSnapshot.commit}. Agent work
+									stays inert until a person confirms exact candidate revisions
+									below.
 								</p>
 							</div>
 							<div className="flex flex-wrap gap-2">
@@ -464,30 +547,13 @@ export function PortugueseLocaleProposalWorkbench({
 								</Button>
 								<Button
 									size="sm"
-									variant="outline"
-									onClick={acceptVisibleAgentCandidates}
-									disabled={
-										busy !== null ||
-										visibleAgentCandidates.length === 0 ||
-										detail.proposal.status === "ready"
-									}
-								>
-									<Check data-icon="inline-start" />
-									{!visibleAgentBlanks && detail.continueCursor !== null
-										? "Accept visible & next"
-										: "Accept visible"}
-									{visibleAgentCandidates.length
-										? ` (${visibleAgentCandidates.length})`
-										: ""}
-								</Button>
-								<Button
-									size="sm"
 									variant="secondary"
 									onClick={finalize}
 									disabled={
 										busy !== null ||
 										detail.proposal.status === "ready" ||
-										!detail.isCurrentBaseline
+										!detail.isCurrentBaseline ||
+										detail.proposal.progress.remaining !== 0
 									}
 								>
 									<Check data-icon="inline-start" />
@@ -495,198 +561,394 @@ export function PortugueseLocaleProposalWorkbench({
 								</Button>
 							</div>
 						</CardHeader>
+						<CardContent className="grid gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-3">
+							<div className="bg-background p-3">
+								<p className="text-muted-foreground text-xs">
+									Agent candidates
+								</p>
+								<p className="mt-1 font-medium text-lg tabular-nums">
+									{detail.task
+										? `${detail.task.candidateCount} / ${detail.task.targetCount}`
+										: detail.proposal.progress.staged}
+								</p>
+							</div>
+							<div className="bg-background p-3">
+								<p className="text-muted-foreground text-xs">
+									Applied to locale draft
+								</p>
+								<p className="mt-1 font-medium text-lg tabular-nums">
+									{detail.proposal.progress.staged} /{" "}
+									{detail.proposal.progress.total}
+								</p>
+							</div>
+							<div className="bg-background p-3">
+								<p className="text-muted-foreground text-xs">Catalog window</p>
+								<p className="mt-1 font-medium text-lg tabular-nums">
+									{detail.messages.length === 0
+										? "No matches"
+										: `${cursor + 1}–${detail.windowEnd + 1}`}
+								</p>
+							</div>
+						</CardContent>
 					</Card>
-					{detail.messages.map((message) => {
-						const value =
-							message.candidate?.value ?? message.value?.value ?? "";
-						const draft = drafts[message.messageId] ?? value;
-						const reviewed = message.candidate
-							? message.candidate.review !== null
-							: message.review !== null;
-						const agentOwned =
-							message.candidate !== null ||
-							message.value?.updatedBy.kind === "agent";
-						const reviewToken = taskId
-							? message.candidate?.revisionId
-							: message.value?.reviewToken;
-						return (
-							<Card key={message.messageId}>
-								<CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between">
-									<CardTitle className="truncate text-sm">
-										{message.messageId}
-									</CardTitle>
-									<div className="flex flex-wrap gap-2">
-										<Badge
-											variant={
-												reviewed
-													? "default"
-													: agentOwned
-														? "secondary"
-														: "outline"
+
+					<Card size="sm">
+						<CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center">
+							<div className="relative min-w-0 flex-1">
+								<Search
+									aria-hidden
+									className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+								/>
+								<Input
+									aria-label="Search review values"
+									placeholder="Search key, source, or candidate"
+									value={search}
+									onChange={(event) => setSearch(event.target.value)}
+									className="pl-9"
+								/>
+							</div>
+							<label className="flex items-center gap-2 text-muted-foreground text-xs">
+								Show
+								<select
+									aria-label="Review focus"
+									value={focus}
+									onChange={(event) =>
+										setFocus(event.currentTarget.value as ReviewFocus)
+									}
+									className="h-9 rounded-md border bg-background px-3 text-foreground text-sm"
+								>
+									<option value="awaiting">Awaiting review</option>
+									<option value="attention">Needs attention</option>
+									<option value="routine">Routine candidates</option>
+									<option value="reviewed">Reviewed</option>
+									<option value="missing">Missing candidates</option>
+									<option value="all">Everything</option>
+								</select>
+							</label>
+							<div className="flex flex-wrap items-center gap-2">
+								<Button
+									size="sm"
+									variant="outline"
+									onClick={selectRoutinePage}
+									disabled={
+										busy !== null || routineAgentCandidates.length === 0
+									}
+								>
+									Select routine ({routineAgentCandidates.length})
+								</Button>
+								<Button
+									size="sm"
+									onClick={acceptSelectedAgentCandidates}
+									disabled={
+										busy !== null ||
+										selectedAgentCandidates.length === 0 ||
+										detail.proposal.status === "ready"
+									}
+								>
+									<Check data-icon="inline-start" />
+									Accept selected ({selectedAgentCandidates.length})
+								</Button>
+							</div>
+						</CardContent>
+					</Card>
+
+					<div className="overflow-hidden rounded-lg border bg-background">
+						{detail.messages.map((message) => {
+							const value =
+								message.candidate?.value ?? message.value?.value ?? "";
+							const draft = drafts[message.messageId] ?? value;
+							const reviewed = message.facts.state === "reviewed";
+							const reviewToken = taskId
+								? message.candidate?.revisionId
+								: message.value?.reviewToken;
+							const selectable = selectableAgentCandidates.some(
+								(candidate) => candidate.messageId === message.messageId,
+							);
+							const expanded = expandedMessageId === message.messageId;
+							return (
+								<div
+									key={message.messageId}
+									className="border-b last:border-b-0"
+								>
+									<div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 px-3 py-3">
+										<Checkbox
+											aria-label={`Select ${message.messageId}`}
+											checked={selectedMessageIds.has(message.messageId)}
+											disabled={!selectable || busy !== null}
+											onCheckedChange={(checked) =>
+												setSelectedMessageIds((current) => {
+													const next = new Set(current);
+													if (checked === true) next.add(message.messageId);
+													else next.delete(message.messageId);
+													return next;
+												})
+											}
+										/>
+										<button
+											type="button"
+											className="min-w-0 text-left"
+											onClick={() =>
+												setExpandedMessageId(
+													expanded ? null : message.messageId,
+												)
+											}
+											aria-expanded={expanded}
+										>
+											<div className="flex flex-wrap items-center gap-2">
+												<code className="truncate text-sm">
+													{message.messageId}
+												</code>
+												<Badge variant={reviewed ? "default" : "secondary"}>
+													{message.facts.state === "humanDraft"
+														? "human draft"
+														: message.facts.state}
+												</Badge>
+												{message.facts.sourceIdentical ? (
+													<Badge variant="outline">matches Source</Badge>
+												) : null}
+												{message.facts.icu ? (
+													<Badge variant="outline">ICU</Badge>
+												) : null}
+												{message.facts.blankCandidate ? (
+													<Badge variant="outline">blank candidate</Badge>
+												) : null}
+												{message.facts.sourceEmpty ? (
+													<Badge variant="outline">empty Source</Badge>
+												) : null}
+												{message.facts.edgeWhitespaceMismatch ? (
+													<Badge variant="outline">edge whitespace</Badge>
+												) : null}
+												{message.facts.staleSource ? (
+													<Badge variant="destructive">Source changed</Badge>
+												) : null}
+											</div>
+											<div className="mt-2 grid gap-2 text-sm md:grid-cols-2">
+												<p className="line-clamp-2 whitespace-pre-wrap text-muted-foreground">
+													{message.sourceValue || "Empty Source value"}
+												</p>
+												<p className="line-clamp-2 whitespace-pre-wrap">
+													{value || "No candidate value"}
+												</p>
+											</div>
+										</button>
+										<Button
+											size="icon-sm"
+											variant="ghost"
+											aria-label={`${expanded ? "Collapse" : "Expand"} ${message.messageId}`}
+											onClick={() =>
+												setExpandedMessageId(
+													expanded ? null : message.messageId,
+												)
 											}
 										>
-											{reviewed
-												? "reviewed"
-												: agentOwned
-													? "awaiting review"
-													: value
-														? "human draft"
-														: "missing"}
-										</Badge>
+											<ChevronDown
+												aria-hidden
+												className={
+													expanded
+														? "rotate-180 transition-transform"
+														: "transition-transform"
+												}
+											/>
+										</Button>
 									</div>
-								</CardHeader>
-								<CardContent className="grid gap-3 md:grid-cols-2">
-									<div className="rounded-md border bg-muted/20 p-3">
-										<div className="mb-1 font-medium text-muted-foreground text-xs uppercase tracking-wide">
-											Source
-										</div>
-										<p className="whitespace-pre-wrap text-sm">
-											{message.sourceValue}
-										</p>
-										<WhitespaceFacts value={message.sourceValue} />
-									</div>
-									<div className="flex flex-col gap-2">
-										<Textarea
-											aria-label={`Portuguese value for ${message.messageId}`}
-											value={draft}
-											onChange={(event) =>
-												setDrafts((previous) => ({
-													...previous,
-													[message.messageId]: event.target.value,
-												}))
-											}
-											disabled={
-												detail.proposal.status === "ready" || busy !== null
-											}
-											rows={3}
-										/>
-										<WhitespaceFacts value={draft} />
-										<div className="flex flex-col gap-2">
-											<div className="flex flex-col gap-2 sm:flex-row">
-												<Input
-													aria-label={`Reason for intentionally blank ${message.messageId}`}
-													placeholder="Reason for an intentional blank"
-													value={
-														blankReasons[message.messageId] ??
-														message.value?.intentionalBlankReason ??
-														""
-													}
+									{expanded ? (
+										<div className="grid gap-4 border-t bg-muted/10 p-4 md:grid-cols-2">
+											<div className="rounded-md border bg-muted/20 p-3">
+												<div className="mb-1 flex items-center gap-2 font-medium text-muted-foreground text-xs uppercase tracking-wide">
+													Source Contract
+													{message.sourceIcuType === "icu" ? (
+														<Badge variant="outline">ICU</Badge>
+													) : null}
+												</div>
+												<p className="whitespace-pre-wrap text-sm">
+													{message.sourceValue}
+												</p>
+												<WhitespaceFacts value={message.sourceValue} />
+											</div>
+											<div className="flex flex-col gap-2">
+												<div className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
+													Portuguese candidate
+												</div>
+												<Textarea
+													aria-label={`Portuguese value for ${message.messageId}`}
+													value={draft}
 													onChange={(event) =>
-														setBlankReasons((previous) => ({
+														setDrafts((previous) => ({
 															...previous,
 															[message.messageId]: event.target.value,
 														}))
 													}
+													disabled={
+														detail.proposal.status === "ready" || busy !== null
+													}
+													rows={3}
 												/>
-												{!message.value || message.value.value.length === 0 ? (
-													<Button
-														size="sm"
-														variant="outline"
-														onClick={() => void markIntentionalBlank(message)}
-														disabled={
-															busy !== null ||
-															reviewed ||
-															detail.proposal.status === "ready" ||
-															!(
+												<WhitespaceFacts value={draft} />
+												<div className="flex flex-col gap-2">
+													<div className="flex flex-col gap-2 sm:flex-row">
+														<Input
+															aria-label={`Reason for intentionally blank ${message.messageId}`}
+															placeholder="Reason for an intentional blank"
+															value={
 																blankReasons[message.messageId] ??
+																message.candidate?.intentionalBlankReason ??
 																message.value?.intentionalBlankReason ??
 																""
-															).trim()
-														}
-													>
-														Mark intentional blank
-													</Button>
+															}
+															onChange={(event) =>
+																setBlankReasons((previous) => ({
+																	...previous,
+																	[message.messageId]: event.target.value,
+																}))
+															}
+														/>
+														{!message.value ||
+														message.value.value.length === 0 ? (
+															<Button
+																size="sm"
+																variant="outline"
+																onClick={() =>
+																	void markIntentionalBlank(message)
+																}
+																disabled={
+																	busy !== null ||
+																	reviewed ||
+																	message.facts.staleSource ||
+																	detail.proposal.status === "ready" ||
+																	!(
+																		blankReasons[message.messageId] ??
+																		message.candidate?.intentionalBlankReason ??
+																		message.value?.intentionalBlankReason ??
+																		""
+																	).trim()
+																}
+															>
+																Mark intentional blank
+															</Button>
+														) : null}
+													</div>
+													{reviewToken ? (
+														<div className="flex flex-wrap gap-2">
+															<Button
+																size="sm"
+																onClick={() =>
+																	void decide(message.messageId, reviewToken, {
+																		kind: "accept",
+																	})
+																}
+																disabled={
+																	busy !== null ||
+																	reviewed ||
+																	message.facts.staleSource ||
+																	detail.proposal.status === "ready"
+																}
+															>
+																<Check data-icon="inline-start" /> Accept
+															</Button>
+															<Button
+																size="sm"
+																variant="secondary"
+																onClick={() =>
+																	void decide(message.messageId, reviewToken, {
+																		kind: "acceptWithEdits",
+																		value: draft,
+																	})
+																}
+																disabled={
+																	busy !== null ||
+																	reviewed ||
+																	message.facts.staleSource ||
+																	draft.trim().length === 0 ||
+																	draft === value ||
+																	detail.proposal.status === "ready"
+																}
+															>
+																Accept edited
+															</Button>
+															<Button
+																size="sm"
+																variant="outline"
+																onClick={() =>
+																	void decide(message.messageId, reviewToken, {
+																		kind: "reject",
+																	})
+																}
+																disabled={
+																	busy !== null ||
+																	reviewed ||
+																	message.facts.staleSource ||
+																	detail.proposal.status === "ready"
+																}
+															>
+																<X data-icon="inline-start" /> Reject
+															</Button>
+															<Button
+																size="sm"
+																variant="outline"
+																onClick={() =>
+																	void markIntentionalBlank(message)
+																}
+																disabled={
+																	busy !== null ||
+																	reviewed ||
+																	message.facts.staleSource ||
+																	detail.proposal.status === "ready" ||
+																	!(
+																		blankReasons[message.messageId] ??
+																		message.candidate?.intentionalBlankReason ??
+																		""
+																	).trim()
+																}
+															>
+																Mark intentional blank
+															</Button>
+														</div>
+													) : null}
+												</div>
+												{message.facts.staleSource ? (
+													<p className="flex items-center gap-2 text-destructive text-xs">
+														<TriangleAlert aria-hidden className="size-4" />
+														The Source changed after this candidate. Ask the
+														agent for a new revision.
+													</p>
 												) : null}
 											</div>
-											{reviewToken ? (
-												<div className="flex flex-wrap gap-2">
-													<Button
-														size="sm"
-														onClick={() =>
-															void decide(message.messageId, reviewToken, {
-																kind: "accept",
-															})
-														}
-														disabled={
-															busy !== null ||
-															reviewed ||
-															detail.proposal.status === "ready"
-														}
-													>
-														<Check data-icon="inline-start" /> Accept
-													</Button>
-													<Button
-														size="sm"
-														variant="secondary"
-														onClick={() =>
-															void decide(message.messageId, reviewToken, {
-																kind: "acceptWithEdits",
-																value: draft,
-															})
-														}
-														disabled={
-															busy !== null ||
-															reviewed ||
-															draft.trim().length === 0 ||
-															draft === value ||
-															detail.proposal.status === "ready"
-														}
-													>
-														Accept edited
-													</Button>
-													<Button
-														size="sm"
-														variant="outline"
-														onClick={() =>
-															void decide(message.messageId, reviewToken, {
-																kind: "reject",
-															})
-														}
-														disabled={
-															busy !== null ||
-															reviewed ||
-															detail.proposal.status === "ready"
-														}
-													>
-														<X data-icon="inline-start" /> Reject
-													</Button>
-													<Button
-														size="sm"
-														variant="outline"
-														onClick={() => void markIntentionalBlank(message)}
-														disabled={
-															busy !== null ||
-															reviewed ||
-															detail.proposal.status === "ready" ||
-															!(blankReasons[message.messageId] ?? "").trim()
-														}
-													>
-														Mark intentional blank
-													</Button>
-												</div>
-											) : null}
 										</div>
-									</div>
-								</CardContent>
-							</Card>
-						);
-					})}
+									) : null}
+								</div>
+							);
+						})}
+						{detail.messages.length === 0 && detail.continueCursor === null ? (
+							<div className="px-4 py-12 text-center">
+								<p className="font-medium text-sm">No values match this view</p>
+								<p className="mt-1 text-muted-foreground text-xs">
+									Try another review focus or clear the search.
+								</p>
+							</div>
+						) : null}
+					</div>
 					<div className="flex items-center justify-between">
 						<Button
 							size="sm"
 							variant="outline"
-							onClick={() => setCursor(Math.max(0, cursor - 16))}
-							disabled={cursor === 0 || busy !== null}
+							onClick={goPrevious}
+							disabled={cursorHistory.length === 0 || busy !== null}
 						>
 							Previous
 						</Button>
 						<span className="text-muted-foreground text-xs">
-							Messages {cursor + 1}–{cursor + detail.messages.length}
+							{detail.messages.length} matching value
+							{detail.messages.length === 1 ? "" : "s"} in Catalog positions{" "}
+							{cursor + 1}–{detail.windowEnd + 1}
 						</span>
 						<Button
 							size="sm"
 							variant="outline"
-							onClick={() => setCursor(detail.continueCursor ?? cursor)}
+							onClick={() =>
+								detail.continueCursor === null
+									? undefined
+									: goNext(detail.continueCursor)
+							}
 							disabled={detail.continueCursor === null || busy !== null}
 						>
 							Next
