@@ -109,6 +109,7 @@ export function PortugueseLocaleProposalWorkbench({
 	const [proposalId, setProposalId] = useState<string | null>(null);
 	const activeProposalId = initialProposalId ?? proposalId ?? currentProposalId;
 	const [cursor, setCursor] = useState(0);
+	const [pendingCursor, setPendingCursor] = useState<string | undefined>();
 	const [cursorHistory, setCursorHistory] = useState<number[]>([]);
 	const [focus, setFocus] = useState<ReviewFocus>(taskId ? "awaiting" : "all");
 	const [search, setSearch] = useState("");
@@ -124,6 +125,7 @@ export function PortugueseLocaleProposalWorkbench({
 							}
 						: {}),
 					cursor,
+					...(pendingCursor ? { pendingCursor } : {}),
 					limit: 48,
 					focus,
 					...(deferredSearch.trim() ? { search: deferredSearch.trim() } : {}),
@@ -186,6 +188,7 @@ export function PortugueseLocaleProposalWorkbench({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset on proposal identity
 	useEffect(() => {
 		setCursor(0);
+		setPendingCursor(undefined);
 		setCursorHistory([]);
 		setDrafts({});
 		setBlankReasons({});
@@ -201,6 +204,7 @@ export function PortugueseLocaleProposalWorkbench({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset on filter identity
 	useEffect(() => {
 		setCursor(0);
+		setPendingCursor(undefined);
 		setCursorHistory([]);
 		setSelectedCandidateTokens({});
 		setExpandedMessageId(null);
@@ -406,6 +410,12 @@ export function PortugueseLocaleProposalWorkbench({
 	const goNext = (nextCursor: number) => {
 		setCursorHistory((history) => [...history, cursor]);
 		setCursor(nextCursor);
+		setSelectedCandidateTokens({});
+		setExpandedMessageId(null);
+	};
+
+	const continuePendingQueue = (nextCursor: string) => {
+		setPendingCursor(nextCursor);
 		setSelectedCandidateTokens({});
 		setExpandedMessageId(null);
 	};
@@ -859,7 +869,9 @@ export function PortugueseLocaleProposalWorkbench({
 												<Badge variant={reviewed ? "default" : "secondary"}>
 													{message.facts.state === "humanDraft"
 														? "human draft"
-														: message.facts.state}
+														: message.facts.state === "needsEdit"
+															? "needs replacement"
+															: message.facts.state}
 												</Badge>
 												{message.facts.sourceIdentical ? (
 													<Badge variant="outline">matches Source</Badge>
@@ -988,7 +1000,7 @@ export function PortugueseLocaleProposalWorkbench({
 															</Button>
 														) : null}
 													</div>
-													{reviewToken ? (
+													{reviewToken && message.facts.state === "awaiting" ? (
 														<div className="flex flex-wrap gap-2">
 															<Button
 																size="sm"
@@ -1080,6 +1092,13 @@ export function PortugueseLocaleProposalWorkbench({
 															</Button>
 														</div>
 													) : null}
+													{message.facts.state === "needsEdit" ? (
+														<p className="flex items-center gap-2 text-muted-foreground text-xs">
+															<TriangleAlert aria-hidden className="size-4" />
+															This candidate was rejected. Replace it above,
+															then save the visible edit.
+														</p>
+													) : null}
 												</div>
 												{message.facts.staleSource ? (
 													<p className="flex items-center gap-2 text-destructive text-xs">
@@ -1110,7 +1129,9 @@ export function PortugueseLocaleProposalWorkbench({
 						) : null}
 					</div>
 					{continuousReviewQueue ? (
-						detail.continueCursor !== null && detail.messages.length > 0 ? (
+						(detail.pendingQueueContinueCursor !== null ||
+							detail.continueCursor !== null) &&
+						detail.messages.length > 0 ? (
 							<div className="flex items-center justify-end gap-3">
 								<span className="text-muted-foreground text-xs">
 									The queue will refill as you review these values.
@@ -1118,7 +1139,13 @@ export function PortugueseLocaleProposalWorkbench({
 								<Button
 									size="sm"
 									variant="outline"
-									onClick={() => goNext(detail.continueCursor as number)}
+									onClick={() => {
+										if (detail.pendingQueueContinueCursor !== null) {
+											continuePendingQueue(detail.pendingQueueContinueCursor);
+										} else if (detail.continueCursor !== null) {
+											goNext(detail.continueCursor);
+										}
+									}}
 									disabled={busy !== null || queueIsLoading}
 								>
 									Show next review items
