@@ -590,10 +590,20 @@ branch:
 blabla deliver --release <release-record-id>
 ```
 
-The CLI preflights Flutter generation in a disposable worktree, applies the
-returned Catalog Documents, regenerates localization code, and creates one
-local `blabla/release-...` commit with provenance trailers. It prints push and
-`gh pr create` commands but never invokes either operation.
+If a ready new-Locale task is pinned to the same Baseline, include its finalized
+Locale Proposal in the same local transaction:
+
+```sh
+blabla deliver --release <release-record-id> --locale-proposal <proposal-id>
+```
+
+The combined form validates both immutable identities before checkout mutation,
+preflights committed generated output, applies the existing-Locale delta, adds
+the complete new catalog, and regenerates the combined candidate in a
+disposable worktree. It creates one local
+`blabla/release-...` commit with both provenance trailers, then prints push and
+`gh pr create` commands without invoking either operation. The existing-only
+form remains valid.
 
 ### `POST /export`
 

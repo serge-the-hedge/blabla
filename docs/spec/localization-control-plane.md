@@ -109,8 +109,10 @@ It does two things across a release cycle:
 - **Submit** — read the six bound ARB files at the current commit, parse
   `packages/*/lib` into a Code Context Manifest, send both plus the commit and a
   content-hashed file manifest.
-- **Deliver** — upload the delivery tree's six catalogs, receive edited bytes,
-  regenerate with the repo's Flutter, commit to a local branch, and stop.
+- **Deliver** — upload the delivery tree's bound catalogs, receive edited
+  existing-Locale bytes, optionally combine a ready new-Locale artifact pinned
+  to the same Baseline, regenerate with the repo's Flutter, commit to one local
+  branch, and stop.
 
 It stops at the local branch on purpose: nothing beyond the developer's own
 `git push` reaches GitHub, and the commit still arrives with ARB and generated
@@ -670,6 +672,15 @@ are never rewritten.
 **The command never writes a catalog file. It applies the Release Delta onto the
 tree it finds.**
 
+`blabla deliver --release <id>` is the delivery seam. An optional
+`--locale-proposal <id>` composes a ready new Locale into the same local
+transaction. Both artifacts must name the same repository, Baseline/Source
+Snapshot, source manifest and integration branch. The combined form creates
+one staging worktree, preflights generation against the untouched tree, then
+regenerates after both catalog operations. It produces one commit carrying both
+provenance identities. The new-Locale-only command remains a compatibility
+adapter, not a second product workflow.
+
 - **Drift is content, not distance.** The predicate compares the Baseline
   Snapshot's catalogs against the delivery tree's, over the bound files only.
   Commit distance is reported for the human and never gates. ARB-touching
@@ -694,13 +705,16 @@ tree it finds.**
   intended key/value map or the command aborts without writing. This applies to
   `intl_en.arb` too — rewriting it in canonical sorted order with zero content
   change produces ~1,560 changed generated-Dart lines.
-- **Pre-existing generated-Dart drift stops the command.** It regenerates from
-  the tree's ARB *before* applying anything and stops if the output differs from
-  the committed `app_localizations*.dart`, rather than absorbing someone else's
-  repair into a translation pull request.
-- **A dirty tree blocks narrowly** — only uncommitted changes to the six bound
-  catalogs or the generated localization Dart, exactly the files the command
-  writes.
+- **Pre-existing generated-Dart drift stops every delivery.** It regenerates
+  from the untouched tree's ARB *before* applying anything and stops if the
+  output differs from committed `app_localizations*.dart`. Combined delivery
+  then runs generation again after both catalog operations and admits only the
+  generated files corresponding to target catalogs changed by the Release
+  Delta plus the new Locale's declared generated surface.
+- **A dirty tree blocks narrowly for existing-only work** — only uncommitted
+  changes to bound catalogs or generated localization Dart. Combined delivery
+  requires the whole checkout to be clean because it introduces a catalog,
+  runtime registration, and generated files in one indivisible candidate.
 
 The commit message carries the trailers, which survive the merge into `git log`
 and let a later ingest correlate a commit to the release that produced it:
@@ -711,7 +725,8 @@ Blabla-Baseline-Commit: <sha>
 Blabla-Applied-Onto: <sha>
 ```
 
-plus the counts. The full skipped-key body, with a reason per key, goes to a
+plus the counts. Combined delivery also carries `Blabla-Locale-Proposal` and
+`Blabla-Source-Snapshot`. The full skipped-key body, with a reason per key, goes to a
 **file**, and the command prints a ready-to-run `gh pr create --body-file`
 invocation — printing the path alone when `gh` is absent. The durable copy is
 the Release Record.
