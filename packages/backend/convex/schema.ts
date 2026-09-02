@@ -535,7 +535,12 @@ export default defineSchema({
 		updatedAt: v.number(),
 	})
 		.index("by_proposal", ["proposalId"])
-		.index("by_proposal_and_messageId", ["proposalId", "messageId"]),
+		.index("by_proposal_and_messageId", ["proposalId", "messageId"])
+		.index("by_proposal_and_updatedByKind_and_messageId", [
+			"proposalId",
+			"updatedBy.kind",
+			"messageId",
+		]),
 
 	// Every validation attempt keeps a bounded, generation-stamped review
 	// sample. Staging a newer value generation makes old diagnostics inert

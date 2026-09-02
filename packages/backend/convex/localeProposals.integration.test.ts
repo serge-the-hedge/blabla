@@ -626,6 +626,86 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 		).rejects.toThrow("already finalized");
 	}, 60_000);
 
+	test("keeps earlier agent-staged values in a new-Locale task review queue", async () => {
+		const user = await authenticatedBackend(t, "mixed-locale-task-reviewer");
+		const projectId = await createProject(user);
+		await ingestSourceBaseline(user, projectId);
+		const { token } = await proposalToken(user, projectId);
+		const task = await successfulJson<{
+			taskId: Id<"agentTranslationProposals">;
+		}>(
+			await agentRequest(t, token, "/api/agent/v1/translation-tasks", {
+				method: "POST",
+				body: JSON.stringify({
+					clientTaskKey: "portuguese-mixed-review-v1",
+					target: { kind: "newLocale", localeCode: "pt" },
+				}),
+			}),
+		);
+		const taskReview = await user.query(
+			api.agentTranslationProposals.getForReview,
+			{ proposalId: task.taskId },
+		);
+		const localeProposalId =
+			taskReview?.proposal.localeProposalTaskScope?.localeProposalId;
+		if (!localeProposalId) throw new Error("Expected a Locale Proposal task.");
+		const initialReview = await user.query(api.localeProposals.getForReview, {
+			proposalId: localeProposalId,
+			taskId: task.taskId,
+			limit: 16,
+		});
+		const source = initialReview?.messages[0];
+		if (!source) throw new Error("Expected the source message.");
+
+		await successfulJson(
+			await stagePortugueseValues(t, token, localeProposalId, [
+				{
+					messageId: source.messageId,
+					value: "Boas-vindas, {name}!",
+					sourceFingerprint: source.sourceFingerprint,
+				},
+			]),
+		);
+
+		const awaitingReview = await user.query(api.localeProposals.getForReview, {
+			proposalId: localeProposalId,
+			taskId: task.taskId,
+			focus: "awaiting",
+			limit: 16,
+		});
+		expect(awaitingReview?.proposal.progress.remaining).toBe(0);
+		expect(awaitingReview?.pendingHumanReview).toEqual({
+			count: 1,
+			hasMore: false,
+		});
+		expect(awaitingReview?.messages).toMatchObject([
+			{
+				messageId: source.messageId,
+				facts: { state: "awaiting" },
+				candidate: null,
+				value: {
+					value: "Boas-vindas, {name}!",
+					updatedBy: { kind: "agent" },
+				},
+			},
+		]);
+
+		const valueToken = awaitingReview?.messages[0]?.value?.reviewToken;
+		if (!valueToken) throw new Error("Expected the staged value review token.");
+		await user.mutation(api.localeProposals.reviewStagedValue, {
+			projectId,
+			proposalId: localeProposalId,
+			messageId: source.messageId,
+			expectedValueFingerprint: valueToken,
+			decision: { kind: "accept" },
+		});
+		await expect(
+			user.action(api.agentTranslationProposals.finalizeTask, {
+				taskId: task.taskId,
+			}),
+		).resolves.toMatchObject({ deliveryStatus: "ready" });
+	}, 60_000);
+
 	test("batch accepts exact new-Locale revisions atomically", async () => {
 		const user = await authenticatedBackend(t, "new-locale-batch-reviewer");
 		const projectId = await createProject(user);
