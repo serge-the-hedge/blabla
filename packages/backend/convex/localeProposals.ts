@@ -105,7 +105,7 @@ type LocaleProposalReviewFocus =
 	| "missing";
 
 type LocaleProposalReviewFacts = {
-	state: "awaiting" | "reviewed" | "humanDraft" | "missing";
+	state: "awaiting" | "needsEdit" | "reviewed" | "humanDraft" | "missing";
 	sourceIdentical: boolean;
 	sourceEmpty: boolean;
 	blankCandidate: boolean;
@@ -2092,6 +2092,7 @@ export const getForReview = query({
 		proposalId: v.id("localeProposals"),
 		taskId: v.optional(v.id("agentTranslationProposals")),
 		cursor: v.optional(v.number()),
+		pendingCursor: v.optional(v.string()),
 		limit: v.optional(v.number()),
 		focus: v.optional(localeProposalReviewFocusValidator),
 		search: v.optional(v.string()),
@@ -2146,7 +2147,14 @@ export const getForReview = query({
 		if (new TextEncoder().encode(search).byteLength > 512) {
 			validationError("Locale Proposal review search is too long.");
 		}
-		const pendingAgentValueWindow =
+		if (
+			args.pendingCursor !== undefined &&
+			new TextEncoder().encode(args.pendingCursor).byteLength >
+				MAX_LOCALE_PROPOSAL_MESSAGE_ID_BYTES
+		) {
+			validationError("Locale Proposal review cursor is invalid.");
+		}
+		const pendingAgentValueSummaryWindow =
 			proposal.status === "draft"
 				? await ctx.db
 						.query("localeProposalValues")
@@ -2155,11 +2163,34 @@ export const getForReview = query({
 						)
 						.take(limit + 1)
 				: [];
+		const requestedPendingAgentValueWindow =
+			proposal.status === "draft" && args.pendingCursor !== undefined
+				? await ctx.db
+						.query("localeProposalValues")
+						.withIndex("by_proposal_and_updatedByKind_and_messageId", (q) =>
+							q
+								.eq("proposalId", proposal._id)
+								.eq("updatedBy.kind", "agent")
+								.gt("messageId", args.pendingCursor as string),
+						)
+						.take(limit + 1)
+				: pendingAgentValueSummaryWindow;
+		// A queue cursor may become empty as live review decisions remove values.
+		// Wrap to the first remaining item so deferred work never becomes stranded.
+		const pendingAgentValueWindow =
+			requestedPendingAgentValueWindow.length === 0 &&
+			pendingAgentValueSummaryWindow.length > 0
+				? pendingAgentValueSummaryWindow
+				: requestedPendingAgentValueWindow;
 		const pendingAgentValues = pendingAgentValueWindow.slice(0, limit);
 		const pendingHumanReview = {
-			count: pendingAgentValues.length,
-			hasMore: pendingAgentValueWindow.length > limit,
+			count: Math.min(limit, pendingAgentValueSummaryWindow.length),
+			hasMore: pendingAgentValueSummaryWindow.length > limit,
 		};
+		const pendingQueueContinueCursor =
+			pendingAgentValueWindow.length > limit
+				? (pendingAgentValues[pendingAgentValues.length - 1]?.messageId ?? null)
+				: null;
 		// Values submitted through the earlier Locale Proposal API are still valid
 		// review work after a Translation Task takes over. Surface them directly
 		// instead of walking the whole source Catalog to rediscover them.
@@ -2173,7 +2204,7 @@ export const getForReview = query({
 			focus === "awaiting" &&
 			search.length === 0 &&
 			proposal.stagedValueCount === proposal.sourceMessageCount &&
-			pendingAgentValues.length === 0;
+			pendingAgentValueSummaryWindow.length === 0;
 		const scanLimit =
 			focus === "all" && search.length === 0
 				? limit
@@ -2283,9 +2314,13 @@ export const getForReview = query({
 				const resolvedReview = candidateRevision ? candidateReview : review;
 				const state: LocaleProposalReviewFacts["state"] =
 					candidateValue !== undefined
-						? resolvedReview
-							? "reviewed"
-							: "awaiting"
+						? resolvedReview?.decision.kind === "reject"
+							? value?.updatedBy.kind === "user"
+								? "humanDraft"
+								: "needsEdit"
+							: resolvedReview
+								? "reviewed"
+								: "awaiting"
 						: value
 							? "humanDraft"
 							: "missing";
@@ -2360,6 +2395,7 @@ export const getForReview = query({
 		for (const message of hydratedMessages) {
 			scannedCount += 1;
 			const needsAttention =
+				message.facts.state === "needsEdit" ||
 				message.facts.sourceIdentical ||
 				message.facts.sourceEmpty ||
 				message.facts.blankCandidate ||
@@ -2368,9 +2404,12 @@ export const getForReview = query({
 				message.facts.staleSource;
 			const focusMatches =
 				focus === "all" ||
-				(focus === "awaiting" && message.facts.state === "awaiting") ||
+				(focus === "awaiting" &&
+					(message.facts.state === "awaiting" ||
+						message.facts.state === "needsEdit")) ||
 				(focus === "attention" &&
-					message.facts.state === "awaiting" &&
+					(message.facts.state === "awaiting" ||
+						message.facts.state === "needsEdit") &&
 					needsAttention) ||
 				(focus === "routine" &&
 					message.facts.state === "awaiting" &&
@@ -2387,11 +2426,11 @@ export const getForReview = query({
 			if (messages.length >= limit) break;
 		}
 		const lastScanned = sourcePage[scannedCount - 1];
-		const hasMore =
-			!usePendingHumanReviewQueue &&
-			!completedReviewQueue &&
-			lastScanned !== undefined &&
-			(scannedCount < sourcePage.length || sourceWindow.length > scanLimit);
+		const hasMore = usePendingHumanReviewQueue
+			? pendingQueueContinueCursor !== null
+			: !completedReviewQueue &&
+				lastScanned !== undefined &&
+				(scannedCount < sourcePage.length || sourceWindow.length > scanLimit);
 		return {
 			proposal: proposalSummary(
 				proposal,
@@ -2418,7 +2457,11 @@ export const getForReview = query({
 			messages,
 			cursor,
 			windowEnd: lastScanned?.catalogIndex ?? cursor,
-			continueCursor: hasMore ? lastScanned.catalogIndex + 1 : null,
+			continueCursor:
+				!usePendingHumanReviewQueue && hasMore
+					? lastScanned.catalogIndex + 1
+					: null,
+			pendingQueueContinueCursor,
 			isDone: !hasMore,
 			pendingHumanReview,
 			diagnostics,
