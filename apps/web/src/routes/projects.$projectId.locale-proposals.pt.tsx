@@ -1,4 +1,8 @@
-import { Alert, AlertDescription } from "@blabla/ui/components/alert";
+import {
+	Alert,
+	AlertDescription,
+	AlertTitle,
+} from "@blabla/ui/components/alert";
 import { Badge } from "@blabla/ui/components/badge";
 import { Button } from "@blabla/ui/components/button";
 import {
@@ -40,6 +44,7 @@ import {
 } from "@/components/localization/project-shell";
 import { WhitespaceFacts } from "@/components/localization/whitespace-facts";
 import { api, convexId } from "@/lib/convex-api";
+import { localeProposalReviewState } from "@/lib/locale-proposal-review-state";
 
 export const Route = createFileRoute(
 	"/projects/$projectId/locale-proposals/pt",
@@ -125,6 +130,15 @@ export function PortugueseLocaleProposalWorkbench({
 				}
 			: "skip",
 	);
+	const reviewState = detail
+		? localeProposalReviewState({
+				status: detail.proposal.status,
+				isCurrentBaseline: detail.isCurrentBaseline,
+				remaining: detail.proposal.progress.remaining,
+			})
+		: null;
+	const showWorkflowEmptyState =
+		focus === "awaiting" && deferredSearch.trim().length === 0;
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
 	const [blankReasons, setBlankReasons] = useState<Record<string, string>>({});
 	const [busy, setBusy] = useState<string | null>(null);
@@ -483,8 +497,16 @@ export function PortugueseLocaleProposalWorkbench({
 								All tasks
 							</Button>
 						) : null}
-						{detail ? (
-							<Badge variant="secondary">{detail.proposal.status}</Badge>
+						{reviewState ? (
+							<Badge
+								variant={
+									reviewState.phase === "readyToFinalize"
+										? "default"
+										: "secondary"
+								}
+							>
+								{reviewState.badgeLabel}
+							</Badge>
 						) : null}
 						{detail?.proposal.status === "ready" ? (
 							<Button
@@ -508,6 +530,47 @@ export function PortugueseLocaleProposalWorkbench({
 			{notice ? (
 				<Alert className="mb-4">
 					<AlertDescription>{notice}</AlertDescription>
+				</Alert>
+			) : null}
+			{detail && reviewState?.phase === "readyToFinalize" ? (
+				<Alert className="mb-4 rounded-lg border-primary/40 bg-primary/5 p-4 text-sm">
+					<Check aria-hidden className="size-4" />
+					<AlertTitle className="text-sm">Review complete</AlertTitle>
+					<AlertDescription className="flex flex-col items-start gap-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+						<span>
+							All {detail.proposal.progress.total.toLocaleString()} values are
+							applied. Finalize once to seal this reviewed catalog into its
+							immutable delivery artifact and complete the task.
+						</span>
+						<Button
+							size="sm"
+							className="shrink-0"
+							onClick={finalize}
+							disabled={
+								busy !== null ||
+								!reviewState.canFinalize ||
+								dirtyItems.length > 0
+							}
+						>
+							<Check data-icon="inline-start" />
+							{busy === "finalize"
+								? "Finalizing…"
+								: dirtyItems.length > 0
+									? "Save edits first"
+									: "Finalize catalog"}
+						</Button>
+					</AlertDescription>
+				</Alert>
+			) : null}
+			{reviewState?.phase === "stale" ? (
+				<Alert variant="destructive" className="mb-4">
+					<TriangleAlert aria-hidden className="size-4" />
+					<AlertTitle>Source changed</AlertTitle>
+					<AlertDescription>
+						This proposal is pinned to an older Baseline Snapshot and cannot be
+						finalized. Start a fresh new-Locale task against the current
+						baseline.
+					</AlertDescription>
 				</Alert>
 			) : null}
 			{initialProposalId === undefined &&
@@ -564,30 +627,16 @@ export function PortugueseLocaleProposalWorkbench({
 									Save visible edits
 									{dirtyItems.length ? ` (${dirtyItems.length})` : ""}
 								</Button>
-								<Button
-									size="sm"
-									variant="secondary"
-									onClick={finalize}
-									disabled={
-										busy !== null ||
-										detail.proposal.status === "ready" ||
-										!detail.isCurrentBaseline ||
-										detail.proposal.progress.remaining !== 0
-									}
-								>
-									<Check data-icon="inline-start" />
-									Finalize reviewed catalog
-								</Button>
 							</div>
 						</CardHeader>
 						<CardContent className="grid gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-3">
 							<div className="bg-background p-3">
 								<p className="text-muted-foreground text-xs">
-									Agent candidates
+									Agent candidates received
 								</p>
 								<p className="mt-1 font-medium text-lg tabular-nums">
 									{detail.task
-										? `${detail.task.candidateCount} / ${detail.task.targetCount}`
+										? detail.task.candidateCount.toLocaleString()
 										: detail.proposal.progress.staged}
 								</p>
 							</div>
@@ -946,40 +995,48 @@ export function PortugueseLocaleProposalWorkbench({
 						})}
 						{detail.messages.length === 0 && detail.continueCursor === null ? (
 							<div className="px-4 py-12 text-center">
-								<p className="font-medium text-sm">No values match this view</p>
+								<p className="font-medium text-sm">
+									{showWorkflowEmptyState && reviewState
+										? reviewState.emptyTitle
+										: "No values match this view"}
+								</p>
 								<p className="mt-1 text-muted-foreground text-xs">
-									Try another review focus or clear the search.
+									{showWorkflowEmptyState && reviewState
+										? reviewState.emptyDescription
+										: "Try another review focus or clear the search."}
 								</p>
 							</div>
 						) : null}
 					</div>
-					<div className="flex items-center justify-between">
-						<Button
-							size="sm"
-							variant="outline"
-							onClick={goPrevious}
-							disabled={cursorHistory.length === 0 || busy !== null}
-						>
-							Previous
-						</Button>
-						<span className="text-muted-foreground text-xs">
-							{detail.messages.length} matching value
-							{detail.messages.length === 1 ? "" : "s"} in Catalog positions{" "}
-							{cursor + 1}–{detail.windowEnd + 1}
-						</span>
-						<Button
-							size="sm"
-							variant="outline"
-							onClick={() =>
-								detail.continueCursor === null
-									? undefined
-									: goNext(detail.continueCursor)
-							}
-							disabled={detail.continueCursor === null || busy !== null}
-						>
-							Next
-						</Button>
-					</div>
+					{detail.messages.length > 0 || cursorHistory.length > 0 ? (
+						<div className="flex items-center justify-between">
+							<Button
+								size="sm"
+								variant="outline"
+								onClick={goPrevious}
+								disabled={cursorHistory.length === 0 || busy !== null}
+							>
+								Previous
+							</Button>
+							<span className="text-muted-foreground text-xs">
+								{detail.messages.length} matching value
+								{detail.messages.length === 1 ? "" : "s"} in Catalog positions{" "}
+								{cursor + 1}–{detail.windowEnd + 1}
+							</span>
+							<Button
+								size="sm"
+								variant="outline"
+								onClick={() =>
+									detail.continueCursor === null
+										? undefined
+										: goNext(detail.continueCursor)
+								}
+								disabled={detail.continueCursor === null || busy !== null}
+							>
+								Next
+							</Button>
+						</div>
+					) : null}
 				</div>
 			)}
 		</ProjectShell>
