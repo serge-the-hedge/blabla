@@ -19,9 +19,9 @@ import {
 } from "@/components/localization/project-shell";
 import {
 	PreparingCard,
+	ReleaseDeliveryHandoff,
 	ReleaseRecordView,
 } from "@/components/localization/release-record-view";
-import { blablaCommand } from "@/lib/blabla-command";
 import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects/$projectId/release")({
@@ -43,6 +43,10 @@ function ReleaseRoute() {
 	const record = release?.kind === "available" ? release.current : null;
 	const bundle = useQuery(
 		api.releaseBundles.forRecord,
+		record?.status === "ready" ? { recordId: record.recordId } : "skip",
+	);
+	const readyLocaleProposal = useQuery(
+		api.releaseBundles.readyLocaleProposalForRecord,
 		record?.status === "ready" ? { recordId: record.recordId } : "skip",
 	);
 	const history = useQuery(
@@ -146,21 +150,14 @@ function ReleaseRoute() {
 					}
 					releaseAction={
 						bundle?.status === "ready" ? (
-							bundle.changeKeyCount === 0 ? (
-								<p className="text-muted-foreground text-xs">
-									No reviewed catalog changes need delivery from this record.
-								</p>
+							readyLocaleProposal === undefined ? (
+								<Skeleton className="h-12 w-full max-w-xl" />
 							) : (
-								<div className="flex flex-col gap-2">
-									<p className="text-muted-foreground text-xs">
-										Bundle ready · {bundle.changeKeyCount ?? 0} changed key
-										{bundle.changeKeyCount === 1 ? "" : "s"}. From a clean
-										checkout, run:
-									</p>
-									<code className="w-fit max-w-full overflow-x-auto border bg-muted/30 px-2 py-1.5 text-xs">
-										{blablaCommand(`deliver --release ${record.recordId}`)}
-									</code>
-								</div>
+								<ReleaseDeliveryHandoff
+									recordId={record.recordId}
+									changeKeyCount={bundle.changeKeyCount ?? 0}
+									localeProposal={readyLocaleProposal}
+								/>
 							)
 						) : (
 							<div className="flex flex-col gap-1.5">

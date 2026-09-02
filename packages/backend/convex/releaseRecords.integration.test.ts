@@ -180,6 +180,63 @@ async function prepareAndFinish(
 }
 
 describe("Release Records", () => {
+	test("offers a ready new-Locale artifact for the same Release Snapshot", async () => {
+		const user = await authenticatedBackend(t, "combined-release-delivery");
+		const { projectId } = await createCatalog(
+			user,
+			"combined-release-delivery",
+		);
+		const { proposalId } = await user.mutation(
+			api.localeProposals.ensureForReview,
+			{ projectId },
+		);
+		const proposal = await user.query(api.localeProposals.getForReview, {
+			proposalId,
+			limit: 16,
+		});
+		const message = proposal?.messages[0];
+		if (!message) throw new Error("Expected the Portuguese source message.");
+		await user.mutation(api.localeProposals.stageForReview, {
+			projectId,
+			proposalId,
+			items: [
+				{
+					messageId: message.messageId,
+					value: "Olá",
+					sourceFingerprint: message.sourceFingerprint,
+				},
+			],
+		});
+		await user.mutation(api.localeProposals.reviewStagedValue, {
+			projectId,
+			proposalId,
+			messageId: message.messageId,
+			decision: { kind: "accept" },
+		});
+		const record = await prepareAndFinish(user, projectId);
+		await expect(
+			user.query(api.releaseBundles.readyLocaleProposalForRecord, {
+				recordId: record.recordId,
+			}),
+		).resolves.toBeNull();
+
+		await user.action(api.localeProposals.finalizeForReview, {
+			projectId,
+			proposalId,
+		});
+
+		await expect(
+			user.query(api.releaseBundles.readyLocaleProposalForRecord, {
+				recordId: record.recordId,
+			}),
+		).resolves.toEqual({
+			proposalId,
+			localeCode: "pt",
+			runtimeLocale: "pt-BR",
+			valueCount: 1,
+		});
+	});
+
 	test("builds a Ready record and applies its server-authored delta to a delivery tree", async () => {
 		const user = await authenticatedBackend(t, "release-bundle");
 		const { projectId, targetId } = await createCatalog(user);
