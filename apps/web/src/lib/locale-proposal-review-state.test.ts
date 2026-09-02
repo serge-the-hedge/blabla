@@ -9,6 +9,7 @@ describe("localeProposalReviewState", () => {
 				status: "draft",
 				isCurrentBaseline: true,
 				remaining: 0,
+				pendingHumanReview: { count: 0, hasMore: false },
 			}),
 		).toMatchObject({
 			phase: "readyToFinalize",
@@ -20,12 +21,28 @@ describe("localeProposalReviewState", () => {
 		});
 	});
 
+	test("does not declare completion while agent-owned values need review", () => {
+		expect(
+			localeProposalReviewState({
+				status: "draft",
+				isCurrentBaseline: true,
+				remaining: 0,
+				pendingHumanReview: { count: 3, hasMore: false },
+			}),
+		).toMatchObject({
+			phase: "reviewing",
+			badgeLabel: "3 to review",
+			canFinalize: false,
+		});
+	});
+
 	test("distinguishes unfinished, stale, and finalized proposals", () => {
 		expect(
 			localeProposalReviewState({
 				status: "draft",
 				isCurrentBaseline: true,
 				remaining: 3,
+				pendingHumanReview: { count: 0, hasMore: false },
 			}),
 		).toMatchObject({ phase: "reviewing", canFinalize: false });
 		expect(
@@ -33,6 +50,7 @@ describe("localeProposalReviewState", () => {
 				status: "draft",
 				isCurrentBaseline: false,
 				remaining: 0,
+				pendingHumanReview: { count: 0, hasMore: false },
 			}),
 		).toMatchObject({ phase: "stale", canFinalize: false });
 		expect(
@@ -40,6 +58,7 @@ describe("localeProposalReviewState", () => {
 				status: "ready",
 				isCurrentBaseline: true,
 				remaining: 0,
+				pendingHumanReview: { count: 0, hasMore: false },
 			}),
 		).toMatchObject({
 			phase: "finalized",

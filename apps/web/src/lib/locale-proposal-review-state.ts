@@ -17,6 +17,7 @@ export function localeProposalReviewState(input: {
 	status: "draft" | "ready";
 	isCurrentBaseline: boolean;
 	remaining: number;
+	pendingHumanReview: { count: number; hasMore: boolean };
 }): LocaleProposalReviewState {
 	if (input.status === "ready") {
 		return {
@@ -38,7 +39,7 @@ export function localeProposalReviewState(input: {
 			canFinalize: false,
 		};
 	}
-	if (input.remaining === 0) {
+	if (input.remaining === 0 && input.pendingHumanReview.count === 0) {
 		return {
 			phase: "readyToFinalize",
 			badgeLabel: "Ready to finalize",
@@ -46,6 +47,16 @@ export function localeProposalReviewState(input: {
 			emptyDescription:
 				"Nothing is waiting for review. Finalize the catalog above to complete this task.",
 			canFinalize: true,
+		};
+	}
+	if (input.pendingHumanReview.count > 0) {
+		return {
+			phase: "reviewing",
+			badgeLabel: `${input.pendingHumanReview.count}${input.pendingHumanReview.hasMore ? "+" : ""} to review`,
+			emptyTitle: "Review queue is loading",
+			emptyDescription:
+				"Agent-submitted values still need a human decision before this catalog can be finalized.",
+			canFinalize: false,
 		};
 	}
 	return {

@@ -113,7 +113,7 @@ export function PortugueseLocaleProposalWorkbench({
 	const [focus, setFocus] = useState<ReviewFocus>(taskId ? "awaiting" : "all");
 	const [search, setSearch] = useState("");
 	const deferredSearch = useDeferredValue(search);
-	const detail = useQuery(
+	const queriedDetail = useQuery(
 		api.localeProposals.getForReview,
 		activeProposalId
 			? {
@@ -130,15 +130,35 @@ export function PortugueseLocaleProposalWorkbench({
 				}
 			: "skip",
 	);
+	const [stableDetail, setStableDetail] = useState<{
+		proposalId: string;
+		value: Exclude<typeof queriedDetail, undefined>;
+	} | null>(null);
+	const sparseQueueTransition =
+		queriedDetail !== undefined &&
+		queriedDetail !== null &&
+		queriedDetail.messages.length === 0 &&
+		queriedDetail.continueCursor !== null;
+	const detail =
+		queriedDetail === undefined || sparseQueueTransition
+			? stableDetail && stableDetail.proposalId === activeProposalId
+				? stableDetail.value
+				: queriedDetail
+			: queriedDetail;
+	const queueIsLoading = queriedDetail === undefined || sparseQueueTransition;
 	const reviewState = detail
 		? localeProposalReviewState({
 				status: detail.proposal.status,
 				isCurrentBaseline: detail.isCurrentBaseline,
 				remaining: detail.proposal.progress.remaining,
+				pendingHumanReview: detail.pendingHumanReview,
 			})
 		: null;
 	const showWorkflowEmptyState =
 		focus === "awaiting" && deferredSearch.trim().length === 0;
+	const continuousReviewQueue =
+		(focus === "awaiting" || focus === "attention" || focus === "routine") &&
+		deferredSearch.trim().length === 0;
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
 	const [blankReasons, setBlankReasons] = useState<Record<string, string>>({});
 	const [busy, setBusy] = useState<string | null>(null);
@@ -150,6 +170,16 @@ export function PortugueseLocaleProposalWorkbench({
 	const [expandedMessageId, setExpandedMessageId] = useState<string | null>(
 		null,
 	);
+
+	useEffect(() => {
+		if (
+			activeProposalId &&
+			queriedDetail !== undefined &&
+			!sparseQueueTransition
+		) {
+			setStableDetail({ proposalId: activeProposalId, value: queriedDetail });
+		}
+	}, [activeProposalId, queriedDetail, sparseQueueTransition]);
 
 	// A different proposal is a different editing session, even though this
 	// effect only writes local state and the dependency is not read in its body.
@@ -198,13 +228,15 @@ export function PortugueseLocaleProposalWorkbench({
 		return detail.messages.filter((message) => {
 			const taskCandidateValue = message.candidate?.value;
 			const legacyAgentValue =
-				!taskId && message.value?.updatedBy.kind === "agent"
+				message.value?.updatedBy.kind === "agent"
 					? message.value.value
 					: undefined;
 			const value = taskCandidateValue ?? legacyAgentValue;
-			const candidateToken = taskId
-				? message.candidate?.revisionId
-				: message.value?.reviewToken;
+			const candidateToken =
+				message.candidate?.revisionId ??
+				(message.value?.updatedBy.kind === "agent"
+					? message.value.reviewToken
+					: undefined);
 			return (
 				message.facts.state === "awaiting" &&
 				value !== undefined &&
@@ -214,7 +246,7 @@ export function PortugueseLocaleProposalWorkbench({
 				(drafts[message.messageId] ?? value) === value
 			);
 		});
-	}, [detail, drafts, taskId]);
+	}, [detail, drafts]);
 	const routineAgentCandidates = selectableAgentCandidates.filter(
 		(message) =>
 			!message.facts.sourceIdentical &&
@@ -225,9 +257,11 @@ export function PortugueseLocaleProposalWorkbench({
 	);
 	const selectedAgentCandidates = selectableAgentCandidates.filter(
 		(message) => {
-			const currentToken = taskId
-				? message.candidate?.revisionId
-				: message.value?.reviewToken;
+			const currentToken =
+				message.candidate?.revisionId ??
+				(message.value?.updatedBy.kind === "agent"
+					? message.value.reviewToken
+					: undefined);
 			return selectedCandidateTokens[message.messageId] === currentToken;
 		},
 	);
@@ -275,9 +309,10 @@ export function PortugueseLocaleProposalWorkbench({
 		messageId: string,
 		candidateToken: string,
 		decision: ReviewDecision,
+		kind: "taskCandidate" | "stagedValue",
 	) => {
 		if (!activeProposalId) return;
-		if (taskId) {
+		if (taskId && kind === "taskCandidate") {
 			await reviewTaskValue({
 				taskId: convexId<"agentTranslationProposals">(taskId),
 				messageId,
@@ -299,9 +334,10 @@ export function PortugueseLocaleProposalWorkbench({
 		messageId: string,
 		candidateToken: string,
 		decision: ReviewDecision,
+		kind: "taskCandidate" | "stagedValue",
 	) =>
 		run(`review:${messageId}`, async () => {
-			await reviewValue(messageId, candidateToken, decision);
+			await reviewValue(messageId, candidateToken, decision, kind);
 			setNotice("Human review recorded.");
 		});
 
@@ -313,10 +349,9 @@ export function PortugueseLocaleProposalWorkbench({
 				const candidateRevisionIds = selectedAgentCandidates.flatMap(
 					(message) => {
 						const selectedToken = selectedCandidateTokens[message.messageId];
-						return selectedToken ? [selectedToken] : [];
+						return selectedToken && message.candidate ? [selectedToken] : [];
 					},
 				);
-				if (candidateRevisionIds.length === 0) return;
 				for (
 					let offset = 0;
 					offset < candidateRevisionIds.length;
@@ -332,15 +367,20 @@ export function PortugueseLocaleProposalWorkbench({
 					});
 					accepted += result.accepted;
 				}
-			} else {
-				for (const message of selectedAgentCandidates) {
-					const selectedToken = selectedCandidateTokens[message.messageId];
-					if (!selectedToken) continue;
-					await reviewValue(message.messageId, selectedToken, {
+			}
+			for (const message of selectedAgentCandidates) {
+				if (message.candidate) continue;
+				const selectedToken = selectedCandidateTokens[message.messageId];
+				if (!selectedToken) continue;
+				await reviewValue(
+					message.messageId,
+					selectedToken,
+					{
 						kind: "accept",
-					});
-					accepted += 1;
-				}
+					},
+					"stagedValue",
+				);
+				accepted += 1;
 			}
 			setSelectedCandidateTokens({});
 			setNotice(
@@ -352,9 +392,11 @@ export function PortugueseLocaleProposalWorkbench({
 		setSelectedCandidateTokens(
 			Object.fromEntries(
 				routineAgentCandidates.flatMap((message) => {
-					const token = taskId
-						? message.candidate?.revisionId
-						: message.value?.reviewToken;
+					const token =
+						message.candidate?.revisionId ??
+						(message.value?.updatedBy.kind === "agent"
+							? message.value.reviewToken
+							: undefined);
 					return token ? [[message.messageId, token]] : [];
 				}),
 			),
@@ -381,16 +423,16 @@ export function PortugueseLocaleProposalWorkbench({
 	// it automatically without recording that invisible window in page history.
 	useEffect(() => {
 		if (
-			detail &&
-			detail.messages.length === 0 &&
-			detail.continueCursor !== null &&
+			queriedDetail &&
+			queriedDetail.messages.length === 0 &&
+			queriedDetail.continueCursor !== null &&
 			busy === null
 		) {
-			setCursor(detail.continueCursor);
+			setCursor(queriedDetail.continueCursor);
 			setSelectedCandidateTokens({});
 			setExpandedMessageId(null);
 		}
-	}, [detail, busy]);
+	}, [queriedDetail, busy]);
 
 	const markIntentionalBlank = (
 		message: NonNullable<typeof detail>["messages"][number],
@@ -423,10 +465,15 @@ export function PortugueseLocaleProposalWorkbench({
 				});
 			}
 			if (taskId && message.candidate) {
-				await reviewValue(message.messageId, message.candidate.revisionId, {
-					kind: "intentionalBlank",
-					reason,
-				});
+				await reviewValue(
+					message.messageId,
+					message.candidate.revisionId,
+					{
+						kind: "intentionalBlank",
+						reason,
+					},
+					"taskCandidate",
+				);
 			} else {
 				await reviewStagedValue({
 					projectId: convexProjectId,
@@ -573,6 +620,20 @@ export function PortugueseLocaleProposalWorkbench({
 					</AlertDescription>
 				</Alert>
 			) : null}
+			{taskId && detail && detail.pendingHumanReview.count > 0 ? (
+				<Alert className="mb-4">
+					<TriangleAlert aria-hidden className="size-4" />
+					<AlertTitle>
+						{detail.pendingHumanReview.count}
+						{detail.pendingHumanReview.hasMore ? "+" : ""} earlier agent value
+						{detail.pendingHumanReview.count === 1 ? " needs" : "s need"} review
+					</AlertTitle>
+					<AlertDescription>
+						They are now first in the review queue. Confirm or edit them before
+						finalizing this catalog.
+					</AlertDescription>
+				</Alert>
+			) : null}
 			{initialProposalId === undefined &&
 			currentProposalId === undefined &&
 			proposalId === null ? (
@@ -650,11 +711,13 @@ export function PortugueseLocaleProposalWorkbench({
 								</p>
 							</div>
 							<div className="bg-background p-3">
-								<p className="text-muted-foreground text-xs">Catalog window</p>
+								<p className="text-muted-foreground text-xs">Review queue</p>
 								<p className="mt-1 font-medium text-lg tabular-nums">
 									{detail.messages.length === 0
-										? "No matches"
-										: `${cursor + 1}–${detail.windowEnd + 1}`}
+										? reviewState?.phase === "readyToFinalize"
+											? "Clear"
+											: "No matches"
+										: `${detail.messages.length} value${detail.messages.length === 1 ? "" : "s"}`}
 								</p>
 							</div>
 						</CardContent>
@@ -694,12 +757,22 @@ export function PortugueseLocaleProposalWorkbench({
 								</select>
 							</label>
 							<div className="flex flex-wrap items-center gap-2">
+								{queueIsLoading ? (
+									<span
+										className="text-muted-foreground text-xs"
+										aria-live="polite"
+									>
+										Loading next review items…
+									</span>
+								) : null}
 								<Button
 									size="sm"
 									variant="outline"
 									onClick={selectRoutinePage}
 									disabled={
-										busy !== null || routineAgentCandidates.length === 0
+										busy !== null ||
+										queueIsLoading ||
+										routineAgentCandidates.length === 0
 									}
 								>
 									Select routine ({routineAgentCandidates.length})
@@ -709,6 +782,7 @@ export function PortugueseLocaleProposalWorkbench({
 									onClick={acceptSelectedAgentCandidates}
 									disabled={
 										busy !== null ||
+										queueIsLoading ||
 										selectedAgentCandidates.length === 0 ||
 										detail.proposal.status === "ready"
 									}
@@ -720,15 +794,23 @@ export function PortugueseLocaleProposalWorkbench({
 						</CardContent>
 					</Card>
 
-					<div className="overflow-hidden rounded-lg border bg-background">
+					<div
+						className={`overflow-hidden rounded-lg border bg-background transition-opacity ${queueIsLoading ? "opacity-60" : ""}`}
+						aria-busy={queueIsLoading}
+					>
 						{detail.messages.map((message) => {
 							const value =
 								message.candidate?.value ?? message.value?.value ?? "";
 							const draft = drafts[message.messageId] ?? value;
 							const reviewed = message.facts.state === "reviewed";
-							const reviewToken = taskId
-								? message.candidate?.revisionId
-								: message.value?.reviewToken;
+							const reviewToken =
+								message.candidate?.revisionId ??
+								(message.value?.updatedBy.kind === "agent"
+									? message.value.reviewToken
+									: undefined);
+							const reviewKind = message.candidate
+								? "taskCandidate"
+								: "stagedValue";
 							const selectable = selectableAgentCandidates.some(
 								(candidate) => candidate.messageId === message.messageId,
 							);
@@ -746,7 +828,7 @@ export function PortugueseLocaleProposalWorkbench({
 												selectedCandidateTokens[message.messageId] ===
 													reviewToken
 											}
-											disabled={!selectable || busy !== null}
+											disabled={!selectable || busy !== null || queueIsLoading}
 											onCheckedChange={(checked) =>
 												setSelectedCandidateTokens((current) => {
 													const next = { ...current };
@@ -762,6 +844,7 @@ export function PortugueseLocaleProposalWorkbench({
 										<button
 											type="button"
 											className="min-w-0 text-left"
+											disabled={queueIsLoading}
 											onClick={() =>
 												setExpandedMessageId(
 													expanded ? null : message.messageId,
@@ -815,6 +898,7 @@ export function PortugueseLocaleProposalWorkbench({
 													expanded ? null : message.messageId,
 												)
 											}
+											disabled={queueIsLoading}
 										>
 											<ChevronDown
 												aria-hidden
@@ -854,7 +938,9 @@ export function PortugueseLocaleProposalWorkbench({
 														}))
 													}
 													disabled={
-														detail.proposal.status === "ready" || busy !== null
+														detail.proposal.status === "ready" ||
+														busy !== null ||
+														queueIsLoading
 													}
 													rows={3}
 												/>
@@ -907,9 +993,14 @@ export function PortugueseLocaleProposalWorkbench({
 															<Button
 																size="sm"
 																onClick={() =>
-																	void decide(message.messageId, reviewToken, {
-																		kind: "accept",
-																	})
+																	void decide(
+																		message.messageId,
+																		reviewToken,
+																		{
+																			kind: "accept",
+																		},
+																		reviewKind,
+																	)
 																}
 																disabled={
 																	busy !== null ||
@@ -924,10 +1015,15 @@ export function PortugueseLocaleProposalWorkbench({
 																size="sm"
 																variant="secondary"
 																onClick={() =>
-																	void decide(message.messageId, reviewToken, {
-																		kind: "acceptWithEdits",
-																		value: draft,
-																	})
+																	void decide(
+																		message.messageId,
+																		reviewToken,
+																		{
+																			kind: "acceptWithEdits",
+																			value: draft,
+																		},
+																		reviewKind,
+																	)
 																}
 																disabled={
 																	busy !== null ||
@@ -944,9 +1040,14 @@ export function PortugueseLocaleProposalWorkbench({
 																size="sm"
 																variant="outline"
 																onClick={() =>
-																	void decide(message.messageId, reviewToken, {
-																		kind: "reject",
-																	})
+																	void decide(
+																		message.messageId,
+																		reviewToken,
+																		{
+																			kind: "reject",
+																		},
+																		reviewKind,
+																	)
 																}
 																disabled={
 																	busy !== null ||
@@ -1008,7 +1109,23 @@ export function PortugueseLocaleProposalWorkbench({
 							</div>
 						) : null}
 					</div>
-					{detail.messages.length > 0 || cursorHistory.length > 0 ? (
+					{continuousReviewQueue ? (
+						detail.continueCursor !== null && detail.messages.length > 0 ? (
+							<div className="flex items-center justify-end gap-3">
+								<span className="text-muted-foreground text-xs">
+									The queue will refill as you review these values.
+								</span>
+								<Button
+									size="sm"
+									variant="outline"
+									onClick={() => goNext(detail.continueCursor as number)}
+									disabled={busy !== null || queueIsLoading}
+								>
+									Show next review items
+								</Button>
+							</div>
+						) : null
+					) : detail.messages.length > 0 || cursorHistory.length > 0 ? (
 						<div className="flex items-center justify-between">
 							<Button
 								size="sm"

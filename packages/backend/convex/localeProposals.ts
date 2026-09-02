@@ -2146,20 +2146,82 @@ export const getForReview = query({
 		if (new TextEncoder().encode(search).byteLength > 512) {
 			validationError("Locale Proposal review search is too long.");
 		}
+		const pendingAgentValueWindow =
+			proposal.status === "draft"
+				? await ctx.db
+						.query("localeProposalValues")
+						.withIndex("by_proposal_and_updatedByKind_and_messageId", (q) =>
+							q.eq("proposalId", proposal._id).eq("updatedBy.kind", "agent"),
+						)
+						.take(limit + 1)
+				: [];
+		const pendingAgentValues = pendingAgentValueWindow.slice(0, limit);
+		const pendingHumanReview = {
+			count: pendingAgentValues.length,
+			hasMore: pendingAgentValueWindow.length > limit,
+		};
+		// Values submitted through the earlier Locale Proposal API are still valid
+		// review work after a Translation Task takes over. Surface them directly
+		// instead of walking the whole source Catalog to rediscover them.
+		const usePendingHumanReviewQueue =
+			task !== null &&
+			focus === "awaiting" &&
+			search.length === 0 &&
+			pendingAgentValues.length > 0;
+		const completedReviewQueue =
+			task !== null &&
+			focus === "awaiting" &&
+			search.length === 0 &&
+			proposal.stagedValueCount === proposal.sourceMessageCount &&
+			pendingAgentValues.length === 0;
 		const scanLimit =
 			focus === "all" && search.length === 0
 				? limit
 				: MAX_LOCALE_PROPOSAL_REVIEW_SCAN_ITEMS;
-		const sourceWindow = await ctx.db
-			.query("catalogProjectionMessages")
-			.withIndex("by_projection_and_isSource_and_catalogIndex", (q) =>
-				q
-					.eq("projectionId", projection._id)
-					.eq("isSource", true)
-					.gte("catalogIndex", cursor),
-			)
-			.take(scanLimit + 1);
-		const sourcePage = sourceWindow.slice(0, scanLimit);
+		const pendingValuesByMessageId = new Map(
+			pendingAgentValues.map((value) => [value.messageId, value] as const),
+		);
+		const queuedSourceMessages = usePendingHumanReviewQueue
+			? await Promise.all(
+					pendingAgentValues.map(async (value) => {
+						const message = await ctx.db
+							.query("catalogProjectionMessages")
+							.withIndex("by_projection_and_messageId_and_isSource", (q) =>
+								q
+									.eq("projectionId", projection._id)
+									.eq("messageId", value.messageId)
+									.eq("isSource", true),
+							)
+							.unique();
+						if (!message) {
+							integrityError(
+								`Locale Proposal value "${value.messageId}" has no pinned Source.`,
+							);
+						}
+						return message;
+					}),
+				)
+			: [];
+		queuedSourceMessages.sort((left, right) =>
+			left.catalogIndex === right.catalogIndex
+				? left.messageId.localeCompare(right.messageId)
+				: left.catalogIndex - right.catalogIndex,
+		);
+		const sourceWindow =
+			usePendingHumanReviewQueue || completedReviewQueue
+				? queuedSourceMessages
+				: await ctx.db
+						.query("catalogProjectionMessages")
+						.withIndex("by_projection_and_isSource_and_catalogIndex", (q) =>
+							q
+								.eq("projectionId", projection._id)
+								.eq("isSource", true)
+								.gte("catalogIndex", cursor),
+						)
+						.take(scanLimit + 1);
+		const sourcePage = usePendingHumanReviewQueue
+			? sourceWindow
+			: sourceWindow.slice(0, scanLimit);
 		const hydratedMessages = await Promise.all(
 			sourcePage.map(async (message) => {
 				const candidate = task
@@ -2186,12 +2248,16 @@ export const getForReview = query({
 							)
 							.unique()
 					: null;
-				const value = await ctx.db
-					.query("localeProposalValues")
-					.withIndex("by_proposal_and_messageId", (q) =>
-						q.eq("proposalId", proposal._id).eq("messageId", message.messageId),
-					)
-					.unique();
+				const value =
+					pendingValuesByMessageId.get(message.messageId) ??
+					(await ctx.db
+						.query("localeProposalValues")
+						.withIndex("by_proposal_and_messageId", (q) =>
+							q
+								.eq("proposalId", proposal._id)
+								.eq("messageId", message.messageId),
+						)
+						.unique());
 				const fingerprint = message.sourceFingerprint;
 				const valueFingerprint = value
 					? await sha256Hex(value.value)
@@ -2211,7 +2277,7 @@ export const getForReview = query({
 					: null;
 				const candidateValue = candidateRevision
 					? candidateRevision.value
-					: !task && value?.updatedBy.kind === "agent"
+					: value?.updatedBy.kind === "agent"
 						? value.value
 						: undefined;
 				const resolvedReview = candidateRevision ? candidateReview : review;
@@ -2322,6 +2388,8 @@ export const getForReview = query({
 		}
 		const lastScanned = sourcePage[scannedCount - 1];
 		const hasMore =
+			!usePendingHumanReviewQueue &&
+			!completedReviewQueue &&
 			lastScanned !== undefined &&
 			(scannedCount < sourcePage.length || sourceWindow.length > scanLimit);
 		return {
@@ -2352,6 +2420,7 @@ export const getForReview = query({
 			windowEnd: lastScanned?.catalogIndex ?? cursor,
 			continueCursor: hasMore ? lastScanned.catalogIndex + 1 : null,
 			isDone: !hasMore,
+			pendingHumanReview,
 			diagnostics,
 			isCurrentBaseline: source.isCurrentBaseline,
 		};
