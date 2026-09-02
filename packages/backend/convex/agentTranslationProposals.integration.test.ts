@@ -555,8 +555,11 @@ describe("Agent Translation Proposals", () => {
 		const task = await user.mutation(api.agentTranslationProposals.createTask, {
 			projectId,
 			title: "German repair batch",
-			localeId: de,
-			messageIds: ["missing", "echo"],
+			target: { kind: "existingLocale", localeId: de },
+			scope: {
+				kind: "selectedMessages",
+				messageIds: ["missing", "echo"],
+			},
 		});
 		const submission = await agentRequest(
 			t,
@@ -629,8 +632,8 @@ describe("Agent Translation Proposals", () => {
 			{
 				projectId,
 				title: "Polish German greeting",
-				localeId: targetId,
-				messageIds: ["greeting"],
+				target: { kind: "existingLocale", localeId: targetId },
+				scope: { kind: "selectedMessages", messageIds: ["greeting"] },
 			},
 		);
 		expect(created).toMatchObject({
@@ -731,6 +734,111 @@ describe("Agent Translation Proposals", () => {
 			{ proposalId: created.taskId },
 		);
 		expect(reviewed?.proposal.status).toBe("accepted");
+	});
+
+	test("creates the same existing-Locale task through explicit and legacy targets", async () => {
+		const user = await authenticatedBackend(t, "agent-owned-translation-task");
+		const { token } = await setupWorkQueueProject(user);
+		const create = (body: Record<string, unknown>) =>
+			agentRequest(t, token, "/api/agent/v1/translation-tasks", {
+				method: "POST",
+				body: JSON.stringify(body),
+			});
+		const explicit = await create({
+			clientTaskKey: "german-missing-v1",
+			target: { kind: "existingLocale", localeCode: "de" },
+			messageIds: ["missing"],
+		});
+		expect(explicit.status).toBe(200);
+		const task = (await explicit.json()) as {
+			taskId: Id<"agentTranslationProposals">;
+			localeCode: string;
+			targetCount: number;
+		};
+		expect(task).toMatchObject({ localeCode: "de", targetCount: 1 });
+
+		const legacyRetry = await create({
+			clientTaskKey: "german-missing-v1",
+			localeCode: "de",
+			messageIds: ["missing"],
+		});
+		expect(legacyRetry.status).toBe(200);
+		expect(await legacyRetry.json()).toMatchObject({ taskId: task.taskId });
+
+		const submission = await agentRequest(
+			t,
+			token,
+			`/api/agent/v1/translation-tasks/${task.taskId}/candidates`,
+			{
+				method: "POST",
+				body: JSON.stringify({
+					items: [{ messageId: "missing", value: "Übersetzung benötigt" }],
+				}),
+			},
+		);
+		expect(submission.status).toBe(200);
+		const firstReview = await user.query(
+			api.agentTranslationProposals.getForReview,
+			{ proposalId: task.taskId },
+		);
+		const firstRevision = firstReview?.candidates[0]?.revision;
+		if (!firstRevision) throw new Error("Expected the submitted candidate.");
+		const correction = await agentRequest(
+			t,
+			token,
+			`/api/agent/v1/translation-tasks/${task.taskId}/candidates`,
+			{
+				method: "POST",
+				body: JSON.stringify({
+					items: [{ messageId: "missing", value: "Übersetzung vorhanden" }],
+				}),
+			},
+		);
+		expect(correction.status).toBe(200);
+		await expect(
+			user.mutation(api.agentTranslationProposals.reviewTaskValue, {
+				taskId: task.taskId,
+				messageId: "missing",
+				candidateToken: firstRevision._id,
+				decision: { kind: "accept" },
+			}),
+		).rejects.toThrow("changed; refresh");
+		const currentReview = await user.query(
+			api.agentTranslationProposals.getForReview,
+			{ proposalId: task.taskId },
+		);
+		const currentRevision = currentReview?.candidates[0]?.revision;
+		if (!currentRevision) throw new Error("Expected the corrected candidate.");
+		await expect(
+			user.mutation(api.agentTranslationProposals.reviewTaskValue, {
+				taskId: task.taskId,
+				messageId: "missing",
+				candidateToken: currentRevision._id,
+				decision: { kind: "accept" },
+			}),
+		).resolves.toMatchObject({
+			taskId: task.taskId,
+			messageId: "missing",
+			decision: { kind: "accept" },
+		});
+		await expect(
+			user.mutation(api.agentTranslationProposals.reviewTaskValue, {
+				taskId: task.taskId,
+				messageId: "missing",
+				candidateToken: currentRevision._id,
+				decision: { kind: "reject" },
+			}),
+		).resolves.toMatchObject({ decision: { kind: "accept" } });
+		await expect(
+			user.action(api.agentTranslationProposals.finalizeTask, {
+				taskId: task.taskId,
+			}),
+		).resolves.toMatchObject({
+			kind: "existingLocale",
+			taskId: task.taskId,
+			releaseRecordId: expect.any(String),
+			releaseStatus: "preparing",
+		});
 	});
 
 	test("rejects an agent blank and rejects stale basis evidence", async () => {

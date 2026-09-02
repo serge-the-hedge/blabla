@@ -58,13 +58,14 @@ intentionally one-time visible.
    confirms values itself.
 3. For a human-selected task, read it with
    `GET /translation-tasks/:id?cursor=...&limit=...`. To start an agent-owned
-   batch instead, call `POST /translation-tasks` with one Locale and up to 32
-   message ids.
+   task instead, call `POST /translation-tasks`. Existing-Locale tasks freeze
+   up to 32 selected message ids; a new-Locale task covers the complete pinned
+   Source template and needs no client-supplied ids.
 4. Submit 1–16 candidates at a time to
    `POST /translation-tasks/:id/candidates`. The server resolves and validates
    the frozen concurrency basis; the agent supplies only message ids and
    values.
-5. Open the proposal in the human Proposals workbench. Accepting an exact
+5. Open the task in the human review workbench. Accepting an exact
    candidate, accepting edited text, rejecting it, or recording an Intentional
    Blank leaves immutable review evidence; only an editor acceptance changes
    the Catalog Workspace.
@@ -95,31 +96,33 @@ available through the legacy Agent API export. An editor builds a Release Bundle
 from a Ready Release Record, then the local Repository Adapter applies it
 through the dedicated release endpoints.
 
-### Portuguese Locale Proposal
+### New-Locale Translation Task
 
 An agent can prepare, but cannot activate or deliver, the first configured new
-Locale: Portuguese. The same Locale Proposal seam is intended for future
-Locales. This workflow needs only `read` and `propose` scopes. It never creates
-an active Locale Binding, writes to Git, opens a pull request, or changes the
-working catalog.
+Locale: Portuguese. The public agent workflow is the same Translation Task
+interface used for existing Locales. Its private Locale Proposal adapter keeps
+the complete Source template and review evidence without copying the catalog
+into task documents. This workflow needs only `read` and `propose` scopes. It
+never creates an active Locale Binding, writes to Git, opens a pull request, or
+changes the working catalog.
 
-1. Start or resume with `POST /locale-proposals/pt`.
-2. Read the exact Source Snapshot template with
-   `GET /locale-proposals/pt/template?proposalId=...&cursor=...&limit=...`.
-   Keep the returned `sourceFingerprint` alongside each translation.
-3. For machine-authored candidates, create an Agent Translation Proposal whose
-   target is `{ "kind": "localeProposal", "localeProposalId": "..." }`, then
-   submit candidate revisions with the source basis returned by the template.
-   A candidate changes nothing until a human reviews it in the Proposals
-   workbench.
-4. For direct preparation, submit at most 16 values at a time to
-   `POST /locale-proposals/pt/values`. Direct agent values remain awaiting
-   review; an empty value is allowed only with `intentionalBlankReason` and
-   still needs a human decision.
-5. Inspect submitted values and Intentional Blank provenance through
-   `GET /locale-proposals/pt/values?proposalId=...&cursor=...&limit=...`.
-6. Review the values in `/projects/:projectId/locale-proposals/pt` or the
-   generic Proposals workbench. Only human-applied values can finalize.
+1. Start or resume one complete task with `POST /translation-tasks`, target
+   `{ "kind": "newLocale", "localeCode": "pt" }`, and scope
+   `{ "kind": "completeCatalog" }`.
+2. Page its exact Source Snapshot template with
+   `GET /translation-tasks/:id?cursor=...&limit=...`.
+3. Submit at most 16 `{ "messageId", "value" }` candidates at a time to
+   `POST /translation-tasks/:id/candidates`. The server owns and validates the
+   pinned Source evidence; callers do not copy fingerprints or Convex ids.
+4. Review values from the task in
+   `/projects/:projectId/proposals/:taskId`. It mounts the same new-Locale
+   workbench as the lower-level Portuguese route. Agent values remain awaiting
+   review; corrections append immutable candidate revisions while the newest
+   revision becomes current. Only human-applied values can finalize.
+
+The `/locale-proposals/pt` endpoints remain available as a lower-level
+compatibility interface for clients that need explicit fingerprints,
+Intentional Blank preparation, diagnostics, finalization, or artifact access.
 7. Call `POST /locale-proposals/pt/finalize`. A rejected finalization records
    its bounded diagnostics on the proposal; read them with
    `GET /locale-proposals/pt?proposalId=...` after correcting the values.
@@ -262,17 +265,35 @@ the key for a different target returns `IDEMPOTENCY_KEY_REUSED`.
 
 ### `POST /translation-tasks`
 
-Creates or resumes a bounded existing-locale task. A task freezes the selected
-keys, Locale, current Source Contract, target values, and concurrency basis on
-the server:
+Creates or resumes a Translation Task. An existing-Locale task freezes the
+selected keys, Locale, current Source Contract, target values, and concurrency
+basis on the server:
 
 ```json
 {
   "clientTaskKey": "checkout-de-polish-1",
-  "localeCode": "de",
-  "messageIds": ["checkout.payButton", "checkout.total"]
+  "target": { "kind": "existingLocale", "localeCode": "de" },
+  "scope": {
+    "kind": "selectedMessages",
+    "messageIds": ["checkout.payButton", "checkout.total"]
+  }
 }
 ```
+
+The original top-level `"localeCode": "de"` and `"messageIds"` request remains
+readable for compatibility. New clients should use explicit target and scope.
+A new-Locale task covers every message in the pinned Source Snapshot:
+
+```json
+{
+  "clientTaskKey": "portuguese-complete-v1",
+  "target": { "kind": "newLocale", "localeCode": "pt" },
+  "scope": { "kind": "completeCatalog" }
+}
+```
+
+The configured new Locale is Portuguese today. Requesting an unconfigured code
+fails before a Locale Proposal is created.
 
 The same task shape is created from the Strings UI when an editor selects keys
 and chooses **Start task**. A project-scoped propose token can fill a
@@ -280,11 +301,13 @@ human-created task; token-owned tasks remain private to their creating token.
 
 ### `GET /translation-tasks/:id`
 
-Returns a bounded page of the frozen task (`limit` 1–16) and a `nextCursor`,
-which is `null` on the final page. Pass that cursor unchanged until it is
-`null`. Each target
-includes Source and current target text, while submitted targets also identify
-their current candidate revision.
+Returns a bounded page of the task (`limit` 1–16) and a `nextCursor`, which is
+`null` on the final page. Pass that cursor unchanged until it is `null`.
+Existing-Locale targets come from their frozen selection. New-Locale targets
+page the complete pinned Source template. Each target includes exact Source and
+current human-applied target text. A new-Locale target also returns its current
+immutable candidate revision, when one exists. Private Snapshot, fingerprint,
+workspace, and Convex-id basis fields are not exposed.
 
 ### `POST /translation-tasks/:id/candidates`
 
@@ -299,13 +322,14 @@ basis facts:
 }
 ```
 
-The endpoint derives a deterministic idempotency key from the task, key, value,
-and expected revision. An exact retry is safe. Corrections create a new
-immutable candidate revision. Candidates remain inert until an editor accepts,
-edits and accepts, rejects, or records an Intentional Blank in Translation
-Tasks. The task workbench can accept up to 16 current exact candidates in one
-atomic batch. Edited acceptance, rejection, and Intentional Blanks remain
-individual decisions.
+An exact retry is safe. A correction appends an immutable revision and makes it
+the candidate's current revision. The
+server derives existing-Locale revision idempotency and new-Locale Source
+fingerprints from task-owned evidence. Candidates remain inert until an editor
+reviews them. Existing-Locale review is in Translation Tasks; new-Locale review
+is in the configured Locale Proposal workbench mounted by the task route. Both
+task kinds can accept up to 16 exact current revisions atomically. Edited
+acceptance, rejection, and Intentional Blanks remain individual decisions.
 
 ### `POST /translation-proposals/:id/candidate-revisions`
 

@@ -11,11 +11,13 @@ import { sha256Hex, type TokenScope } from "./lib";
 import {
 	createOrResumeProposal,
 	finalizeProposal,
+	PORTUGUESE_LOCALE_CODE,
 	type ProposalActor,
 	readProposal,
 	readProposalArtifact,
 	reviewProposalValues,
 	stageProposal,
+	taskProposalPage,
 	templateProposal,
 } from "./localeProposals";
 import {
@@ -42,6 +44,10 @@ type RepositoryAdapterRateLimitName =
 
 const MAX_SNAPSHOT_FILES = 1_000;
 const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024;
+// One new-Locale row may contain both a near-envelope Source/metadata item and
+// a maximum-size immutable candidate. The page loop still stops before this
+// bound, but the bound must always admit one valid row or its cursor deadlocks.
+const MAX_TRANSLATION_TASK_PAGE_BYTES = 1024 * 1024;
 
 const corsHeaders = {
 	"Access-Control-Allow-Origin": "*",
@@ -151,6 +157,59 @@ function translationTaskCandidateItems(body: Record<string, unknown>) {
 			value: requiredJsonString(item, "value"),
 		};
 	});
+}
+
+type TranslationTaskTargetInput =
+	| { kind: "existingLocale"; localeCode: string }
+	| { kind: "newLocale"; localeCode: string };
+
+/** The explicit target is the durable API. Keep the original top-level
+ * localeCode request readable so existing agents can upgrade independently. */
+function translationTaskTarget(
+	body: Record<string, unknown>,
+): TranslationTaskTargetInput {
+	const target = body.target;
+	if (target === undefined) {
+		return {
+			kind: "existingLocale",
+			localeCode: requiredJsonString(body, "localeCode"),
+		};
+	}
+	if (!isRecord(target)) {
+		throw new Error("target must be an object with a kind and localeCode.");
+	}
+	const localeCode = requiredJsonString(target, "localeCode");
+	if (target.kind === "existingLocale" || target.kind === "newLocale") {
+		return { kind: target.kind, localeCode };
+	}
+	throw new Error("target.kind must be existingLocale or newLocale.");
+}
+
+function translationTaskMessageIds(
+	body: Record<string, unknown>,
+	target: TranslationTaskTargetInput,
+): string[] {
+	const scope = body.scope;
+	if (scope === undefined) {
+		if (target.kind === "newLocale") return [];
+		if (!isStringArray(body.messageIds)) {
+			throw new Error("messageIds must be an array of strings.");
+		}
+		return body.messageIds;
+	}
+	if (!isRecord(scope)) throw new Error("scope must be an object.");
+	if (target.kind === "newLocale") {
+		if (scope.kind !== "completeCatalog") {
+			throw new Error("A new-Locale task needs completeCatalog scope.");
+		}
+		return [];
+	}
+	if (scope.kind !== "selectedMessages" || !isStringArray(scope.messageIds)) {
+		throw new Error(
+			"An existing-Locale task needs selectedMessages scope with messageIds.",
+		);
+	}
+	return scope.messageIds;
 }
 
 type SnapshotFileInput = { catalogPath: string; content: string };
@@ -1072,26 +1131,57 @@ http.route({
 	handler: httpAction(async (ctx, request) => {
 		try {
 			const body = await jsonObject(request);
-			const messageIds = body.messageIds;
-			if (!isStringArray(messageIds)) {
-				throw new Error("messageIds must be an array of strings.");
-			}
+			const target = translationTaskTarget(body);
+			const messageIds = translationTaskMessageIds(body, target);
+			const clientTaskKey = requiredJsonString(body, "clientTaskKey");
 			return agentJson(
 				await withAgent(
 					ctx,
 					request,
 					["read", "propose"],
 					"agentTranslationProposal",
-					async (token) =>
-						await ctx.runMutation(
-							internalApi.agentTranslationProposals.createTaskForAgent,
+					async (token, actor) => {
+						if (target.kind === "existingLocale") {
+							return await ctx.runMutation(
+								internalApi.agentTranslationProposals.createTaskForAgent,
+								{
+									token,
+									clientTaskKey,
+									localeCode: target.localeCode,
+									messageIds,
+								},
+							);
+						}
+						if (target.localeCode !== PORTUGUESE_LOCALE_CODE) {
+							throw new ConvexError({
+								code: "NOT_FOUND",
+								message: `New Locale ${target.localeCode} is not configured for this project.`,
+							});
+						}
+						const proposal = await createOrResumeProposal(ctx, actor);
+						const task = await ctx.runMutation(
+							internalApi.agentTranslationProposals.create,
 							{
 								token,
-								clientTaskKey: requiredJsonString(body, "clientTaskKey"),
-								localeCode: requiredJsonString(body, "localeCode"),
-								messageIds,
+								clientProposalKey: clientTaskKey,
+								target: {
+									kind: "localeProposal",
+									localeProposalId: proposal.proposalId,
+								},
+								localeProposalTaskScope: {
+									localeProposalId: proposal.proposalId,
+									localeCode: proposal.locale.code,
+									targetCount: proposal.progress.total,
+								},
 							},
-						),
+						);
+						return {
+							taskId: task.proposalId,
+							title: clientTaskKey,
+							localeCode: proposal.locale.code,
+							targetCount: proposal.progress.total,
+						};
+					},
 				),
 			);
 		} catch (error) {
@@ -1121,11 +1211,72 @@ http.route({
 					request,
 					"read",
 					"agentTranslationProposal",
-					async (token) =>
-						await ctx.runQuery(
-							internalApi.agentTranslationProposals.taskForAgent,
-							{ token, taskId, cursor, limit },
-						),
+					async (token, actor) => {
+						const descriptor = await ctx.runQuery(
+							internalApi.agentTranslationProposals.taskDescriptorForAgent,
+							{ token, taskId },
+						);
+						if (descriptor.kind === "existingLocale") {
+							return await ctx.runQuery(
+								internalApi.agentTranslationProposals.taskForAgent,
+								{ token, taskId, cursor, limit },
+							);
+						}
+						const page = await taskProposalPage(ctx, actor, {
+							proposalId: descriptor.localeProposalId,
+							cursor,
+							limit,
+						});
+						const candidates = await ctx.runQuery(
+							internalApi.agentTranslationProposals
+								.newLocaleTaskCandidatesForAgent,
+							{
+								token,
+								taskId,
+								messageIds: page.messages.map((message) => message.messageId),
+							},
+						);
+						const candidateByMessageId = new Map(
+							candidates.map(
+								(candidate) => [candidate.messageId, candidate] as const,
+							),
+						);
+						const targets = [];
+						let targetBytes = 0;
+						for (const message of page.messages) {
+							const target = {
+								...message,
+								candidate: candidateByMessageId.get(message.messageId) ?? null,
+							};
+							const bytes = new TextEncoder().encode(
+								JSON.stringify(target),
+							).byteLength;
+							if (bytes > MAX_TRANSLATION_TASK_PAGE_BYTES) {
+								throw new ConvexError({
+									code: "LIMIT_EXCEEDED",
+									message: `Translation Task value “${message.messageId}” exceeds its page envelope.`,
+								});
+							}
+							if (targetBytes + bytes > MAX_TRANSLATION_TASK_PAGE_BYTES) break;
+							targets.push(target);
+							targetBytes += bytes;
+						}
+						return {
+							task: {
+								taskId: descriptor.taskId,
+								title: descriptor.title,
+								status: descriptor.status,
+								localeCode: descriptor.localeCode,
+								targetCount: descriptor.targetCount,
+								candidateCount: descriptor.candidateCount,
+							},
+							targets,
+							nextCursor:
+								targets.length < page.messages.length
+									? cursor + targets.length
+									: page.continueCursor,
+						};
+					},
 				),
 			);
 		} catch (error) {
@@ -1160,6 +1311,90 @@ http.route({
 					["read", "propose"],
 					"agentTranslationProposal",
 					async (token) => {
+						const descriptor = await ctx.runQuery(
+							internalApi.agentTranslationProposals.taskDescriptorForAgent,
+							{ token, taskId },
+						);
+						if (descriptor.kind === "newLocale") {
+							const context = await ctx.runQuery(
+								internalApi.agentTranslationProposals
+									.newLocaleTaskSubmissionContext,
+								{
+									token,
+									taskId,
+									messageIds: submitted.map((item) => item.messageId),
+								},
+							);
+							const byMessageId = new Map(
+								context.map((item) => [item.messageId, item] as const),
+							);
+							const existingResults = new Map<
+								string,
+								{
+									candidateId: Id<"agentTranslationCandidates">;
+									revisionId: Id<"agentTranslationCandidateRevisions">;
+									revision: number;
+									status: "open";
+								}
+							>();
+							const items = (
+								await Promise.all(
+									submitted.map(async (item) => {
+										const target = byMessageId.get(item.messageId);
+										if (!target) {
+											throw new Error(`Unknown task key: ${item.messageId}.`);
+										}
+										if (target.currentCandidate?.value === item.value) {
+											existingResults.set(item.messageId, {
+												candidateId: target.currentCandidate.candidateId,
+												revisionId: target.currentCandidate.revisionId,
+												revision: target.currentCandidate.revision,
+												status: "open",
+											});
+											return null;
+										}
+										return {
+											messageId: item.messageId,
+											value: item.value,
+											clientRevisionKey: `task-v1:${await sha256Hex(`${taskId}\u0000${item.messageId}\u0000${item.value}\u0000${target.currentRevision}`)}`,
+											expectedCandidateRevision: target.currentRevision,
+											basis: target.basis,
+										};
+									}),
+								)
+							).filter((item) => item !== null);
+							const created =
+								items.length === 0
+									? null
+									: await ctx.runMutation(
+											internalApi.agentTranslationProposals.submitRevisions,
+											{ token, proposalId: taskId, items },
+										);
+							const createdResults = new Map(
+								items.map(
+									(item, index) =>
+										[item.messageId, created?.revisions[index]] as const,
+								),
+							);
+							const revisions = submitted.map((item) => {
+								const result =
+									existingResults.get(item.messageId) ??
+									createdResults.get(item.messageId);
+								if (!result) {
+									throw new Error(
+										`Candidate result missing: ${item.messageId}.`,
+									);
+								}
+								return result;
+							});
+							return {
+								revisions,
+								candidates: submitted.map((item) => ({
+									messageId: item.messageId,
+									status: "awaitingReview" as const,
+								})),
+							};
+						}
 						const context = await ctx.runQuery(
 							internalApi.agentTranslationProposals.taskSubmissionContext,
 							{
@@ -1229,7 +1464,13 @@ http.route({
 							}
 							return result;
 						});
-						return { revisions };
+						return {
+							revisions,
+							candidates: submitted.map((item) => ({
+								messageId: item.messageId,
+								status: "awaitingReview" as const,
+							})),
+						};
 					},
 				),
 			);

@@ -296,6 +296,492 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 		).toEqual(["en"]);
 	}, 60_000);
 
+	test("runs a complete new Locale through the generic Translation Task API", async () => {
+		const user = await authenticatedBackend(t, "new-locale-task-owner");
+		const projectId = await createProject(user);
+		const sourceMessages = Object.fromEntries(
+			Array.from({ length: 35 }, (_, index) => [
+				`message_${String(index).padStart(2, "0")}`,
+				`Source value ${index}`,
+			]),
+		);
+		await ingestSourceBaseline(user, projectId, {
+			content: JSON.stringify({ "@@locale": "en", ...sourceMessages }),
+		});
+		const { token } = await proposalToken(user, projectId);
+		const create = () =>
+			agentRequest(t, token, "/api/agent/v1/translation-tasks", {
+				method: "POST",
+				body: JSON.stringify({
+					clientTaskKey: "portuguese-complete-v1",
+					target: { kind: "newLocale", localeCode: "pt" },
+				}),
+			});
+		const created = await successfulJson<{
+			taskId: Id<"agentTranslationProposals">;
+			localeCode: string;
+			targetCount: number;
+		}>(await create());
+		const retried = await successfulJson<{ taskId: string }>(await create());
+		expect(created).toMatchObject({ localeCode: "pt", targetCount: 35 });
+		expect(retried.taskId).toBe(created.taskId);
+
+		type NewLocaleTaskTarget = {
+			messageId: string;
+			sourceValue: string;
+			targetValue: string;
+			staged: boolean;
+			candidate: null | {
+				revisionId: string;
+				revision: number;
+				value: string;
+			};
+		};
+		type NewLocaleTaskPage = {
+			task: {
+				taskId: string;
+				localeCode: string;
+				targetCount: number;
+			};
+			targets: NewLocaleTaskTarget[];
+			nextCursor: number | null;
+		};
+		const targets: NewLocaleTaskTarget[] = [];
+		let cursor: number | null = 0;
+		do {
+			const page: NewLocaleTaskPage = await successfulJson<NewLocaleTaskPage>(
+				await agentRequest(
+					t,
+					token,
+					`/api/agent/v1/translation-tasks/${created.taskId}?cursor=${cursor}&limit=10`,
+				),
+			);
+			expect(page.task).toMatchObject({
+				taskId: created.taskId,
+				localeCode: "pt",
+				targetCount: 35,
+			});
+			targets.push(...page.targets);
+			cursor = page.nextCursor;
+		} while (cursor !== null);
+		expect(targets).toHaveLength(35);
+		expect(targets.map((target) => target.messageId)).toEqual(
+			Object.keys(sourceMessages),
+		);
+
+		const firstTarget = targets[0];
+		if (!firstTarget) throw new Error("Expected a new-Locale task target.");
+		const submit = (value: string) =>
+			agentRequest(
+				t,
+				token,
+				`/api/agent/v1/translation-tasks/${created.taskId}/candidates`,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						items: [{ messageId: firstTarget.messageId, value }],
+					}),
+				},
+			);
+		await expect(
+			successfulJson(await submit("Valor inicial")),
+		).resolves.toMatchObject({
+			candidates: [
+				{ messageId: firstTarget.messageId, status: "awaitingReview" },
+			],
+			revisions: [{ revision: 1 }],
+		});
+		await expect(
+			successfulJson(await submit("Valor corrigido")),
+		).resolves.toMatchObject({ revisions: [{ revision: 2 }] });
+
+		const firstPage = await successfulJson<{
+			targets: NewLocaleTaskTarget[];
+		}>(
+			await agentRequest(
+				t,
+				token,
+				`/api/agent/v1/translation-tasks/${created.taskId}?limit=10`,
+			),
+		);
+		expect(firstPage.targets[0]).toMatchObject({
+			messageId: firstTarget.messageId,
+			targetValue: "",
+			staged: false,
+			candidate: { revision: 2, value: "Valor corrigido" },
+		});
+		const taskList = await user.query(
+			api.agentTranslationProposals.listForReview,
+			{
+				projectId,
+				paginationOpts: { numItems: 50, cursor: null },
+			},
+		);
+		expect(taskList.page[0]).toMatchObject({
+			_id: created.taskId,
+			status: "open",
+			candidateCount: 1,
+			localeProposalTaskScope: { localeCode: "pt", targetCount: 35 },
+		});
+
+		const localeProposal = await createPortugueseProposal(t, token);
+		const reviewPage = await user.query(api.localeProposals.getForReview, {
+			proposalId: localeProposal.proposalId,
+			taskId: created.taskId,
+			limit: 16,
+		});
+		expect(reviewPage?.messages[0]).toMatchObject({
+			messageId: firstTarget.messageId,
+			value: null,
+			candidate: { revision: 2, value: "Valor corrigido", review: null },
+		});
+	}, 60_000);
+
+	test("keeps a near-envelope source and candidate page readable", async () => {
+		const user = await authenticatedBackend(t, "large-new-locale-task");
+		const projectId = await createProject(user);
+		const sourceValue = "S".repeat(200 * 1024);
+		const description = "D".repeat(200 * 1024);
+		const candidateValue = "T".repeat(200 * 1024);
+		await ingestSourceBaseline(user, projectId, {
+			content: JSON.stringify({
+				"@@locale": "en",
+				large: sourceValue,
+				"@large": { description },
+			}),
+		});
+		const { token } = await proposalToken(user, projectId);
+		const task = await successfulJson<{
+			taskId: Id<"agentTranslationProposals">;
+		}>(
+			await agentRequest(t, token, "/api/agent/v1/translation-tasks", {
+				method: "POST",
+				body: JSON.stringify({
+					clientTaskKey: "large-portuguese-v1",
+					target: { kind: "newLocale", localeCode: "pt" },
+					scope: { kind: "completeCatalog" },
+				}),
+			}),
+		);
+		await successfulJson(
+			await agentRequest(
+				t,
+				token,
+				`/api/agent/v1/translation-tasks/${task.taskId}/candidates`,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						items: [{ messageId: "large", value: candidateValue }],
+					}),
+				},
+			),
+		);
+		const page = await successfulJson<{
+			targets: Array<{
+				messageId: string;
+				candidate: { value: string } | null;
+			}>;
+		}>(
+			await agentRequest(
+				t,
+				token,
+				`/api/agent/v1/translation-tasks/${task.taskId}`,
+			),
+		);
+		expect(page.targets).toHaveLength(1);
+		expect(page.targets[0]).toMatchObject({
+			messageId: "large",
+			candidate: { value: candidateValue },
+		});
+	}, 60_000);
+
+	test("reviews and finalizes a new Locale through task-only human commands", async () => {
+		const user = await authenticatedBackend(t, "new-locale-task-reviewer");
+		const projectId = await createProject(user);
+		await ingestSourceBaseline(user, projectId);
+		const { token } = await proposalToken(user, projectId);
+		const task = await successfulJson<{
+			taskId: Id<"agentTranslationProposals">;
+		}>(
+			await agentRequest(t, token, "/api/agent/v1/translation-tasks", {
+				method: "POST",
+				body: JSON.stringify({
+					clientTaskKey: "portuguese-reviewed-v1",
+					target: { kind: "newLocale", localeCode: "pt" },
+				}),
+			}),
+		);
+		const page = await successfulJson<{
+			targets: Array<{ messageId: string }>;
+		}>(
+			await agentRequest(
+				t,
+				token,
+				`/api/agent/v1/translation-tasks/${task.taskId}`,
+			),
+		);
+		const message = page.targets[0];
+		if (!message) throw new Error("Expected the new-Locale task message.");
+		await successfulJson(
+			await agentRequest(
+				t,
+				token,
+				`/api/agent/v1/translation-tasks/${task.taskId}/candidates`,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						items: [
+							{ messageId: message.messageId, value: "Boas-vindas, {name}!" },
+						],
+					}),
+				},
+			),
+		);
+		const taskReview = await user.query(
+			api.agentTranslationProposals.getForReview,
+			{ proposalId: task.taskId },
+		);
+		const localeProposalId =
+			taskReview?.proposal.localeProposalTaskScope?.localeProposalId;
+		if (!localeProposalId) {
+			throw new Error("Expected the task Locale Proposal.");
+		}
+		const localeReview = await user.query(api.localeProposals.getForReview, {
+			proposalId: localeProposalId,
+			taskId: task.taskId,
+			limit: 16,
+		});
+		const reviewToken = localeReview?.messages[0]?.candidate?.revisionId;
+		if (!reviewToken) throw new Error("Expected the candidate revision token.");
+		await expect(
+			user.mutation(api.agentTranslationProposals.reviewTaskValue, {
+				taskId: task.taskId,
+				messageId: message.messageId,
+				candidateToken: reviewToken,
+				decision: { kind: "accept" },
+			}),
+		).resolves.toMatchObject({ decision: { kind: "accept" } });
+		await expect(
+			user.mutation(api.agentTranslationProposals.reviewTaskValue, {
+				taskId: task.taskId,
+				messageId: message.messageId,
+				candidateToken: reviewToken,
+				decision: { kind: "reject" },
+			}),
+		).resolves.toMatchObject({ decision: { kind: "accept" } });
+		await expect(
+			user.action(api.agentTranslationProposals.finalizeTask, {
+				taskId: task.taskId,
+			}),
+		).resolves.toMatchObject({
+			kind: "newLocale",
+			taskId: task.taskId,
+			localeProposalId: expect.any(String),
+			deliveryStatus: "ready",
+		});
+		const retry = await agentRequest(
+			t,
+			token,
+			"/api/agent/v1/translation-tasks",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					clientTaskKey: "portuguese-reviewed-v1",
+					target: { kind: "newLocale", localeCode: "pt" },
+					scope: { kind: "completeCatalog" },
+				}),
+			},
+		);
+		expect(retry.status).toBe(200);
+		expect(await retry.json()).toMatchObject({ taskId: task.taskId });
+		const unusable = await agentRequest(
+			t,
+			token,
+			"/api/agent/v1/translation-tasks",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					clientTaskKey: "portuguese-after-finalization",
+					target: { kind: "newLocale", localeCode: "pt" },
+					scope: { kind: "completeCatalog" },
+				}),
+			},
+		);
+		expect(unusable.status).toBe(400);
+		expect(await unusable.json()).toMatchObject({ code: "BAD_STATE" });
+		await expect(
+			user.mutation(api.agentTranslationProposals.createTask, {
+				projectId,
+				title: "Another Portuguese task",
+				target: { kind: "newLocale", localeCode: "pt" },
+				scope: { kind: "completeCatalog" },
+			}),
+		).rejects.toThrow("already finalized");
+	}, 60_000);
+
+	test("batch accepts exact new-Locale revisions atomically", async () => {
+		const user = await authenticatedBackend(t, "new-locale-batch-reviewer");
+		const projectId = await createProject(user);
+		await ingestSourceBaseline(user, projectId, {
+			content: JSON.stringify({
+				"@@locale": "en",
+				first: "First",
+				second: "Second",
+			}),
+		});
+		const { token } = await proposalToken(user, projectId);
+		const task = await successfulJson<{
+			taskId: Id<"agentTranslationProposals">;
+		}>(
+			await agentRequest(t, token, "/api/agent/v1/translation-tasks", {
+				method: "POST",
+				body: JSON.stringify({
+					clientTaskKey: "portuguese-batch-v1",
+					target: { kind: "newLocale", localeCode: "pt" },
+				}),
+			}),
+		);
+		await successfulJson(
+			await agentRequest(
+				t,
+				token,
+				`/api/agent/v1/translation-tasks/${task.taskId}/candidates`,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						items: [
+							{ messageId: "first", value: "Primeiro" },
+							{ messageId: "second", value: "Segundo" },
+						],
+					}),
+				},
+			),
+		);
+		const taskDetail = await user.query(
+			api.agentTranslationProposals.getForReview,
+			{ proposalId: task.taskId },
+		);
+		const localeProposalId =
+			taskDetail?.proposal.localeProposalTaskScope?.localeProposalId;
+		if (!localeProposalId) throw new Error("Expected a Locale Proposal task.");
+		const firstReviewPage = await user.query(api.localeProposals.getForReview, {
+			proposalId: localeProposalId,
+			taskId: task.taskId,
+			limit: 16,
+		});
+		const staleRevisionIds =
+			firstReviewPage?.messages.flatMap((message) =>
+				message.candidate ? [message.candidate.revisionId] : [],
+			) ?? [];
+		expect(staleRevisionIds).toHaveLength(2);
+
+		await successfulJson(
+			await agentRequest(
+				t,
+				token,
+				`/api/agent/v1/translation-tasks/${task.taskId}/candidates`,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						items: [{ messageId: "first", value: "Primeira" }],
+					}),
+				},
+			),
+		);
+		await expect(
+			user.mutation(api.agentTranslationProposals.acceptTaskCandidates, {
+				proposalId: task.taskId,
+				candidateRevisionIds: staleRevisionIds,
+			}),
+		).rejects.toThrow("Only current candidate revisions");
+		expect(
+			(
+				await user.query(api.localeProposals.getForReview, {
+					proposalId: localeProposalId,
+					limit: 16,
+				})
+			)?.proposal.progress.staged,
+		).toBe(0);
+
+		const currentReviewPage = await user.query(
+			api.localeProposals.getForReview,
+			{
+				proposalId: localeProposalId,
+				taskId: task.taskId,
+				limit: 16,
+			},
+		);
+		const currentRevisionIds =
+			currentReviewPage?.messages.flatMap((message) =>
+				message.candidate ? [message.candidate.revisionId] : [],
+			) ?? [];
+		await expect(
+			user.mutation(api.agentTranslationProposals.acceptTaskCandidates, {
+				proposalId: task.taskId,
+				candidateRevisionIds: currentRevisionIds,
+			}),
+		).resolves.toEqual({ accepted: 2, status: "accepted" });
+	}, 60_000);
+
+	test("starts one resumable human new-Locale task", async () => {
+		const user = await authenticatedBackend(t, "new-locale-human-starter");
+		const projectId = await createProject(user);
+		await ingestSourceBaseline(user, projectId);
+		const first = await user.mutation(
+			api.agentTranslationProposals.createTask,
+			{
+				projectId,
+				title: "pt · complete catalog",
+				target: { kind: "newLocale", localeCode: "pt" },
+				scope: { kind: "completeCatalog" },
+			},
+		);
+		const resumed = await user.mutation(
+			api.agentTranslationProposals.createTask,
+			{
+				projectId,
+				title: "pt · complete catalog",
+				target: { kind: "newLocale", localeCode: "pt" },
+				scope: { kind: "completeCatalog" },
+			},
+		);
+		expect(resumed).toEqual(first);
+		expect(first).toMatchObject({ localeCode: "pt", targetCount: 1 });
+		const tasks = await user.query(
+			api.agentTranslationProposals.listForReview,
+			{
+				projectId,
+				paginationOpts: { numItems: 10, cursor: null },
+			},
+		);
+		expect(tasks.page).toHaveLength(1);
+		expect(tasks.page[0]?._id).toBe(first.taskId);
+	});
+
+	test("rejects an unconfigured new Locale before creating a proposal", async () => {
+		const user = await authenticatedBackend(t, "unsupported-new-locale-owner");
+		const projectId = await createProject(user);
+		await ingestSourceBaseline(user, projectId);
+		const { token } = await proposalToken(user, projectId);
+		const response = await agentRequest(
+			t,
+			token,
+			"/api/agent/v1/translation-tasks",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					clientTaskKey: "unsupported-new-locale",
+					target: { kind: "newLocale", localeCode: "it" },
+				}),
+			},
+		);
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({ code: "NOT_FOUND" });
+		expect(
+			await user.query(api.localeProposals.currentForReview, { projectId }),
+		).toBeNull();
+	});
+
 	test("requires both agent scopes", async () => {
 		const user = await authenticatedBackend(t, "locale-proposal-owner");
 		const projectId = await createProject(user);

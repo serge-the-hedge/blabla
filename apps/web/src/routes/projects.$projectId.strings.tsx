@@ -276,8 +276,14 @@ function StringsRoute() {
 			const task = await createTranslationTask({
 				projectId: convexProjectId,
 				title: input.title,
-				localeId: convexId<"locales">(input.localeId),
-				messageIds: [...input.messageIds],
+				target: {
+					kind: "existingLocale",
+					localeId: convexId<"locales">(input.localeId),
+				},
+				scope: {
+					kind: "selectedMessages",
+					messageIds: [...input.messageIds],
+				},
 			});
 			toast.success(
 				`Translation Task created for ${task.targetCount} ${task.targetCount === 1 ? "key" : "keys"}.`,

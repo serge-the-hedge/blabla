@@ -946,6 +946,59 @@ export const assertEditor = internalQuery({
 	},
 });
 
+export async function ensureLocaleProposalForReview(
+	ctx: MutationCtx,
+	projectId: Id<"projects">,
+	userId: string,
+): Promise<{ proposalId: Id<"localeProposals"> }> {
+	const project = await projectFor(ctx, projectId);
+	if (!project.baselineSnapshotId) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Accept a Baseline Snapshot before preparing a Locale Proposal.",
+		});
+	}
+	const existing = await ctx.db
+		.query("localeProposals")
+		.withIndex("by_project_and_sourceSnapshotId_and_localeCode", (q) =>
+			q
+				.eq("projectId", projectId)
+				.eq(
+					"sourceSnapshotId",
+					project.baselineSnapshotId as Id<"sourceSnapshots">,
+				)
+				.eq("localeCode", PORTUGUESE_LOCALE_CODE),
+		)
+		.unique();
+	if (existing) return { proposalId: existing._id };
+	const source = await currentSourceEvidenceForSnapshot(
+		ctx,
+		project,
+		project.baselineSnapshotId,
+	);
+	const projection = await activeProjectionFor(ctx, projectId);
+	if (!projection || projection.snapshotId !== source.snapshotId) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message:
+				"The active Catalog Workspace does not match the Baseline Snapshot.",
+		});
+	}
+	const proposalId: Id<"localeProposals"> = await ctx.runMutation(
+		internal.localeProposals.begin,
+		{
+			projectId,
+			sourceSnapshotId: source.snapshotId,
+			sourceSnapshotFileId: source.sourceSnapshotFileId,
+			sourceCatalogPath: source.sourceCatalogPath,
+			sourceStorageId: source.sourceStorageId,
+			sourceMessageCount: projection.expectedKeyCount,
+			createdBy: { kind: "user", id: userId },
+		},
+	);
+	return { proposalId };
+}
+
 /** Start the first configured Locale Proposal from the human workbench. This
  * is deliberately the same pinned-evidence path as the agent adapter. */
 export const ensureForReview = mutation({
@@ -955,53 +1008,7 @@ export const ensureForReview = mutation({
 		args,
 	): Promise<{ proposalId: Id<"localeProposals"> }> => {
 		const { userId } = await requireEditor(ctx, args.projectId);
-		const project = await projectFor(ctx, args.projectId);
-		if (!project.baselineSnapshotId) {
-			throw new ConvexError({
-				code: "VALIDATION",
-				message:
-					"Accept a Baseline Snapshot before preparing a Locale Proposal.",
-			});
-		}
-		const existing = await ctx.db
-			.query("localeProposals")
-			.withIndex("by_project_and_sourceSnapshotId_and_localeCode", (q) =>
-				q
-					.eq("projectId", args.projectId)
-					.eq(
-						"sourceSnapshotId",
-						project.baselineSnapshotId as Id<"sourceSnapshots">,
-					)
-					.eq("localeCode", PORTUGUESE_LOCALE_CODE),
-			)
-			.unique();
-		if (existing) return { proposalId: existing._id };
-		const source = await currentSourceEvidenceForSnapshot(
-			ctx,
-			project,
-			project.baselineSnapshotId,
-		);
-		const projection = await activeProjectionFor(ctx, args.projectId);
-		if (!projection || projection.snapshotId !== source.snapshotId) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message:
-					"The active Catalog Workspace does not match the Baseline Snapshot.",
-			});
-		}
-		const proposalId: Id<"localeProposals"> = await ctx.runMutation(
-			internal.localeProposals.begin,
-			{
-				projectId: args.projectId,
-				sourceSnapshotId: source.snapshotId,
-				sourceSnapshotFileId: source.sourceSnapshotFileId,
-				sourceCatalogPath: source.sourceCatalogPath,
-				sourceStorageId: source.sourceStorageId,
-				sourceMessageCount: projection.expectedKeyCount,
-				createdBy: { kind: "user", id: userId },
-			},
-		);
-		return { proposalId };
+		return await ensureLocaleProposalForReview(ctx, args.projectId, userId);
 	},
 });
 
@@ -1651,6 +1658,69 @@ export async function templateProposal(
 	};
 }
 
+/** Translation Task adapter for a complete new Locale. It combines one bounded
+ * Source-template page with any current staged candidate so agents can resume
+ * and correct work through the same task read used for existing Locales. */
+export async function taskProposalPage(
+	ctx: ActionCtx,
+	actor: ProposalActor,
+	args: ProposalPage,
+) {
+	assertProposalPage(args);
+	const { source, document } = await proposalSourceDocument(
+		ctx,
+		actor,
+		args.proposalId,
+	);
+	const sourcePage = document.messages.slice(
+		args.cursor,
+		args.cursor + args.limit,
+	);
+	const stagedValues = await ctx.runQuery(
+		internal.localeProposals.stagedValuesForTemplate,
+		{
+			projectId: actor.projectId,
+			proposalId: args.proposalId,
+			messageIds: sourcePage.map((message) => message.id),
+		},
+	);
+	const stagedByMessageId = new Map(
+		stagedValues.map((value) => [value.messageId, value] as const),
+	);
+	const messages = [];
+	let pageBytes = 0;
+	for (const message of sourcePage) {
+		const staged = stagedByMessageId.get(message.id);
+		const item = {
+			messageId: message.id,
+			sourceValue: message.value,
+			sourceFingerprint: await sourceFingerprint(message),
+			targetValue: staged?.value ?? "",
+			staged: staged !== undefined,
+			...(message.metadata === undefined
+				? {}
+				: { metadataJson: JSON.stringify(message.metadata) }),
+		};
+		const itemBytes = encodedSize(item);
+		if (itemBytes > MAX_LOCALE_PROPOSAL_PAGE_CONTENT_BYTES) {
+			validationError(
+				`Source message "${message.id}" exceeds the Portuguese task envelope.`,
+			);
+		}
+		if (pageBytes + itemBytes > MAX_LOCALE_PROPOSAL_PAGE_CONTENT_BYTES) break;
+		messages.push(item);
+		pageBytes += itemBytes;
+	}
+	const nextCursor = args.cursor + messages.length;
+	return {
+		proposalId: args.proposalId,
+		sourceSnapshotId: source.snapshotId,
+		messages,
+		isDone: nextCursor >= document.messages.length,
+		continueCursor: nextCursor >= document.messages.length ? null : nextCursor,
+	};
+}
+
 /** Show the durable submitted values and Intentional Blank reasons through a
  * separate bounded review page, without inflating the immutable source template. */
 export async function reviewProposalValues(
@@ -1979,6 +2049,7 @@ export const reviewStagedValue = mutation({
 export const getForReview = query({
 	args: {
 		proposalId: v.id("localeProposals"),
+		taskId: v.optional(v.id("agentTranslationProposals")),
 		cursor: v.optional(v.number()),
 		limit: v.optional(v.number()),
 	},
@@ -1987,6 +2058,20 @@ export const getForReview = query({
 		if (!proposal) return null;
 		await requireViewer(ctx, proposal.projectId);
 		const project = await projectFor(ctx, proposal.projectId);
+		const task = args.taskId ? await ctx.db.get(args.taskId) : null;
+		if (
+			args.taskId &&
+			(!task ||
+				task.projectId !== proposal.projectId ||
+				task.target.kind !== "localeProposal" ||
+				task.target.localeProposalId !== proposal._id ||
+				task.localeProposalTaskScope?.localeProposalId !== proposal._id)
+		) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "New-Locale Translation Task not found.",
+			});
+		}
 		const source = await pinnedSourceEvidenceForProposal(
 			ctx,
 			project,
@@ -2027,6 +2112,30 @@ export const getForReview = query({
 		const sourcePage = sourceRows.slice(cursor, cursor + limit);
 		const messages = await Promise.all(
 			sourcePage.map(async (message) => {
+				const candidate = task
+					? await ctx.db
+							.query("agentTranslationCandidates")
+							.withIndex(
+								"by_proposal_and_messageId_and_localeProposalId",
+								(q) =>
+									q
+										.eq("proposalId", task._id)
+										.eq("messageId", message.messageId)
+										.eq("localeProposalId", proposal._id),
+							)
+							.unique()
+					: null;
+				const candidateRevision = candidate?.latestRevisionId
+					? await ctx.db.get(candidate.latestRevisionId)
+					: null;
+				const candidateReview = candidateRevision
+					? await ctx.db
+							.query("agentTranslationCandidateReviews")
+							.withIndex("by_revision", (q) =>
+								q.eq("revisionId", candidateRevision._id),
+							)
+							.unique()
+					: null;
 				const value = await ctx.db
 					.query("localeProposalValues")
 					.withIndex("by_proposal_and_messageId", (q) =>
@@ -2057,6 +2166,7 @@ export const getForReview = query({
 					value: value
 						? {
 								value: value.value,
+								reviewToken: valueFingerprint as string,
 								sourceFingerprint: value.sourceFingerprint,
 								updatedBy: value.updatedBy,
 								intentionalBlankReason: value.intentionalBlankReason,
@@ -2068,6 +2178,19 @@ export const getForReview = query({
 								decision: review.decision,
 								finalValue: review.finalValue,
 								reviewer: review.reviewer,
+							}
+						: null,
+					candidate: candidateRevision
+						? {
+								revisionId: candidateRevision._id,
+								revision: candidateRevision.revision,
+								value: candidateRevision.value,
+								review: candidateReview
+									? {
+											decision: candidateReview.decision,
+											finalValue: candidateReview.finalValue,
+										}
+									: null,
 							}
 						: null,
 				};

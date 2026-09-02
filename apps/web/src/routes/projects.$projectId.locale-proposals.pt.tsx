@@ -17,10 +17,18 @@ import {
 import { Input } from "@blabla/ui/components/input";
 import { Skeleton } from "@blabla/ui/components/skeleton";
 import { Textarea } from "@blabla/ui/components/textarea";
-import { createFileRoute, useParams } from "@tanstack/react-router";
+import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useAction, useMutation, useQuery } from "convex/react";
-import { Check, Download, Languages, Save, Sparkles, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import {
+	ArrowLeft,
+	Check,
+	Download,
+	Languages,
+	Save,
+	Sparkles,
+	X,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
 	PageHeader,
@@ -45,24 +53,55 @@ function PortugueseLocaleProposalRoute() {
 	const { projectId } = useParams({
 		from: "/projects/$projectId/locale-proposals/pt",
 	});
+	return <PortugueseLocaleProposalWorkbench projectId={projectId} />;
+}
+
+/** One new-Locale review surface, mounted either from the compatibility Locale
+ * route or from a Translation Task whose private adapter is that proposal. */
+export function PortugueseLocaleProposalWorkbench({
+	projectId,
+	initialProposalId,
+	taskId,
+	title = "New Locale",
+	showTaskNavigation = false,
+}: {
+	projectId: string;
+	initialProposalId?: string;
+	taskId?: string;
+	title?: string;
+	showTaskNavigation?: boolean;
+}) {
 	const convexProjectId = convexId<"projects">(projectId);
 	const project = useQuery(api.projects.get, { projectId: convexProjectId });
-	const currentProposalId = useQuery(api.localeProposals.currentForReview, {
-		projectId: convexProjectId,
-	});
+	const currentProposalId = useQuery(
+		api.localeProposals.currentForReview,
+		initialProposalId ? "skip" : { projectId: convexProjectId },
+	);
 	const ensureForReview = useMutation(api.localeProposals.ensureForReview);
 	const stageForReview = useMutation(api.localeProposals.stageForReview);
 	const reviewStagedValue = useMutation(api.localeProposals.reviewStagedValue);
+	const reviewTaskValue = useMutation(
+		api.agentTranslationProposals.reviewTaskValue,
+	);
+	const acceptTaskCandidates = useMutation(
+		api.agentTranslationProposals.acceptTaskCandidates,
+	);
 	const finalizeForReview = useAction(api.localeProposals.finalizeForReview);
+	const finalizeTask = useAction(api.agentTranslationProposals.finalizeTask);
 	const artifactForReview = useAction(api.localeProposals.artifactForReview);
 	const [proposalId, setProposalId] = useState<string | null>(null);
-	const activeProposalId = proposalId ?? currentProposalId;
+	const activeProposalId = initialProposalId ?? proposalId ?? currentProposalId;
 	const [cursor, setCursor] = useState(0);
 	const detail = useQuery(
 		api.localeProposals.getForReview,
 		activeProposalId
 			? {
 					proposalId: convexId<"localeProposals">(activeProposalId),
+					...(taskId
+						? {
+								taskId: convexId<"agentTranslationProposals">(taskId),
+							}
+						: {}),
 					cursor,
 					limit: 16,
 				}
@@ -74,12 +113,25 @@ function PortugueseLocaleProposalRoute() {
 	const [error, setError] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
 
+	// A different proposal is a different editing session, even though this
+	// effect only writes local state and the dependency is not read in its body.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset on proposal identity
+	useEffect(() => {
+		setCursor(0);
+		setDrafts({});
+		setBlankReasons({});
+		setBusy(null);
+		setError(null);
+		setNotice(null);
+	}, [activeProposalId]);
+
 	const dirtyItems = useMemo(() => {
 		if (!detail) return [];
 		return detail.messages.flatMap((message) => {
 			const draft = drafts[message.messageId];
-			if (draft === undefined || draft === (message.value?.value ?? ""))
-				return [];
+			const currentValue =
+				message.candidate?.value ?? message.value?.value ?? "";
+			if (draft === undefined || draft === currentValue) return [];
 			if (draft.trim().length === 0) return [];
 			return [
 				{
@@ -93,25 +145,34 @@ function PortugueseLocaleProposalRoute() {
 	const visibleAgentCandidates = useMemo(() => {
 		if (!detail) return [];
 		return detail.messages.filter((message) => {
-			const value = message.value?.value;
+			const taskCandidateValue = message.candidate?.value;
+			const legacyAgentValue =
+				!taskId && message.value?.updatedBy.kind === "agent"
+					? message.value.value
+					: undefined;
+			const value = taskCandidateValue ?? legacyAgentValue;
 			return (
-				message.review === null &&
-				message.value?.updatedBy.kind === "agent" &&
+				(message.candidate
+					? message.candidate.review === null
+					: message.review === null) &&
 				value !== undefined &&
 				value.length > 0 &&
 				(drafts[message.messageId] ?? value) === value
 			);
 		});
-	}, [detail, drafts]);
+	}, [detail, drafts, taskId]);
 	const visibleAgentBlanks = useMemo(
 		() =>
 			detail?.messages.some(
 				(message) =>
-					message.review === null &&
-					message.value?.updatedBy.kind === "agent" &&
-					message.value.value.length === 0,
+					(message.candidate?.review === null &&
+						message.candidate.value.length === 0) ||
+					(!taskId &&
+						message.review === null &&
+						message.value?.updatedBy.kind === "agent" &&
+						message.value.value.length === 0),
 			) ?? false,
-		[detail],
+		[detail, taskId],
 	);
 
 	const run = async (label: string, task: () => Promise<void>) => {
@@ -151,28 +212,61 @@ function PortugueseLocaleProposalRoute() {
 			);
 		});
 
-	const decide = (messageId: string, decision: ReviewDecision) =>
-		run(`review:${messageId}`, async () => {
-			if (!activeProposalId) return;
-			await reviewStagedValue({
-				projectId: convexProjectId,
-				proposalId: convexId<"localeProposals">(activeProposalId),
+	const reviewValue = async (
+		messageId: string,
+		candidateToken: string,
+		decision: ReviewDecision,
+	) => {
+		if (!activeProposalId) return;
+		if (taskId) {
+			await reviewTaskValue({
+				taskId: convexId<"agentTranslationProposals">(taskId),
 				messageId,
+				candidateToken,
 				decision,
 			});
+			return;
+		}
+		await reviewStagedValue({
+			projectId: convexProjectId,
+			proposalId: convexId<"localeProposals">(activeProposalId),
+			messageId,
+			decision,
+		});
+	};
+
+	const decide = (
+		messageId: string,
+		candidateToken: string,
+		decision: ReviewDecision,
+	) =>
+		run(`review:${messageId}`, async () => {
+			await reviewValue(messageId, candidateToken, decision);
 			setNotice("Human review recorded.");
 		});
 
 	const acceptVisibleAgentCandidates = () =>
 		run("accept-visible", async () => {
 			if (!activeProposalId || visibleAgentCandidates.length === 0) return;
-			for (const message of visibleAgentCandidates) {
-				await reviewStagedValue({
-					projectId: convexProjectId,
-					proposalId: convexId<"localeProposals">(activeProposalId),
-					messageId: message.messageId,
-					decision: { kind: "accept" },
+			if (taskId) {
+				const candidateRevisionIds = visibleAgentCandidates.flatMap(
+					(message) =>
+						message.candidate ? [message.candidate.revisionId] : [],
+				);
+				if (candidateRevisionIds.length === 0) return;
+				await acceptTaskCandidates({
+					proposalId: convexId<"agentTranslationProposals">(taskId),
+					candidateRevisionIds: candidateRevisionIds.map((revisionId) =>
+						convexId<"agentTranslationCandidateRevisions">(revisionId),
+					),
 				});
+			} else {
+				for (const message of visibleAgentCandidates) {
+					if (!message.value) continue;
+					await reviewValue(message.messageId, message.value.reviewToken, {
+						kind: "accept",
+					});
+				}
 			}
 			const nextCursor = detail?.continueCursor;
 			if (
@@ -212,22 +306,35 @@ function PortugueseLocaleProposalRoute() {
 					],
 				});
 			}
-			await reviewStagedValue({
-				projectId: convexProjectId,
-				proposalId: convexId<"localeProposals">(activeProposalId),
-				messageId: message.messageId,
-				decision: { kind: "intentionalBlank", reason },
-			});
+			if (taskId && message.candidate) {
+				await reviewValue(message.messageId, message.candidate.revisionId, {
+					kind: "intentionalBlank",
+					reason,
+				});
+			} else {
+				await reviewStagedValue({
+					projectId: convexProjectId,
+					proposalId: convexId<"localeProposals">(activeProposalId),
+					messageId: message.messageId,
+					decision: { kind: "intentionalBlank", reason },
+				});
+			}
 			setNotice("Intentional Blank recorded with human review.");
 		});
 
 	const finalize = () =>
 		run("finalize", async () => {
 			if (!activeProposalId) return;
-			await finalizeForReview({
-				projectId: convexProjectId,
-				proposalId: convexId<"localeProposals">(activeProposalId),
-			});
+			if (taskId) {
+				await finalizeTask({
+					taskId: convexId<"agentTranslationProposals">(taskId),
+				});
+			} else {
+				await finalizeForReview({
+					projectId: convexProjectId,
+					proposalId: convexId<"localeProposals">(activeProposalId),
+				});
+			}
 			setNotice(
 				"The reviewed Locale Proposal is ready as an immutable artifact.",
 			);
@@ -254,10 +361,26 @@ function PortugueseLocaleProposalRoute() {
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader
-				title="New Locale"
+				title={title}
 				description="Prepare a complete Portuguese catalog with the same reviewed delivery seam future Locales will use."
 				action={
 					<div className="flex flex-wrap items-center gap-2">
+						{showTaskNavigation ? (
+							<Button
+								nativeButton={false}
+								size="sm"
+								variant="outline"
+								render={
+									<Link
+										to="/projects/$projectId/proposals"
+										params={{ projectId }}
+									/>
+								}
+							>
+								<ArrowLeft data-icon="inline-start" />
+								All tasks
+							</Button>
+						) : null}
 						{detail ? (
 							<Badge variant="secondary">{detail.proposal.status}</Badge>
 						) : null}
@@ -285,7 +408,9 @@ function PortugueseLocaleProposalRoute() {
 					<AlertDescription>{notice}</AlertDescription>
 				</Alert>
 			) : null}
-			{currentProposalId === undefined && proposalId === null ? (
+			{initialProposalId === undefined &&
+			currentProposalId === undefined &&
+			proposalId === null ? (
 				<Skeleton className="h-48 w-full" />
 			) : !activeProposalId ? (
 				<Empty className="border">
@@ -372,10 +497,18 @@ function PortugueseLocaleProposalRoute() {
 						</CardHeader>
 					</Card>
 					{detail.messages.map((message) => {
-						const value = message.value?.value ?? "";
+						const value =
+							message.candidate?.value ?? message.value?.value ?? "";
 						const draft = drafts[message.messageId] ?? value;
-						const reviewed = message.review !== null;
-						const agentOwned = message.value?.updatedBy.kind === "agent";
+						const reviewed = message.candidate
+							? message.candidate.review !== null
+							: message.review !== null;
+						const agentOwned =
+							message.candidate !== null ||
+							message.value?.updatedBy.kind === "agent";
+						const reviewToken = taskId
+							? message.candidate?.revisionId
+							: message.value?.reviewToken;
 						return (
 							<Card key={message.messageId}>
 								<CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -465,12 +598,14 @@ function PortugueseLocaleProposalRoute() {
 													</Button>
 												) : null}
 											</div>
-											{message.value ? (
+											{reviewToken ? (
 												<div className="flex flex-wrap gap-2">
 													<Button
 														size="sm"
 														onClick={() =>
-															void decide(message.messageId, { kind: "accept" })
+															void decide(message.messageId, reviewToken, {
+																kind: "accept",
+															})
 														}
 														disabled={
 															busy !== null ||
@@ -484,7 +619,7 @@ function PortugueseLocaleProposalRoute() {
 														size="sm"
 														variant="secondary"
 														onClick={() =>
-															void decide(message.messageId, {
+															void decide(message.messageId, reviewToken, {
 																kind: "acceptWithEdits",
 																value: draft,
 															})
@@ -503,7 +638,9 @@ function PortugueseLocaleProposalRoute() {
 														size="sm"
 														variant="outline"
 														onClick={() =>
-															void decide(message.messageId, { kind: "reject" })
+															void decide(message.messageId, reviewToken, {
+																kind: "reject",
+															})
 														}
 														disabled={
 															busy !== null ||

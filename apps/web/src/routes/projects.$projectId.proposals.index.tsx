@@ -10,9 +10,16 @@ import {
 	EmptyTitle,
 } from "@blabla/ui/components/empty";
 import { Skeleton } from "@blabla/ui/components/skeleton";
-import { createFileRoute, Link, useParams } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
+import {
+	createFileRoute,
+	Link,
+	useNavigate,
+	useParams,
+} from "@tanstack/react-router";
+import { useMutation, useQuery } from "convex/react";
 import { ArrowRight, Bot, KeyRound, Languages, PenLine } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
 
 import {
 	PageHeader,
@@ -28,10 +35,37 @@ function ProposalsIndexRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/proposals/" });
 	const convexProjectId = convexId<"projects">(projectId);
 	const project = useQuery(api.projects.get, { projectId: convexProjectId });
+	const createTask = useMutation(api.agentTranslationProposals.createTask);
+	const navigate = useNavigate();
+	const [isStartingLocale, setIsStartingLocale] = useState(false);
 	const page = useQuery(api.agentTranslationProposals.listForReview, {
 		projectId: convexProjectId,
 		paginationOpts: { numItems: 50, cursor: null },
 	});
+	const preparePortuguese = async () => {
+		if (isStartingLocale) return;
+		setIsStartingLocale(true);
+		try {
+			const task = await createTask({
+				projectId: convexProjectId,
+				title: "pt · complete catalog",
+				target: { kind: "newLocale", localeCode: "pt" },
+				scope: { kind: "completeCatalog" },
+			});
+			await navigate({
+				to: "/projects/$projectId/proposals/$proposalId",
+				params: { projectId, proposalId: task.taskId },
+			});
+		} catch (cause) {
+			toast.error(
+				cause instanceof Error
+					? cause.message
+					: "Could not prepare the Portuguese task.",
+			);
+		} finally {
+			setIsStartingLocale(false);
+		}
+	};
 
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
@@ -70,17 +104,12 @@ function ProposalsIndexRoute() {
 							Select current values
 						</Button>
 						<Button
-							nativeButton={false}
 							size="sm"
-							render={
-								<Link
-									to="/projects/$projectId/locale-proposals/pt"
-									params={{ projectId }}
-								/>
-							}
+							onClick={() => void preparePortuguese()}
+							disabled={isStartingLocale}
 						>
 							<Languages data-icon="inline-start" />
-							Prepare Portuguese
+							{isStartingLocale ? "Preparing…" : "Prepare Portuguese"}
 						</Button>
 						<Button
 							nativeButton={false}
@@ -157,12 +186,19 @@ function ProposalsIndexRoute() {
 										<Badge variant="secondary">{proposal.status}</Badge>
 									</div>
 									<div className="text-muted-foreground text-xs">
-										{proposal.taskScope
-											? `${proposal.taskScope.localeCode} · ${proposal.candidateCount} of ${proposal.taskScope.targetCount} candidates`
-											: `${proposal.candidateCount} target${proposal.candidateCount === 1 ? "" : "s"}`}{" "}
-										· {proposal.revisionCount} revision
-										{proposal.revisionCount === 1 ? "" : "s"} ·{" "}
-										{proposal.target.kind}
+										{proposal.localeProposalTaskScope
+											? `${proposal.localeProposalTaskScope.localeCode} · new Locale · ${proposal.candidateCount} of ${proposal.localeProposalTaskScope.targetCount} candidates`
+											: proposal.taskScope
+												? `${proposal.taskScope.localeCode} · ${proposal.candidateCount} of ${proposal.taskScope.targetCount} candidates`
+												: `${proposal.candidateCount} target${proposal.candidateCount === 1 ? "" : "s"}`}
+										{proposal.localeProposalTaskScope ? null : (
+											<>
+												{" "}
+												· {proposal.revisionCount} revision
+												{proposal.revisionCount === 1 ? "" : "s"} ·{" "}
+												{proposal.target.kind}
+											</>
+										)}
 									</div>
 								</div>
 								<Button

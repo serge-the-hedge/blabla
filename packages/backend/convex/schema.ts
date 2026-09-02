@@ -1533,6 +1533,16 @@ export default defineSchema({
 				targetCount: v.number(),
 			}),
 		),
+		// Widening field for the unified Translation Task seam. Existing taskScope
+		// records remain valid while new-Locale tasks page the complete pinned
+		// Locale Proposal rather than copying its source template into task rows.
+		localeProposalTaskScope: v.optional(
+			v.object({
+				localeProposalId: v.id("localeProposals"),
+				localeCode: v.string(),
+				targetCount: v.number(),
+			}),
+		),
 		status: v.union(
 			v.literal("open"),
 			v.literal("accepted"),
