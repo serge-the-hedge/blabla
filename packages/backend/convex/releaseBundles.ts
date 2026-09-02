@@ -56,6 +56,16 @@ const buildSummaryValidator = v.object({
 	),
 });
 
+const readyLocaleProposalValidator = v.union(
+	v.object({
+		proposalId: v.id("localeProposals"),
+		localeCode: v.literal("pt"),
+		runtimeLocale: v.literal("pt-BR"),
+		valueCount: v.number(),
+	}),
+	v.null(),
+);
+
 function buildSummary(run: Doc<"releaseBuildRuns">) {
 	return {
 		runId: run._id,
@@ -150,6 +160,47 @@ export const forRecord = query({
 			.order("desc")
 			.take(1);
 		return runs[0] ? buildSummary(runs[0]) : null;
+	},
+});
+
+/** The optional new-Locale artifact that can be composed with this exact
+ * Release Record by the Repository Adapter. Compatibility is snapshot-bound;
+ * the web adapter should never infer it from whichever proposal is newest. */
+export const readyLocaleProposalForRecord = query({
+	args: { recordId: v.id("releaseRecords") },
+	returns: readyLocaleProposalValidator,
+	handler: async (ctx, args) => {
+		const record = await ctx.db.get(args.recordId);
+		if (!record) return null;
+		await requireViewer(ctx, record.projectId);
+		if (record.status !== "ready" || record.posture !== "ready") return null;
+		const proposal = await ctx.db
+			.query("localeProposals")
+			.withIndex("by_project_and_sourceSnapshotId_and_localeCode", (q) =>
+				q
+					.eq("projectId", record.projectId)
+					.eq("sourceSnapshotId", record.snapshotId)
+					.eq("localeCode", "pt"),
+			)
+			.unique();
+		if (proposal?.status !== "ready") return null;
+		if (
+			proposal.stagedValueCount !== proposal.sourceMessageCount ||
+			proposal.artifactStorageId === undefined ||
+			proposal.artifactHash === undefined ||
+			proposal.artifactByteLength === undefined
+		) {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "The ready Locale Proposal has incomplete delivery evidence.",
+			});
+		}
+		return {
+			proposalId: proposal._id,
+			localeCode: proposal.localeCode,
+			runtimeLocale: proposal.runtimeLocale,
+			valueCount: proposal.sourceMessageCount,
+		};
 	},
 });
 

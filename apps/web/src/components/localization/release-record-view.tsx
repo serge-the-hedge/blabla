@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { blablaCommand } from "@/lib/blabla-command";
 import type { api } from "@/lib/convex-api";
 import {
 	releaseHistoryStatus,
@@ -33,6 +34,10 @@ export type ReleaseSummary = NonNullable<AvailableRelease["current"]>;
 export type ReleaseEvidence = FunctionReturnType<
 	typeof api.releaseRecords.evidence
 >["page"][number];
+export type ReadyLocaleProposal = Exclude<
+	FunctionReturnType<typeof api.releaseBundles.readyLocaleProposalForRecord>,
+	null
+>;
 export type EvidenceStatus =
 	| "LoadingFirstPage"
 	| "CanLoadMore"
@@ -102,6 +107,45 @@ function BaselineLine({ record }: { record: ReleaseSummary }) {
 				{record.deltaKeyCount === 1 ? "" : "s"} ·{" "}
 				{NUMBER_FORMAT.format(record.scopeValueCount)} target values
 			</span>
+		</div>
+	);
+}
+
+export function ReleaseDeliveryHandoff({
+	recordId,
+	changeKeyCount,
+	localeProposal,
+}: {
+	recordId: ReleaseSummary["recordId"];
+	changeKeyCount: number;
+	localeProposal: ReadyLocaleProposal | null;
+}) {
+	if (changeKeyCount === 0 && !localeProposal) {
+		return (
+			<p className="text-muted-foreground text-xs">
+				No reviewed catalog changes need delivery from this record.
+			</p>
+		);
+	}
+	const existingSummary = `${NUMBER_FORMAT.format(changeKeyCount)} changed key${changeKeyCount === 1 ? "" : "s"}`;
+	const localeSummary = localeProposal
+		? `Portuguese · ${NUMBER_FORMAT.format(localeProposal.valueCount)} values`
+		: null;
+	const command = blablaCommand(
+		`deliver --release ${recordId}${localeProposal ? ` --locale-proposal ${localeProposal.proposalId}` : ""}`,
+	);
+
+	return (
+		<div className="flex flex-col gap-2">
+			<p className="text-muted-foreground text-xs">
+				Ready · {[existingSummary, localeSummary].filter(Boolean).join(" + ")}.
+				Run
+				{localeProposal ? " one combined delivery" : " the delivery"} from a
+				clean checkout:
+			</p>
+			<code className="w-fit max-w-full overflow-x-auto border bg-muted/30 px-2 py-1.5 text-xs">
+				{command}
+			</code>
 		</div>
 	);
 }

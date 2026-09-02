@@ -6,6 +6,7 @@ import { convexId } from "@/lib/convex-api";
 import {
 	EvidenceLedger,
 	PreparingCard,
+	ReleaseDeliveryHandoff,
 	type ReleaseEvidence,
 	ReleaseRecordView,
 	type ReleaseSummary,
@@ -69,6 +70,61 @@ const evidence: ReleaseEvidence[] = [
 ];
 
 describe("Release Record UI", () => {
+	test("presents one combined delivery for existing and new-Locale work", () => {
+		const markup = renderToStaticMarkup(
+			<ReleaseDeliveryHandoff
+				recordId={convexId<"releaseRecords">("release-record")}
+				changeKeyCount={72}
+				localeProposal={{
+					proposalId: convexId<"localeProposals">("portuguese-proposal"),
+					localeCode: "pt",
+					runtimeLocale: "pt-BR",
+					valueCount: 1549,
+				}}
+			/>,
+		);
+
+		expect(markup).toContain("72 changed keys");
+		expect(markup).toContain("Portuguese · 1,549 values");
+		expect(markup).toContain(
+			"deliver --release release-record --locale-proposal portuguese-proposal",
+		);
+		expect(markup).toContain("one combined delivery");
+	});
+
+	test("still delivers a ready new Locale when the existing-Locale delta is empty", () => {
+		const markup = renderToStaticMarkup(
+			<ReleaseDeliveryHandoff
+				recordId={convexId<"releaseRecords">("release-record")}
+				changeKeyCount={0}
+				localeProposal={{
+					proposalId: convexId<"localeProposals">("portuguese-proposal"),
+					localeCode: "pt",
+					runtimeLocale: "pt-BR",
+					valueCount: 1549,
+				}}
+			/>,
+		);
+
+		expect(markup).toContain(
+			"deliver --release release-record --locale-proposal portuguese-proposal",
+		);
+		expect(markup).not.toContain("No reviewed catalog changes need delivery");
+	});
+
+	test("keeps the existing-Locale-only delivery command when no new Locale is ready", () => {
+		const markup = renderToStaticMarkup(
+			<ReleaseDeliveryHandoff
+				recordId={convexId<"releaseRecords">("release-record")}
+				changeKeyCount={3}
+				localeProposal={null}
+			/>,
+		);
+
+		expect(markup).toContain("deliver --release release-record");
+		expect(markup).not.toContain("--locale-proposal");
+	});
+
 	test("renders durable preparation progress", () => {
 		const record = {
 			...releaseSummary("ready"),
