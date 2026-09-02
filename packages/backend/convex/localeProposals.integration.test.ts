@@ -437,6 +437,64 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 		});
 	}, 60_000);
 
+	test("keeps a near-envelope source and candidate page readable", async () => {
+		const user = await authenticatedBackend(t, "large-new-locale-task");
+		const projectId = await createProject(user);
+		const sourceValue = "S".repeat(200 * 1024);
+		const description = "D".repeat(200 * 1024);
+		const candidateValue = "T".repeat(200 * 1024);
+		await ingestSourceBaseline(user, projectId, {
+			content: JSON.stringify({
+				"@@locale": "en",
+				large: sourceValue,
+				"@large": { description },
+			}),
+		});
+		const { token } = await proposalToken(user, projectId);
+		const task = await successfulJson<{
+			taskId: Id<"agentTranslationProposals">;
+		}>(
+			await agentRequest(t, token, "/api/agent/v1/translation-tasks", {
+				method: "POST",
+				body: JSON.stringify({
+					clientTaskKey: "large-portuguese-v1",
+					target: { kind: "newLocale", localeCode: "pt" },
+					scope: { kind: "completeCatalog" },
+				}),
+			}),
+		);
+		await successfulJson(
+			await agentRequest(
+				t,
+				token,
+				`/api/agent/v1/translation-tasks/${task.taskId}/candidates`,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						items: [{ messageId: "large", value: candidateValue }],
+					}),
+				},
+			),
+		);
+		const page = await successfulJson<{
+			targets: Array<{
+				messageId: string;
+				candidate: { value: string } | null;
+			}>;
+		}>(
+			await agentRequest(
+				t,
+				token,
+				`/api/agent/v1/translation-tasks/${task.taskId}`,
+			),
+		);
+		expect(page.targets).toHaveLength(1);
+		expect(page.targets[0]).toMatchObject({
+			messageId: "large",
+			candidate: { value: candidateValue },
+		});
+	}, 60_000);
+
 	test("reviews and finalizes a new Locale through task-only human commands", async () => {
 		const user = await authenticatedBackend(t, "new-locale-task-reviewer");
 		const projectId = await createProject(user);
@@ -521,6 +579,44 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 			localeProposalId: expect.any(String),
 			deliveryStatus: "ready",
 		});
+		const retry = await agentRequest(
+			t,
+			token,
+			"/api/agent/v1/translation-tasks",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					clientTaskKey: "portuguese-reviewed-v1",
+					target: { kind: "newLocale", localeCode: "pt" },
+					scope: { kind: "completeCatalog" },
+				}),
+			},
+		);
+		expect(retry.status).toBe(200);
+		expect(await retry.json()).toMatchObject({ taskId: task.taskId });
+		const unusable = await agentRequest(
+			t,
+			token,
+			"/api/agent/v1/translation-tasks",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					clientTaskKey: "portuguese-after-finalization",
+					target: { kind: "newLocale", localeCode: "pt" },
+					scope: { kind: "completeCatalog" },
+				}),
+			},
+		);
+		expect(unusable.status).toBe(400);
+		expect(await unusable.json()).toMatchObject({ code: "BAD_STATE" });
+		await expect(
+			user.mutation(api.agentTranslationProposals.createTask, {
+				projectId,
+				title: "Another Portuguese task",
+				target: { kind: "newLocale", localeCode: "pt" },
+				scope: { kind: "completeCatalog" },
+			}),
+		).rejects.toThrow("already finalized");
 	}, 60_000);
 
 	test("batch accepts exact new-Locale revisions atomically", async () => {

@@ -44,7 +44,10 @@ type RepositoryAdapterRateLimitName =
 
 const MAX_SNAPSHOT_FILES = 1_000;
 const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024;
-const MAX_TRANSLATION_TASK_PAGE_BYTES = 512 * 1024;
+// One new-Locale row may contain both a near-envelope Source/metadata item and
+// a maximum-size immutable candidate. The page loop still stops before this
+// bound, but the bound must always admit one valid row or its cursor deadlocks.
+const MAX_TRANSLATION_TASK_PAGE_BYTES = 1024 * 1024;
 
 const corsHeaders = {
 	"Access-Control-Allow-Origin": "*",

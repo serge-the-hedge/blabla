@@ -767,6 +767,13 @@ async function createNewLocaleTaskForHuman(
 			targetCount: localeProposal.sourceMessageCount,
 		};
 	}
+	if (localeProposal.status !== "draft") {
+		throw new ConvexError({
+			code: "BAD_STATE",
+			message:
+				"This new Locale is already finalized; resume its completed task instead of creating another.",
+		});
+	}
 	const timestamp = now();
 	const taskId = await ctx.db.insert("agentTranslationProposals", {
 		projectId: input.projectId,
@@ -1737,8 +1744,9 @@ export const create = internalMutation({
 			"clientProposalKey",
 			MAX_PROPOSAL_CLIENT_KEY_BYTES,
 		);
+		let localeProposal: Doc<"localeProposals"> | null = null;
 		if (args.target.kind === "localeProposal") {
-			const localeProposal = await ctx.db.get(args.target.localeProposalId);
+			localeProposal = await ctx.db.get(args.target.localeProposalId);
 			if (!localeProposal || localeProposal.projectId !== token.projectId) {
 				throw new ConvexError({
 					code: "NOT_FOUND",
@@ -1788,6 +1796,16 @@ export const create = internalMutation({
 				});
 			}
 			return proposalSummary(existing);
+		}
+		if (
+			args.localeProposalTaskScope !== undefined &&
+			localeProposal?.status !== "draft"
+		) {
+			throw new ConvexError({
+				code: "BAD_STATE",
+				message:
+					"This new Locale is already finalized; resume its completed task instead of creating another.",
+			});
 		}
 		const timestamp = now();
 		const proposalId = await ctx.db.insert("agentTranslationProposals", {
