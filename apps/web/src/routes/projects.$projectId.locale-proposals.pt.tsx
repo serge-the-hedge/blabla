@@ -364,7 +364,7 @@ export function PortugueseLocaleProposalWorkbench({
 	};
 
 	// Sparse server-side filters can produce an empty bounded scan window. Walk
-	// it automatically so search and attention filters feel continuous.
+	// it automatically without recording that invisible window in page history.
 	useEffect(() => {
 		if (
 			detail &&
@@ -372,12 +372,11 @@ export function PortugueseLocaleProposalWorkbench({
 			detail.continueCursor !== null &&
 			busy === null
 		) {
-			setCursorHistory((history) => [...history, cursor]);
 			setCursor(detail.continueCursor);
 			setSelectedCandidateTokens({});
 			setExpandedMessageId(null);
 		}
-	}, [detail, busy, cursor]);
+	}, [detail, busy]);
 
 	const markIntentionalBlank = (
 		message: NonNullable<typeof detail>["messages"][number],
