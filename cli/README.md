@@ -63,9 +63,10 @@ value skips the whole key and is reported. The CLI runs Flutter generation in a
 disposable worktree and creates one local `blabla/release-...` review commit.
 For combined delivery it validates that both immutable artifacts share the
 same repository, Baseline/Source Snapshot, and integration branch; applies the
-existing-Locale delta; adds the complete `intl_pt.arb`; and runs Flutter
-generation once over the combined tree. Blabla supplies the catalog bytes and
-provenance; the adapter owns only local Git and Flutter toolchain I/O.
+existing-Locale delta; and adds the complete `intl_pt.arb`. Flutter generation
+runs first as a clean-tree drift check and again over the combined candidate.
+Blabla supplies the catalog bytes and provenance; the adapter owns only local
+Git and Flutter toolchain I/O.
 
 It never receives Git credentials, pushes, or opens a pull request.
 

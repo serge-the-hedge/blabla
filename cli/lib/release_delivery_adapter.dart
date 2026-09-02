@@ -224,13 +224,11 @@ class ReleaseRepositoryAdapter {
             ? const {}
             : {_portuguese.runtimeConstantsPath},
       );
-      if (localeArtifact == null) {
-        await _runGenerator(staging.root, request.flutter);
-        if ((await _changedPaths(staging.root)).isNotEmpty) {
-          throw RepositoryAdapterException(
-            'Flutter localization output is already drifted in this checkout. Regenerate and commit it before delivering this release. ${request.flutter.description}',
-          );
-        }
+      await _runGenerator(staging.root, request.flutter);
+      if ((await _changedPaths(staging.root)).isNotEmpty) {
+        throw RepositoryAdapterException(
+          'Flutter localization output is already drifted in this checkout. Regenerate and commit it before delivering this release. ${request.flutter.description}',
+        );
       }
       final signaturesBefore = await _generatedInterfaceSignatures(
         staging.root,
@@ -674,6 +672,11 @@ class ReleaseRepositoryAdapter {
         .where((file) => inputByPath[file.catalogPath] != file.content)
         .map((file) => file.catalogPath)
         .toSet();
+    if (delivery.applied.isNotEmpty && changedCatalogPaths.isEmpty) {
+      throw RepositoryAdapterException(
+        'Blabla reported applied release keys without changing any target catalog bytes.',
+      );
+    }
     final sourcePath = summary.catalogs
         .singleWhere((catalog) => catalog.isSource)
         .catalogPath;

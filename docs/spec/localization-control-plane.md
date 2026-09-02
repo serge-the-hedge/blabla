@@ -676,9 +676,10 @@ tree it finds.**
 `--locale-proposal <id>` composes a ready new Locale into the same local
 transaction. Both artifacts must name the same repository, Baseline/Source
 Snapshot, source manifest and integration branch. The combined form creates
-one staging worktree, runs generation once after both catalog operations, and
-produces one commit carrying both provenance identities. The new-Locale-only
-command remains a compatibility adapter, not a second product workflow.
+one staging worktree, preflights generation against the untouched tree, then
+regenerates after both catalog operations. It produces one commit carrying both
+provenance identities. The new-Locale-only command remains a compatibility
+adapter, not a second product workflow.
 
 - **Drift is content, not distance.** The predicate compares the Baseline
   Snapshot's catalogs against the delivery tree's, over the bound files only.
@@ -704,13 +705,12 @@ command remains a compatibility adapter, not a second product workflow.
   intended key/value map or the command aborts without writing. This applies to
   `intl_en.arb` too — rewriting it in canonical sorted order with zero content
   change produces ~1,560 changed generated-Dart lines.
-- **Pre-existing generated-Dart drift stops existing-only delivery.** It
-  regenerates from the tree's ARB *before* applying anything and stops if the
+- **Pre-existing generated-Dart drift stops every delivery.** It regenerates
+  from the untouched tree's ARB *before* applying anything and stops if the
   output differs from committed `app_localizations*.dart`. Combined delivery
-  deliberately has one generation pass; it instead admits only the generated
-  files corresponding to target catalogs changed by the Release Delta plus the
-  new Locale's declared generated surface. Drift in another generated Locale
-  therefore aborts rather than being absorbed.
+  then runs generation again after both catalog operations and admits only the
+  generated files corresponding to target catalogs changed by the Release
+  Delta plus the new Locale's declared generated surface.
 - **A dirty tree blocks narrowly for existing-only work** — only uncommitted
   changes to bound catalogs or generated localization Dart. Combined delivery
   requires the whole checkout to be clean because it introduces a catalog,

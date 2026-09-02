@@ -598,8 +598,9 @@ blabla deliver --release <release-record-id> --locale-proposal <proposal-id>
 ```
 
 The combined form validates both immutable identities before checkout mutation,
-applies the existing-Locale delta, adds the complete new catalog, and runs one
-Flutter generation pass in a disposable worktree. It creates one local
+preflights committed generated output, applies the existing-Locale delta, adds
+the complete new catalog, and regenerates the combined candidate in a
+disposable worktree. It creates one local
 `blabla/release-...` commit with both provenance trailers, then prints push and
 `gh pr create` commands without invoking either operation. The existing-only
 form remains valid.

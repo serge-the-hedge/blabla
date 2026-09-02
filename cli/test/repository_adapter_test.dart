@@ -487,7 +487,7 @@ void main() {
         ),
       );
 
-      expect(runner.generationCount, 1);
+      expect(runner.generationCount, 2);
       expect(result.localeProposalId, artifact.proposalId);
       expect(result.branchName, 'blabla/release-release_123');
       expect(
@@ -624,6 +624,82 @@ void main() {
       );
     },
   );
+
+  test(
+    'rejects applied release keys that change no catalog bytes in combined delivery',
+    () async {
+      final fixture = await BrickitFixture.create();
+      addTearDown(fixture.dispose);
+      await fixture.addGermanCatalog();
+      final summary = await existingLocaleRelease(fixture);
+      final artifact = await combinedPortugueseArtifact(fixture, summary);
+      final head = await fixture.git(['rev-parse', 'HEAD']);
+
+      await expectLater(
+        ReleaseRepositoryAdapter().deliver(
+          ReleaseDeliveryRequest(
+            checkout: fixture.root,
+            recordId: summary.releaseRecord.id,
+            flutter: testFlutter(fixture.flutterExecutable),
+            gateway: UnchangedAppliedReleaseGateway(summary),
+            localeProposal: LocaleProposalDeliveryInput(
+              proposalId: artifact.proposalId,
+              gateway: StaticLocaleProposalGateway(artifact),
+            ),
+            write: (_) {},
+          ),
+        ),
+        throwsA(
+          isA<RepositoryAdapterException>().having(
+            (error) => error.message,
+            'message',
+            contains('without changing any target catalog bytes'),
+          ),
+        ),
+      );
+      expect(await fixture.git(['rev-parse', 'HEAD']), head);
+      expect(await fixture.git(['branch', '--show-current']), 'develop');
+    },
+  );
+
+  test('rejects committed generated drift before combined delivery', () async {
+    final fixture = await BrickitFixture.create();
+    addTearDown(fixture.dispose);
+    await fixture.addGermanCatalog();
+    await fixture
+        .file('packages/brickit_generated/lib/l10n/app_localizations_de.dart')
+        .writeAsString('stale generated output');
+    await fixture.git(['add', '.']);
+    await fixture.git(['commit', '-m', 'commit stale generated output']);
+    final summary = await existingLocaleRelease(fixture);
+    final artifact = await combinedPortugueseArtifact(fixture, summary);
+    final head = await fixture.git(['rev-parse', 'HEAD']);
+
+    await expectLater(
+      ReleaseRepositoryAdapter().deliver(
+        ReleaseDeliveryRequest(
+          checkout: fixture.root,
+          recordId: summary.releaseRecord.id,
+          flutter: testFlutter(fixture.flutterExecutable),
+          gateway: StaticReleaseGateway(summary),
+          localeProposal: LocaleProposalDeliveryInput(
+            proposalId: artifact.proposalId,
+            gateway: StaticLocaleProposalGateway(artifact),
+          ),
+          write: (_) {},
+        ),
+      ),
+      throwsA(
+        isA<RepositoryAdapterException>().having(
+          (error) => error.message,
+          'message',
+          contains('already drifted'),
+        ),
+      ),
+    );
+    expect(await fixture.git(['rev-parse', 'HEAD']), head);
+    expect(await fixture.git(['branch', '--show-current']), 'develop');
+  });
 
   test('refuses a tracked symlink before reading a bound catalog', () async {
     final fixture = await BrickitFixture.create();
@@ -912,6 +988,26 @@ class SkippedReleaseGateway implements ReleaseGateway {
       SkippedReleaseKey(messageId: 'greeting', reason: 'source_changed'),
       SkippedReleaseKey(messageId: 'farewell', reason: 'missing_source'),
     ],
+  );
+}
+
+class UnchangedAppliedReleaseGateway implements ReleaseGateway {
+  UnchangedAppliedReleaseGateway(this.summary);
+
+  final ReleaseSummary summary;
+
+  @override
+  Future<ReleaseSummary> readRelease(String recordId) async => summary;
+
+  @override
+  Future<ReleaseDeliveryTree> createDeliveryTree(
+    String recordId,
+    List<DeliveryTreeFile> files,
+  ) async => ReleaseDeliveryTree(
+    releaseRecord: summary.releaseRecord,
+    files: files,
+    applied: const ['greeting'],
+    skipped: const [],
   );
 }
 
