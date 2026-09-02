@@ -130,9 +130,9 @@ export function PortugueseLocaleProposalWorkbench({
 	const [busy, setBusy] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
-	const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(
-		() => new Set(),
-	);
+	const [selectedCandidateTokens, setSelectedCandidateTokens] = useState<
+		Record<string, string>
+	>({});
 	const [expandedMessageId, setExpandedMessageId] = useState<string | null>(
 		null,
 	);
@@ -145,7 +145,7 @@ export function PortugueseLocaleProposalWorkbench({
 		setCursorHistory([]);
 		setDrafts({});
 		setBlankReasons({});
-		setSelectedMessageIds(new Set());
+		setSelectedCandidateTokens({});
 		setExpandedMessageId(null);
 		setBusy(null);
 		setError(null);
@@ -158,7 +158,7 @@ export function PortugueseLocaleProposalWorkbench({
 	useEffect(() => {
 		setCursor(0);
 		setCursorHistory([]);
-		setSelectedMessageIds(new Set());
+		setSelectedCandidateTokens({});
 		setExpandedMessageId(null);
 	}, [focus, deferredSearch]);
 
@@ -188,10 +188,14 @@ export function PortugueseLocaleProposalWorkbench({
 					? message.value.value
 					: undefined;
 			const value = taskCandidateValue ?? legacyAgentValue;
+			const candidateToken = taskId
+				? message.candidate?.revisionId
+				: message.value?.reviewToken;
 			return (
 				message.facts.state === "awaiting" &&
 				value !== undefined &&
 				value.length > 0 &&
+				candidateToken !== undefined &&
 				!message.facts.staleSource &&
 				(drafts[message.messageId] ?? value) === value
 			);
@@ -205,8 +209,13 @@ export function PortugueseLocaleProposalWorkbench({
 			!message.facts.icu &&
 			!message.facts.edgeWhitespaceMismatch,
 	);
-	const selectedAgentCandidates = selectableAgentCandidates.filter((message) =>
-		selectedMessageIds.has(message.messageId),
+	const selectedAgentCandidates = selectableAgentCandidates.filter(
+		(message) => {
+			const currentToken = taskId
+				? message.candidate?.revisionId
+				: message.value?.reviewToken;
+			return selectedCandidateTokens[message.messageId] === currentToken;
+		},
 	);
 
 	const run = async (label: string, task: () => Promise<void>) => {
@@ -267,6 +276,7 @@ export function PortugueseLocaleProposalWorkbench({
 			projectId: convexProjectId,
 			proposalId: convexId<"localeProposals">(activeProposalId),
 			messageId,
+			expectedValueFingerprint: candidateToken,
 			decision,
 		});
 	};
@@ -287,8 +297,10 @@ export function PortugueseLocaleProposalWorkbench({
 			let accepted = 0;
 			if (taskId) {
 				const candidateRevisionIds = selectedAgentCandidates.flatMap(
-					(message) =>
-						message.candidate ? [message.candidate.revisionId] : [],
+					(message) => {
+						const selectedToken = selectedCandidateTokens[message.messageId];
+						return selectedToken ? [selectedToken] : [];
+					},
 				);
 				if (candidateRevisionIds.length === 0) return;
 				for (
@@ -308,29 +320,37 @@ export function PortugueseLocaleProposalWorkbench({
 				}
 			} else {
 				for (const message of selectedAgentCandidates) {
-					if (!message.value) continue;
-					await reviewValue(message.messageId, message.value.reviewToken, {
+					const selectedToken = selectedCandidateTokens[message.messageId];
+					if (!selectedToken) continue;
+					await reviewValue(message.messageId, selectedToken, {
 						kind: "accept",
 					});
 					accepted += 1;
 				}
 			}
-			setSelectedMessageIds(new Set());
+			setSelectedCandidateTokens({});
 			setNotice(
 				`${accepted} selected candidate${accepted === 1 ? "" : "s"} accepted with human confirmation.`,
 			);
 		});
 
 	const selectRoutinePage = () => {
-		setSelectedMessageIds(
-			new Set(routineAgentCandidates.map((message) => message.messageId)),
+		setSelectedCandidateTokens(
+			Object.fromEntries(
+				routineAgentCandidates.flatMap((message) => {
+					const token = taskId
+						? message.candidate?.revisionId
+						: message.value?.reviewToken;
+					return token ? [[message.messageId, token]] : [];
+				}),
+			),
 		);
 	};
 
 	const goNext = (nextCursor: number) => {
 		setCursorHistory((history) => [...history, cursor]);
 		setCursor(nextCursor);
-		setSelectedMessageIds(new Set());
+		setSelectedCandidateTokens({});
 		setExpandedMessageId(null);
 	};
 
@@ -339,7 +359,7 @@ export function PortugueseLocaleProposalWorkbench({
 		if (previousCursor === undefined) return;
 		setCursorHistory((history) => history.slice(0, -1));
 		setCursor(previousCursor);
-		setSelectedMessageIds(new Set());
+		setSelectedCandidateTokens({});
 		setExpandedMessageId(null);
 	};
 
@@ -354,7 +374,7 @@ export function PortugueseLocaleProposalWorkbench({
 		) {
 			setCursorHistory((history) => [...history, cursor]);
 			setCursor(detail.continueCursor);
-			setSelectedMessageIds(new Set());
+			setSelectedCandidateTokens({});
 			setExpandedMessageId(null);
 		}
 	}, [detail, busy, cursor]);
@@ -673,13 +693,20 @@ export function PortugueseLocaleProposalWorkbench({
 									<div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 px-3 py-3">
 										<Checkbox
 											aria-label={`Select ${message.messageId}`}
-											checked={selectedMessageIds.has(message.messageId)}
+											checked={
+												reviewToken !== undefined &&
+												selectedCandidateTokens[message.messageId] ===
+													reviewToken
+											}
 											disabled={!selectable || busy !== null}
 											onCheckedChange={(checked) =>
-												setSelectedMessageIds((current) => {
-													const next = new Set(current);
-													if (checked === true) next.add(message.messageId);
-													else next.delete(message.messageId);
+												setSelectedCandidateTokens((current) => {
+													const next = { ...current };
+													if (checked === true && reviewToken) {
+														next[message.messageId] = reviewToken;
+													} else {
+														delete next[message.messageId];
+													}
 													return next;
 												})
 											}
