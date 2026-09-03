@@ -169,6 +169,11 @@ export function PortugueseLocaleProposalWorkbench({
 				pendingHumanReview: detail.pendingHumanReview,
 			})
 		: null;
+	const proposalReadOnly =
+		detail === null ||
+		detail === undefined ||
+		!detail.isCurrentBaseline ||
+		detail.proposal.status === "ready";
 	const showWorkflowEmptyState =
 		focus === "awaiting" && deferredSearch.trim().length === 0;
 	const continuousReviewQueue =
@@ -195,6 +200,12 @@ export function PortugueseLocaleProposalWorkbench({
 			setStableDetail({ proposalId: activeProposalId, value: queriedDetail });
 		}
 	}, [activeProposalId, queriedDetail, sparseQueueTransition]);
+
+	useEffect(() => {
+		if (detail && !detail.isCurrentBaseline && focus === "awaiting") {
+			setFocus("all");
+		}
+	}, [detail, focus]);
 
 	// A different proposal is a different editing session, even though this
 	// effect only writes local state and the dependency is not read in its body.
@@ -332,7 +343,8 @@ export function PortugueseLocaleProposalWorkbench({
 
 	const saveVisible = () =>
 		run("save", async () => {
-			if (!activeProposalId || dirtyItems.length === 0) return;
+			if (!activeProposalId || proposalReadOnly || dirtyItems.length === 0)
+				return;
 			for (let offset = 0; offset < dirtyItems.length; offset += 16) {
 				await stageForReview({
 					projectId: convexProjectId,
@@ -739,9 +751,7 @@ export function PortugueseLocaleProposalWorkbench({
 									size="sm"
 									onClick={saveVisible}
 									disabled={
-										busy !== null ||
-										dirtyItems.length === 0 ||
-										detail.proposal.status === "ready"
+										busy !== null || dirtyItems.length === 0 || proposalReadOnly
 									}
 								>
 									<Save data-icon="inline-start" />
@@ -832,6 +842,7 @@ export function PortugueseLocaleProposalWorkbench({
 									disabled={
 										busy !== null ||
 										queueIsLoading ||
+										proposalReadOnly ||
 										routineAgentCandidates.length === 0
 									}
 								>
@@ -844,7 +855,7 @@ export function PortugueseLocaleProposalWorkbench({
 										busy !== null ||
 										queueIsLoading ||
 										selectedAgentCandidates.length === 0 ||
-										detail.proposal.status === "ready"
+										proposalReadOnly
 									}
 								>
 									<Check data-icon="inline-start" />
@@ -888,7 +899,12 @@ export function PortugueseLocaleProposalWorkbench({
 												selectedCandidateTokens[message.messageId] ===
 													reviewToken
 											}
-											disabled={!selectable || busy !== null || queueIsLoading}
+											disabled={
+												!selectable ||
+												busy !== null ||
+												queueIsLoading ||
+												proposalReadOnly
+											}
 											onCheckedChange={(checked) =>
 												setSelectedCandidateTokens((current) => {
 													const next = { ...current };
@@ -1000,9 +1016,7 @@ export function PortugueseLocaleProposalWorkbench({
 														}))
 													}
 													disabled={
-														detail.proposal.status === "ready" ||
-														busy !== null ||
-														queueIsLoading
+														proposalReadOnly || busy !== null || queueIsLoading
 													}
 													rows={3}
 												/>
@@ -1024,6 +1038,7 @@ export function PortugueseLocaleProposalWorkbench({
 																	[message.messageId]: event.target.value,
 																}))
 															}
+															disabled={proposalReadOnly}
 														/>
 														{!message.value ||
 														message.value.value.length === 0 ? (
@@ -1037,7 +1052,7 @@ export function PortugueseLocaleProposalWorkbench({
 																	busy !== null ||
 																	reviewed ||
 																	message.facts.staleSource ||
-																	detail.proposal.status === "ready" ||
+																	proposalReadOnly ||
 																	!(
 																		blankReasons[message.messageId] ??
 																		message.candidate?.intentionalBlankReason ??
@@ -1068,7 +1083,7 @@ export function PortugueseLocaleProposalWorkbench({
 																	busy !== null ||
 																	reviewed ||
 																	message.facts.staleSource ||
-																	detail.proposal.status === "ready"
+																	proposalReadOnly
 																}
 															>
 																<Check data-icon="inline-start" /> Accept
@@ -1093,7 +1108,7 @@ export function PortugueseLocaleProposalWorkbench({
 																	message.facts.staleSource ||
 																	draft.trim().length === 0 ||
 																	draft === value ||
-																	detail.proposal.status === "ready"
+																	proposalReadOnly
 																}
 															>
 																Accept edited
@@ -1115,7 +1130,7 @@ export function PortugueseLocaleProposalWorkbench({
 																	busy !== null ||
 																	reviewed ||
 																	message.facts.staleSource ||
-																	detail.proposal.status === "ready"
+																	proposalReadOnly
 																}
 															>
 																<X data-icon="inline-start" /> Reject
@@ -1130,7 +1145,7 @@ export function PortugueseLocaleProposalWorkbench({
 																	busy !== null ||
 																	reviewed ||
 																	message.facts.staleSource ||
-																	detail.proposal.status === "ready" ||
+																	proposalReadOnly ||
 																	!(
 																		blankReasons[message.messageId] ??
 																		message.candidate?.intentionalBlankReason ??

@@ -7,6 +7,7 @@ import {
 	EvidenceLedger,
 	PreparingCard,
 	ReleaseDeliveryHandoff,
+	ReleaseDeliveryScope,
 	type ReleaseEvidence,
 	ReleaseRecordView,
 	type ReleaseSummary,
@@ -70,6 +71,26 @@ const evidence: ReleaseEvidence[] = [
 ];
 
 describe("Release Record UI", () => {
+	test("shows complete new-Locale scope before bundle construction", () => {
+		const markup = renderToStaticMarkup(
+			<ReleaseDeliveryScope
+				changeKeyCount={72}
+				targetValueCount={380}
+				localeProposal={{
+					proposalId: convexId<"localeProposals">("portuguese-proposal"),
+					localeCode: "pt",
+					runtimeLocale: "pt-BR",
+					valueCount: 1549,
+				}}
+			/>,
+		);
+
+		expect(markup).toContain("72 changed keys · 380 target values");
+		expect(markup).toContain("Portuguese · new locale");
+		expect(markup).toContain("1,549 catalog values");
+		expect(markup).not.toContain("deliver --release");
+	});
+
 	test("presents one combined delivery for existing and new-Locale work", () => {
 		const markup = renderToStaticMarkup(
 			<ReleaseDeliveryHandoff
