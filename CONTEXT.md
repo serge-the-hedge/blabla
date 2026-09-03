@@ -241,11 +241,12 @@ with recovery links but no pre-approval gate.
 _Avoid_: toast, approval queue
 
 **Introduced Message**:
-A Catalog Message first accepted from Git after the bootstrap Baseline whose
-target Locales active at that introduction have not all received a deliberate
-First Review. It is durable work provenance, not a content quality guess, and
-an archived or restored message retains its own provenance rather than becoming
-new again.
+A Catalog Message first accepted from Git after the bootstrap Baseline. This is
+permanent provenance, not a temporary review state or content quality guess. Its
+target Locales active at introduction form a frozen First Review scope; the
+message appears under New from Git while any Locale in that scope still lacks
+First Review. Archive and restoration preserve the introduction rather than
+creating another one.
 _Avoid_: new string, Unconfirmed Import, recent key
 
 **First Review**:
@@ -548,21 +549,22 @@ it is therefore one of the two findings shown at rest.
 _Avoid_: example value, sample data, placeholder value
 
 **Translator Confirmation**:
-The stored record that a human working in Blabla affirmed a target value —
-key, Locale, and the fingerprint of the value at the moment of confirming. It
-is written by the same single human gesture that saves an edit or accepts a
-Candidate Value, so confirming an untouched value costs no more
-than editing one. An agent submission never writes it. Because it binds to the
-value's content rather than to the key, replacing the content does not override
-the record; the record simply stops applying.
+The stored record that a human working in Blabla affirmed an exact target value
+against an exact Source Contract: key, Locale, value fingerprint, and Source
+Fingerprint. It is written by the same gesture that saves an edit or accepts a
+Candidate Value, so confirming an untouched value costs no more than editing
+one. An agent submission never writes it. A later content or source change does
+not erase the record; it remains historical evidence but stops applying until
+both fingerprints match again.
 _Avoid_: reviewer sign-off, approval step, translated flag
 
 **Unconfirmed Import**:
-The derived observation that a current, non-empty target value has no Translator
-Confirmation matching its content — it arrived from Git and nobody here has
-vouched for it. It says nothing about who or what wrote the value: Blabla never
-tries to detect machine text, because content cannot, and this catches a
-hand-typed target or a paste equally. It ships, never blocks, and never expires,
+The derived observation that a current, non-empty target value has no applicable
+Translator Confirmation matching its content and Source Contract — it arrived
+from Git and nobody here has vouched for that pair. It says nothing about who or
+what wrote the value: Blabla never tries to detect machine text, because content
+cannot, and this catches a hand-typed target or a paste equally. It ships, never
+blocks, and never expires,
 but it is not settled either — 87% of the machine placeholders now entering the
 catalog are rewritten by a human within a median of 8 days.
 _Avoid_: machine translation, placeholder, Unreviewed Translation, Source Echo
