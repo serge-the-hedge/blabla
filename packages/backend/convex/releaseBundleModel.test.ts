@@ -79,6 +79,53 @@ describe("Release Bundle delivery tree", () => {
 		);
 	});
 
+	test("applies a reviewed Source proposal and its target changes together", () => {
+		const result = applyReleaseBundleToDeliveryTree(
+			bundle([
+				{
+					catalogIndex: 1,
+					messageId: "greeting",
+					baselineSourceValue: "Hello",
+					values: [
+						{
+							localeCode: "en",
+							catalogPath: "en.arb",
+							isSource: true,
+							baselineValue: "Hello",
+							value: "Hello there",
+						},
+						{
+							localeCode: "de",
+							catalogPath: "de.arb",
+							isSource: false,
+							baselineValue: "Hallo",
+							value: "Guten Tag",
+						},
+					],
+				},
+			]),
+			[
+				{ catalogPath: "en.arb", content: source },
+				{ catalogPath: "de.arb", content: german },
+			],
+		);
+
+		expect(result.applied).toEqual(["greeting"]);
+		expect(result.skipped).toEqual([]);
+		expect(result.files).toEqual([
+			{
+				catalogPath: "en.arb",
+				content:
+					'{\n  "@@locale": "en",\n  "farewell": "Bye",\n  "greeting": "Hello there"\n}',
+			},
+			{
+				catalogPath: "de.arb",
+				content:
+					'{\n  "@@locale": "de",\n  "farewell": "Tschüss",\n  "greeting": "Guten Tag"\n}',
+			},
+		]);
+	});
+
 	test("inserts a missing target without reserializing neighbouring members", () => {
 		const result = applyReleaseBundleToDeliveryTree(
 			bundle([
