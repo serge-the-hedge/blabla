@@ -321,6 +321,12 @@ export function PortugueseLocaleProposalWorkbench({
 	const continueOnCurrentSource = () =>
 		run("continue-source", async () => {
 			if (!activeProposalId) return;
+			if (dirtyItems.length > 0) {
+				setError(
+					"Resolve the unsaved visible edits before continuing on the current source.",
+				);
+				return;
+			}
 			if (taskId) {
 				const result = await continueNewLocaleTask({
 					taskId: convexId<"agentTranslationProposals">(taskId),
@@ -677,18 +683,37 @@ export function PortugueseLocaleProposalWorkbench({
 							This work remains pinned and inspectable here. Carry every value
 							whose source is unchanged into a current proposal; only changed or
 							added source values will remain to translate.
+							{dirtyItems.length > 0
+								? " Copy any unsaved visible edits you need, then discard them before continuing."
+								: ""}
 						</span>
-						<Button
-							size="sm"
-							className="shrink-0"
-							onClick={continueOnCurrentSource}
-							disabled={busy !== null}
-						>
-							<RefreshCw data-icon="inline-start" />
-							{busy === "continue-source"
-								? "Carrying work forward…"
-								: "Continue on current source"}
-						</Button>
+						<div className="flex shrink-0 flex-wrap gap-2">
+							{dirtyItems.length > 0 ? (
+								<Button
+									size="sm"
+									variant="outline"
+									onClick={() => {
+										setDrafts({});
+										setBlankReasons({});
+									}}
+									disabled={busy !== null}
+								>
+									Discard unsaved edits
+								</Button>
+							) : null}
+							<Button
+								size="sm"
+								onClick={continueOnCurrentSource}
+								disabled={busy !== null || dirtyItems.length > 0}
+							>
+								<RefreshCw data-icon="inline-start" />
+								{busy === "continue-source"
+									? "Carrying work forward…"
+									: dirtyItems.length > 0
+										? "Resolve unsaved edits"
+										: "Continue on current source"}
+							</Button>
+						</div>
 					</AlertDescription>
 				</Alert>
 			) : null}
