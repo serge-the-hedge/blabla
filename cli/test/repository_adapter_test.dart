@@ -453,7 +453,7 @@ void main() {
       expect(
         output.toString(),
         allOf(
-          contains('Applied 1 existing-locale key; skipped 1.'),
+          contains('Applied 1 reviewed key; skipped 1.'),
           contains('Skipped farewell: source_changed.'),
           contains('gh pr create'),
           contains('--body-file'),
@@ -536,12 +536,59 @@ void main() {
         output.toString(),
         allOf(
           contains(
-            'Applied 1 existing-locale key; added Portuguese with 1 catalog value; skipped 1.',
+            'Applied 1 reviewed key; added Portuguese with 1 catalog value; skipped 1.',
           ),
           contains('git push'),
           contains('gh pr create'),
         ),
       );
+    },
+  );
+
+  test(
+    'delivers a reviewed Source proposal with Portuguese in one branch',
+    () async {
+      final fixture = await BrickitFixture.create();
+      addTearDown(fixture.dispose);
+      await fixture.addGermanCatalog();
+      final summary = await existingLocaleRelease(fixture);
+      final artifact = await combinedPortugueseArtifact(fixture, summary);
+      final output = StringBuffer();
+
+      final result = await ReleaseRepositoryAdapter().deliver(
+        ReleaseDeliveryRequest(
+          checkout: fixture.root,
+          recordId: summary.releaseRecord.id,
+          flutter: testFlutter(fixture.flutterExecutable),
+          gateway: SourceChangingReleaseGateway(summary),
+          localeProposal: LocaleProposalDeliveryInput(
+            proposalId: artifact.proposalId,
+            gateway: StaticLocaleProposalGateway(artifact),
+          ),
+          write: output.writeln,
+        ),
+      );
+
+      expect(
+        await fixture
+            .file('packages/brickit_generated/lib/l10n/intl_en.arb')
+            .readAsString(),
+        '{"@@locale":"en","welcome":"Welcome back, {name}!"}',
+      );
+      expect(
+        result.changedPaths,
+        contains('packages/brickit_generated/lib/l10n/intl_en.arb'),
+      );
+      expect(result.sourceChanged, isTrue);
+      expect(
+        await fixture.git(['show', '-s', '--format=%B', 'HEAD']),
+        contains('Blabla-Source-Changed: yes'),
+      );
+      expect(
+        await File(result.pullRequestBodyFile).readAsString(),
+        contains('Source catalog changed: yes'),
+      );
+      expect(output.toString(), contains('including reviewed Source changes'));
     },
   );
 
@@ -661,7 +708,7 @@ void main() {
           isA<RepositoryAdapterException>().having(
             (error) => error.message,
             'message',
-            contains('without changing any target catalog bytes'),
+            contains('without changing any bound catalog bytes'),
           ),
         ),
       );
@@ -996,6 +1043,37 @@ class SkippedReleaseGateway implements ReleaseGateway {
       SkippedReleaseKey(messageId: 'greeting', reason: 'source_changed'),
       SkippedReleaseKey(messageId: 'farewell', reason: 'missing_source'),
     ],
+  );
+}
+
+class SourceChangingReleaseGateway implements ReleaseGateway {
+  SourceChangingReleaseGateway(this.summary);
+
+  final ReleaseSummary summary;
+
+  @override
+  Future<ReleaseSummary> readRelease(String recordId) async => summary;
+
+  @override
+  Future<ReleaseDeliveryTree> createDeliveryTree(
+    String recordId,
+    List<DeliveryTreeFile> files,
+  ) async => ReleaseDeliveryTree(
+    releaseRecord: summary.releaseRecord,
+    files: files
+        .map(
+          (file) => file.catalogPath.endsWith('intl_en.arb')
+              ? const DeliveryTreeFile(
+                  catalogPath:
+                      'packages/brickit_generated/lib/l10n/intl_en.arb',
+                  content:
+                      '{"@@locale":"en","welcome":"Welcome back, {name}!"}',
+                )
+              : file,
+        )
+        .toList(),
+    applied: const ['welcome'],
+    skipped: const [],
   );
 }
 
