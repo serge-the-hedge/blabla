@@ -130,9 +130,13 @@ compatibility interface for clients that need explicit fingerprints,
 diagnostics, finalization, or artifact access.
 
 The proposal is pinned to the accepted Baseline Snapshot. If Git advances,
-staging and finalization return `STALE_SOURCE`; start a fresh proposal for the
-new baseline. A ready artifact is review-ready evidence for the later local
-Repository Adapter, not proof that Brickit has accepted it.
+staging and finalization return `STALE_SOURCE`, but the work is not assumed to be
+globally obsolete. An editor can continue the old task in the web app: Blabla
+creates a current-source task, carries forward human-authored or reviewed values
+whose Source Fingerprints still match, and exposes only changed or added Source
+values as residue for the agent. The old artifact stays immutable and
+inspectable. A ready current-source artifact is review-ready evidence for the
+later local Repository Adapter, not proof that Brickit has accepted it.
 
 Do not invent locale codes, screens, tags, or keys. Read them from
 `/projects/current` or `/strings/search`. If a target locale is missing, ask a

@@ -56,6 +56,18 @@ describe("localeProposalReviewState", () => {
 		expect(
 			localeProposalReviewState({
 				status: "ready",
+				isCurrentBaseline: false,
+				remaining: 0,
+				pendingHumanReview: { count: 0, hasMore: false },
+			}),
+		).toMatchObject({
+			phase: "previousSource",
+			badgeLabel: "Ready on previous source",
+			canFinalize: false,
+		});
+		expect(
+			localeProposalReviewState({
+				status: "ready",
 				isCurrentBaseline: true,
 				remaining: 0,
 				pendingHumanReview: { count: 0, hasMore: false },

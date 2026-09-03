@@ -33,6 +33,7 @@ export const MAX_LOCALE_PROPOSAL_VALUE_BYTES = 256 * 1024;
 export const MAX_LOCALE_PROPOSAL_VALUE_TOTAL_BYTES = 4 * 1024 * 1024;
 export const MAX_LOCALE_PROPOSAL_STAGE_ITEMS = 16;
 export const MAX_LOCALE_PROPOSAL_STAGE_BYTES = 512 * 1024;
+export const MAX_LOCALE_PROPOSAL_CARRY_ITEMS = 64;
 export const MAX_LOCALE_PROPOSAL_TEMPLATE_ITEMS = 16;
 export const MAX_LOCALE_PROPOSAL_TEMPLATE_BYTES = 512 * 1024;
 export const MAX_LOCALE_PROPOSAL_REVIEW_ITEMS = 48;
@@ -157,6 +158,14 @@ type LocaleProposalArtifact = {
 		content: string;
 		contentHash: string;
 	};
+};
+
+export type LocaleProposalCarryForwardResult = {
+	localeProposalId: Id<"localeProposals">;
+	carriedValueCount: number;
+	incompatibleValueCount: number;
+	remainingValueCount: number;
+	totalValueCount: number;
 };
 
 function encodedSize(value: unknown): number {
@@ -970,8 +979,7 @@ export const begin = internalMutation({
 export const assertEditor = internalQuery({
 	args: { projectId: v.id("projects") },
 	handler: async (ctx, args) => {
-		await requireEditor(ctx, args.projectId);
-		return null;
+		return await requireEditor(ctx, args.projectId);
 	},
 });
 
@@ -1039,6 +1047,15 @@ export const ensureForReview = mutation({
 		const { userId } = await requireEditor(ctx, args.projectId);
 		return await ensureLocaleProposalForReview(ctx, args.projectId, userId);
 	},
+});
+
+export const ensureForCarryForward = internalMutation({
+	args: {
+		projectId: v.id("projects"),
+		userId: v.string(),
+	},
+	handler: async (ctx, args) =>
+		await ensureLocaleProposalForReview(ctx, args.projectId, args.userId),
 });
 
 export const currentForReview = query({
@@ -1139,6 +1156,306 @@ export const valuesForFinalization = internalQuery({
 			);
 		}
 		return { proposal, values };
+	},
+});
+
+/** Read only values whose human work may survive a source update. A finalized
+ * proposal has already passed review as a whole; a draft contributes only
+ * values authored or accepted by a person, never unreviewed agent output. */
+export const valuesForCarryForward = internalQuery({
+	args: {
+		projectId: v.id("projects"),
+		fromProposalId: v.id("localeProposals"),
+		toProposalId: v.id("localeProposals"),
+	},
+	handler: async (ctx, args) => {
+		const [project, fromProposal, toProposal] = await Promise.all([
+			projectFor(ctx, args.projectId),
+			ctx.db.get(args.fromProposalId),
+			ctx.db.get(args.toProposalId),
+		]);
+		if (
+			!fromProposal ||
+			fromProposal.projectId !== args.projectId ||
+			!toProposal ||
+			toProposal.projectId !== args.projectId
+		) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Locale Proposal continuation was not found.",
+			});
+		}
+		if (fromProposal._id === toProposal._id) {
+			validationError("The Locale Proposal is already on the current Source.");
+		}
+		if (
+			toProposal.status !== "draft" ||
+			project.baselineSnapshotId !== toProposal.sourceSnapshotId
+		) {
+			sourceStaleError();
+		}
+		assertProposalEnvelope(fromProposal);
+		assertProposalEnvelope(toProposal);
+		const values = await ctx.db
+			.query("localeProposalValues")
+			.withIndex("by_proposal", (q) => q.eq("proposalId", fromProposal._id))
+			.take(MAX_LOCALE_PROPOSAL_MESSAGES + 1);
+		if (values.length > MAX_LOCALE_PROPOSAL_MESSAGES) {
+			integrityError("Portuguese Locale Proposal exceeds its value envelope.");
+		}
+		const source = await pinnedSourceEvidenceForProposal(
+			ctx,
+			project,
+			toProposal,
+		);
+		return {
+			source,
+			values: values
+				.filter(
+					(value) =>
+						fromProposal.status === "ready" || value.updatedBy.kind !== "agent",
+				)
+				.map((value) => ({
+					messageId: value.messageId,
+					value: value.value,
+					sourceFingerprint: value.sourceFingerprint,
+					...(value.intentionalBlankReason === undefined
+						? {}
+						: { intentionalBlankReason: value.intentionalBlankReason }),
+				})),
+		};
+	},
+});
+
+/** Materialize one bounded continuation slice. Existing current-source work is
+ * authoritative and is never overwritten; changed or removed source values
+ * become ordinary residue instead of invalidating the whole proposal. */
+export const carryForwardBatch = internalMutation({
+	args: {
+		projectId: v.id("projects"),
+		fromProposalId: v.id("localeProposals"),
+		toProposalId: v.id("localeProposals"),
+		items: v.array(
+			v.object({
+				messageId: v.string(),
+				value: v.string(),
+				sourceFingerprint: v.string(),
+				intentionalBlankReason: v.optional(v.string()),
+			}),
+		),
+	},
+	handler: async (ctx, args) => {
+		if (
+			args.items.length === 0 ||
+			args.items.length > MAX_LOCALE_PROPOSAL_CARRY_ITEMS ||
+			encodedSize(args.items) > MAX_LOCALE_PROPOSAL_STAGE_BYTES
+		) {
+			validationError(
+				"Locale Proposal continuation exceeds its bounded envelope.",
+			);
+		}
+		const [project, fromProposal, toProposal, projection] = await Promise.all([
+			projectFor(ctx, args.projectId),
+			ctx.db.get(args.fromProposalId),
+			ctx.db.get(args.toProposalId),
+			activeProjectionFor(ctx, args.projectId),
+		]);
+		if (
+			!fromProposal ||
+			fromProposal.projectId !== args.projectId ||
+			!toProposal ||
+			toProposal.projectId !== args.projectId
+		) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Locale Proposal continuation was not found.",
+			});
+		}
+		if (
+			toProposal.status !== "draft" ||
+			project.baselineSnapshotId !== toProposal.sourceSnapshotId ||
+			projection?.snapshotId !== toProposal.sourceSnapshotId
+		) {
+			sourceStaleError();
+		}
+		assertProposalEnvelope(toProposal);
+		let carriedValueCount = 0;
+		let skippedExistingCount = 0;
+		let nextCount = toProposal.stagedValueCount;
+		let nextByteLength = toProposal.stagedValueByteLength;
+		const seen = new Set<string>();
+		for (const item of args.items) {
+			if (seen.has(item.messageId)) {
+				validationError(
+					"A Locale Proposal continuation repeats a message identity.",
+				);
+			}
+			seen.add(item.messageId);
+			const existing = await ctx.db
+				.query("localeProposalValues")
+				.withIndex("by_proposal_and_messageId", (q) =>
+					q.eq("proposalId", toProposal._id).eq("messageId", item.messageId),
+				)
+				.unique();
+			if (existing) {
+				skippedExistingCount += 1;
+				continue;
+			}
+			const byteLength = valueByteLength(item);
+			nextCount += 1;
+			nextByteLength += byteLength;
+			await ctx.db.insert("localeProposalValues", {
+				projectId: args.projectId,
+				proposalId: toProposal._id,
+				messageId: item.messageId,
+				value: item.value,
+				sourceFingerprint: item.sourceFingerprint,
+				...(item.intentionalBlankReason === undefined
+					? {}
+					: { intentionalBlankReason: item.intentionalBlankReason }),
+				byteLength,
+				updatedBy: { kind: "system", id: args.fromProposalId },
+				updatedAt: now(),
+			});
+			carriedValueCount += 1;
+		}
+		if (
+			nextCount > toProposal.sourceMessageCount ||
+			nextByteLength > MAX_LOCALE_PROPOSAL_VALUE_TOTAL_BYTES
+		) {
+			validationError(
+				"Portuguese Locale Proposal exceeds its complete value envelope.",
+			);
+		}
+		if (carriedValueCount > 0) {
+			await ctx.db.patch(toProposal._id, {
+				stagedValueCount: nextCount,
+				stagedValueByteLength: nextByteLength,
+				revision: toProposal.revision + 1,
+				diagnosticGeneration: toProposal.diagnosticGeneration + 1,
+				diagnosticCount: 0,
+				updatedAt: now(),
+			});
+		}
+		return {
+			carriedValueCount,
+			skippedExistingCount,
+		};
+	},
+});
+
+function carryForwardBatches(
+	values: ProposalValueInput[],
+): ProposalValueInput[][] {
+	const batches: ProposalValueInput[][] = [];
+	let batch: ProposalValueInput[] = [];
+	for (const value of values) {
+		const candidate = [...batch, value];
+		if (
+			batch.length > 0 &&
+			(candidate.length > MAX_LOCALE_PROPOSAL_CARRY_ITEMS ||
+				encodedSize(candidate) > MAX_LOCALE_PROPOSAL_STAGE_BYTES)
+		) {
+			batches.push(batch);
+			batch = [value];
+		} else {
+			batch = candidate;
+		}
+	}
+	if (batch.length > 0) batches.push(batch);
+	return batches;
+}
+
+/** Continue reusable human work onto the current source proposal. The process
+ * is retry-safe: completed slices are detected as existing and never replaced. */
+export async function carryForwardLocaleProposal(
+	ctx: ActionCtx,
+	args: {
+		projectId: Id<"projects">;
+		fromProposalId: Id<"localeProposals">;
+		userId: string;
+	},
+): Promise<LocaleProposalCarryForwardResult> {
+	const ensured: { proposalId: Id<"localeProposals"> } = await ctx.runMutation(
+		internal.localeProposals.ensureForCarryForward,
+		{ projectId: args.projectId, userId: args.userId },
+	);
+	const toProposalId = ensured.proposalId;
+	if (toProposalId === args.fromProposalId) {
+		throw new ConvexError({
+			code: "BAD_STATE",
+			message: "This Locale Proposal already uses the current Source.",
+		});
+	}
+	const carrySource: {
+		source: SourceEvidence;
+		values: ProposalValueInput[];
+	} = await ctx.runQuery(internal.localeProposals.valuesForCarryForward, {
+		projectId: args.projectId,
+		fromProposalId: args.fromProposalId,
+		toProposalId,
+	});
+	const currentDocument = await readSourceDocument(ctx, carrySource.source);
+	const currentSourceFingerprints = new Map(
+		await Promise.all(
+			currentDocument.messages.map(
+				async (message) =>
+					[message.id, await sourceFingerprint(message)] as const,
+			),
+		),
+	);
+	const values = carrySource.values.filter(
+		(value) =>
+			currentSourceFingerprints.get(value.messageId) ===
+			value.sourceFingerprint,
+	);
+	let carriedValueCount = 0;
+	const incompatibleValueCount = carrySource.values.length - values.length;
+	for (const items of carryForwardBatches(values)) {
+		const result = await ctx.runMutation(
+			internal.localeProposals.carryForwardBatch,
+			{
+				projectId: args.projectId,
+				fromProposalId: args.fromProposalId,
+				toProposalId,
+				items,
+			},
+		);
+		carriedValueCount += result.carriedValueCount;
+	}
+	const current: LocaleProposalSummary = await ctx.runQuery(
+		internal.localeProposals.read,
+		{
+			projectId: args.projectId,
+			proposalId: toProposalId,
+		},
+	);
+	return {
+		localeProposalId: toProposalId,
+		carriedValueCount,
+		incompatibleValueCount,
+		remainingValueCount: current.progress.remaining,
+		totalValueCount: current.progress.total,
+	};
+}
+
+export const carryForwardForReview = action({
+	args: {
+		projectId: v.id("projects"),
+		proposalId: v.id("localeProposals"),
+	},
+	handler: async (ctx, args): Promise<LocaleProposalCarryForwardResult> => {
+		const editor: { userId: string } = await ctx.runQuery(
+			internal.localeProposals.assertEditor,
+			{
+				projectId: args.projectId,
+			},
+		);
+		return await carryForwardLocaleProposal(ctx, {
+			projectId: args.projectId,
+			fromProposalId: args.proposalId,
+			userId: editor.userId,
+		});
 	},
 });
 
@@ -2116,21 +2433,25 @@ export const getForReview = query({
 				message: "New-Locale Translation Task not found.",
 			});
 		}
+		const taskSummary = task
+			? {
+					taskId: task._id,
+					status: task.status,
+					candidateCount: task.candidateCount,
+					revisionCount: task.revisionCount,
+					targetCount:
+						task.localeProposalTaskScope?.targetCount ??
+						proposal.sourceMessageCount,
+				}
+			: null;
 		const source = await pinnedSourceEvidenceForProposal(
 			ctx,
 			project,
 			proposal,
 		);
 		const projection = await activeProjectionFor(ctx, proposal.projectId);
-		if (
-			!projection ||
-			projection.snapshotId !== proposal.sourceSnapshotId ||
-			proposal.sourceMessageCount > MAX_LOCALE_PROPOSAL_MESSAGES
-		) {
-			throw new ConvexError({
-				code: "STALE_BASIS",
-				message: "The active source Catalog no longer matches this proposal.",
-			});
+		if (proposal.sourceMessageCount > MAX_LOCALE_PROPOSAL_MESSAGES) {
+			integrityError("Locale Proposal exceeds its source message envelope.");
 		}
 		const snapshot = await ctx.db.get(proposal.sourceSnapshotId);
 		if (!snapshot || snapshot.projectId !== proposal.projectId) {
@@ -2153,6 +2474,39 @@ export const getForReview = query({
 				MAX_LOCALE_PROPOSAL_MESSAGE_ID_BYTES
 		) {
 			validationError("Locale Proposal review cursor is invalid.");
+		}
+		if (
+			(!projection || projection.snapshotId !== proposal.sourceSnapshotId) &&
+			source.isCurrentBaseline
+		) {
+			integrityError(
+				"The active Catalog Workspace does not match the current Baseline Snapshot.",
+			);
+		}
+		if (!projection || projection.snapshotId !== proposal.sourceSnapshotId) {
+			return {
+				proposal: proposalSummary(
+					proposal,
+					snapshot,
+					false,
+					diagnostics,
+					source.integrationBranch,
+				),
+				locale: {
+					code: proposal.localeCode,
+					runtimeLocale: proposal.runtimeLocale,
+				},
+				task: taskSummary,
+				messages: [],
+				cursor,
+				windowEnd: cursor,
+				continueCursor: null,
+				pendingQueueContinueCursor: null,
+				isDone: true,
+				pendingHumanReview: { count: 0, hasMore: false },
+				diagnostics,
+				isCurrentBaseline: false,
+			};
 		}
 		const pendingAgentValueSummaryWindow =
 			proposal.status === "draft"
@@ -2443,17 +2797,7 @@ export const getForReview = query({
 				code: proposal.localeCode,
 				runtimeLocale: proposal.runtimeLocale,
 			},
-			task: task
-				? {
-						taskId: task._id,
-						status: task.status,
-						candidateCount: task.candidateCount,
-						revisionCount: task.revisionCount,
-						targetCount:
-							task.localeProposalTaskScope?.targetCount ??
-							proposal.sourceMessageCount,
-					}
-				: null,
+			task: taskSummary,
 			messages,
 			cursor,
 			windowEnd: lastScanned?.catalogIndex ?? cursor,
