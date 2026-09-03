@@ -364,7 +364,11 @@ async function classifyTarget(
 		valueFingerprint: input.target.valueFingerprint,
 	});
 	const findings: Array<{
-		kind: "contract_invalid" | "missing_value" | "semantic_source_change";
+		kind:
+			| "contract_invalid"
+			| "missing_value"
+			| "semantic_source_change"
+			| "introduction_review";
 		reasonCodes?: Doc<"catalogProjectionTranslationResidues">["reasons"][number]["code"][];
 	}> = [];
 	let contractInvalid = false;
@@ -422,6 +426,13 @@ async function classifyTarget(
 		if (sourceChangeKind === "semantic") {
 			findings.push({ kind: "semantic_source_change" });
 		}
+	}
+	// Waiting, invalid, and semantic-stale findings already demand the same
+	// human gesture that completes First Review. Add introduction_review only
+	// when provenance is the otherwise invisible reason this current value must
+	// be examined, so one target never reports two decisions for one action.
+	if (input.target.firstReviewPending === true && findings.length === 0) {
+		findings.push({ kind: "introduction_review" });
 	}
 	const sourceValueFingerprint = input.digest.pendingSourceProposal
 		? await sha256Hex(input.sourceProposal?.sourceValue ?? sourceRow.value)

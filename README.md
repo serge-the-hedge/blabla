@@ -66,6 +66,10 @@ The setup page is the workflow surface. Project ids, Convex URLs, token scopes,
 snapshot ids, and proposal ids are implementation details unless you open an
 advanced/API view.
 
+For the authoritative map of how one catalog message moves from Git import,
+through human or agent review, into a shipped Flutter application, see
+[Catalog Message Lifecycle](docs/catalog-message-lifecycle.md).
+
 An unpublished local checkout needs no CLI installation. The web app shows
 repository-local commands in development:
 

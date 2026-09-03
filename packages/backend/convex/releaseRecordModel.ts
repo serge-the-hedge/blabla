@@ -64,6 +64,7 @@ export const findingValidator = v.object({
 		v.literal("contract_invalid"),
 		v.literal("missing_value"),
 		v.literal("semantic_source_change"),
+		v.literal("introduction_review"),
 	),
 	reasonCodes: v.optional(
 		v.array(
@@ -149,10 +150,12 @@ export function releasePostureFor(input: {
 
 export function isReleaseDelta(input: {
 	pendingSourceProposal: boolean;
+	introductionReviewPending?: number;
 	targets: readonly { touched: boolean }[];
 }) {
 	return (
 		input.pendingSourceProposal ||
+		(input.introductionReviewPending ?? 0) > 0 ||
 		input.targets.some((target) => target.touched)
 	);
 }
@@ -182,7 +185,11 @@ export function deliberateEvidenceFor(input: {
 
 export function releaseTargetContribution(input: {
 	findings: readonly {
-		kind: "contract_invalid" | "missing_value" | "semantic_source_change";
+		kind:
+			| "contract_invalid"
+			| "missing_value"
+			| "semantic_source_change"
+			| "introduction_review";
 	}[];
 	evidence: { kind: "intentional_blank" } | { kind: "source_identical" } | null;
 	unconfirmedImport: boolean;

@@ -540,7 +540,11 @@ export function reconciliationReportDraft(input: {
 			if (message.isSource) continue;
 			const source = currentSource.get(message.messageId);
 			if (!source || !previousSource.has(message.messageId)) {
-				if (message.materialized && source) {
+				// Every target on a post-bootstrap key is new review work. A value
+				// already present in Git may be a placeholder just as easily as a
+				// materialized empty slot, so the report must not equate population
+				// with prior review.
+				if (source) {
 					const row = rowForKey(
 						rows,
 						"to_translate",

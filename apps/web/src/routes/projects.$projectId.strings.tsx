@@ -48,7 +48,10 @@ const EMPTY_STRINGS_WINDOW_MESSAGE_IDS: string[] = [];
 
 function isCatalogValueScope(value: unknown): value is CatalogValueScope {
 	return (
-		value === "waiting" || value === "unconfirmedImport" || value === "stale"
+		value === "waiting" ||
+		value === "unconfirmedImport" ||
+		value === "stale" ||
+		value === "introduced"
 	);
 }
 

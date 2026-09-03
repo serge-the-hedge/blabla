@@ -9,7 +9,11 @@ export type StringsCatalogNavigationState = {
 	handoffMessageIds?: readonly string[];
 };
 
-export type CatalogValueScope = "waiting" | "unconfirmedImport" | "stale";
+export type CatalogValueScope =
+	| "waiting"
+	| "unconfirmedImport"
+	| "stale"
+	| "introduced";
 
 /** An editable target's place in the locally loaded Catalog Workspace. The
  * component owns DOM focus; this module owns the deterministic movement rule. */
@@ -68,6 +72,7 @@ export type StringsNavigationDigest = {
 	messageId: string;
 	catalogIndex: number;
 	searchCorpus: readonly string[];
+	introductionReviewPending: number;
 	source: {
 		localeId: string;
 		gitValueFingerprint: string;
@@ -75,10 +80,11 @@ export type StringsNavigationDigest = {
 	targets: readonly {
 		localeId: string;
 		localeCode: string;
-		valueState: CatalogValueScope | "settled";
+		valueState: CatalogWorkspaceValue["valueState"];
 		touched: boolean;
 		confirmedGitContent: boolean;
 		confirmedContentPreviously: boolean;
+		firstReviewPending: boolean;
 		repeatedGitContent?: boolean;
 		gitValueFingerprint?: string;
 	}[];
@@ -144,6 +150,7 @@ function matchesDigestScope(
 ) {
 	return (
 		scope === undefined ||
+		(scope === "introduced" && digest.introductionReviewPending > 0) ||
 		digest.targets.some((target) => target.valueState === scope)
 	);
 }

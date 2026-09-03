@@ -32,6 +32,7 @@ import {
 import {
 	assignGitValueRevisions,
 	assignValueFingerprints,
+	attachIntroductionReviews,
 	automaticRestorationBatches,
 	automaticRestorationEnvelope,
 	automaticRestorations,
@@ -1851,9 +1852,16 @@ async function stageProjection(
 			previousSubmittedTargetFingerprintsByValue:
 				previousSubmittedTargetFingerprints,
 		});
+		const rowsWithIntroductions = attachIntroductionReviews({
+			hadPreviousBaseline: previous.previousProjectionId !== null,
+			previousMessages: previous.messages,
+			retainedMessages: priorArchiveState.state.values,
+			currentMessages: contract.messages,
+			introducedAt: now(),
+		});
 		const rows = materializeRepeatedGitContent(
 			await assignValueFingerprints(
-				assignGitValueRevisions(previous.messages, contract.messages),
+				assignGitValueRevisions(previous.messages, rowsWithIntroductions),
 			),
 		);
 		const residues = translationResidues(contract.consequences);

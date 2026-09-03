@@ -519,6 +519,13 @@ styled as missing, but the key carries a mark), and **Settled** (silent). The
 mark is cleared by the confirm gesture that already exists, so dismissing a
 correct `Unlock` costs one click.
 
+**Introduced Message is orthogonal, key-level work.** A key first accepted from
+Git after bootstrap remains in the **New from Git** Catalog Scope until every
+target Locale active at introduction receives a deliberate First Review. Its
+populated targets are still Unconfirmed Imports and its empty targets are still
+Waiting; the introduction does not invent a fourth value state. See the
+[Catalog Message Lifecycle](../catalog-message-lifecycle.md).
+
 ### 8.3 ICU shapes
 
 A message is a stack of **Message Segments** in reading order, and **every**
@@ -648,7 +655,7 @@ Three postures, and no others:
 |---|---|
 | **Blocked** | Contract Validity fails. Non-waivable. |
 | **Needs Decisions** | A value is undecided, empty with no recorded reason, or its English changed semantically under it in Git. |
-| **Ready** | Every target is current or carries confirmed intentional output. |
+| **Ready** | Every target is current or carries confirmed intentional output, and every Introduced Message has completed First Review. |
 
 What blocks, precisely:
 
@@ -663,6 +670,7 @@ What blocks, precisely:
 | Source Echo | No |
 | Dictionary Conflict | No |
 | **Unconfirmed Import** | **No** |
+| **Unresolved Introduced Message** | **Yes** |
 
 **Unconfirmed Imports never block, and add no posture.** They are present,
 plausible, and in the right language — exactly what Brickit ships today. Gating
@@ -670,6 +678,12 @@ plausible, and in the right language — exactly what Brickit ships today. Gatin
 workflow it replaces. A release containing 39 unconfirmed keys assesses
 **Ready**. [Decide how machine-generated placeholder translations are
 handled](https://github.com/serge-the-hedge/blabla/issues/28)
+
+That non-blocking rule applies to ordinary imported backlog, not to a known
+post-bootstrap introduction. New Git keys commonly carry provisional target
+text; presence is not First Review, `ordinary-v1` cannot supply it, and a release
+assessment remains **Needs Decisions** until its frozen introduction scope is
+reviewed.
 
 ### 9.2 The surface
 
@@ -936,6 +950,9 @@ and cutover](https://github.com/serge-the-hedge/blabla/issues/13)
    for deliberate review. The one-time bootstrap records the named system policy
    only after a human approves this exact preview; ordinary product use records
    the authenticated editor instead.
+
+After this one bootstrap decision, a later Git introduction is never eligible
+for `ordinary-v1`, even when every target is non-empty and otherwise ordinary.
 
 **Shadow release**, both gates mechanical, before any bundle is authoritative:
 a **no-op** bundle reproducing the six ARB files byte for byte with a clean

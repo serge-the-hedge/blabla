@@ -664,6 +664,54 @@ describe("Release Records", () => {
 		});
 	});
 
+	test("gates populated targets introduced after bootstrap until First Review", async () => {
+		const user = await authenticatedBackend(t, "release-introduced");
+		const { projectId } = await createCatalog(user);
+		await user.action(api.snapshots.ingest, {
+			projectId,
+			repository: "repo",
+			commit: "next",
+			lineage: {
+				baselineCommit: "baseline",
+				relationship: "descendant",
+				mergeBase: "baseline",
+			},
+			files: [
+				{
+					catalogPath: "en.arb",
+					content:
+						'{"@@locale":"en","greeting":"Hello","newKey":"Draft source"}',
+				},
+				{
+					catalogPath: "de.arb",
+					content:
+						'{"@@locale":"de","greeting":"Hallo","newKey":"Platzhalter"}',
+				},
+			],
+		});
+
+		const record = await prepareAndFinish(user, projectId);
+		expect(record).toMatchObject({
+			status: "ready",
+			posture: "needsDecisions",
+			deltaKeyCount: 1,
+			needsDecisionCount: 1,
+		});
+		const details = await user.query(api.releaseRecords.details, {
+			recordId: record.recordId,
+			findingCursor: -1,
+			evidenceCursor: -1,
+			limit: 8,
+		});
+		expect(details.findings).toEqual([
+			expect.objectContaining({
+				messageId: "newKey",
+				localeCode: "de",
+				kind: "introduction_review",
+			}),
+		]);
+	}, 30_000);
+
 	test("pages complete finding and evidence key groups", async () => {
 		const user = await authenticatedBackend(t, "release-details");
 		const { projectId, targetId } = await createCatalog(user);

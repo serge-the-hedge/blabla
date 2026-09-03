@@ -138,6 +138,7 @@ export type StringsOrdinaryImportsSummary = {
 	stale: number;
 	alreadyConfirmed: number;
 	pendingSourceProposal: number;
+	introduced: number;
 	run: {
 		status: "running" | "done" | "superseded" | "failed";
 		confirmed: number;
@@ -738,6 +739,7 @@ function hasMultipleIcuArms(catalogKey: StringsCatalogKey): boolean {
 
 const CatalogKeyCard = memo(function CatalogKeyCard({
 	catalogKey,
+	introductionReviewPending,
 	highlighted,
 	onNavigationChange,
 	onCommitValue,
@@ -747,6 +749,7 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 	onSelectedChange,
 }: {
 	catalogKey: StringsCatalogKey;
+	introductionReviewPending: number;
 	highlighted: boolean;
 	onNavigationChange: (state: StringsCatalogNavigationState) => void;
 	onCommitValue?: CommitCatalogValue;
@@ -801,6 +804,14 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 						className="inline-flex shrink-0 text-muted-foreground/45"
 					>
 						<GitBranch aria-hidden="true" className="size-3.5" />
+					</span>
+				) : null}
+				{introductionReviewPending > 0 ? (
+					<span
+						title="Imported after this project's initial Baseline and awaiting its first review"
+						className="shrink-0 rounded-full bg-sky-500/10 px-1.5 py-0.5 font-medium text-[10px] text-sky-700 dark:text-sky-300"
+					>
+						New from Git · {introductionReviewPending}
 					</span>
 				) : null}
 				{/* Only work that is waiting on someone earns a word in the header.
@@ -896,6 +907,7 @@ function EmptySearchResult() {
 }
 
 const CATALOG_SCOPE_DEFINITIONS = [
+	{ scope: "introduced", label: "New from Git", countKey: "introduced" },
 	{ scope: "waiting", label: "Waiting", countKey: "waiting" },
 	{
 		scope: "unconfirmedImport",
@@ -906,7 +918,7 @@ const CATALOG_SCOPE_DEFINITIONS = [
 ] as const satisfies ReadonlyArray<{
 	scope: CatalogValueScope;
 	label: string;
-	countKey: "waiting" | "unconfirmedImport" | "stale";
+	countKey: "introduced" | "waiting" | "unconfirmedImport" | "stale";
 }>;
 
 function BatchImportConfirmation({
@@ -926,7 +938,8 @@ function BatchImportConfirmation({
 		summary.repeated +
 		summary.modified +
 		summary.stale +
-		summary.pendingSourceProposal;
+		summary.pendingSourceProposal +
+		summary.introduced;
 
 	if (summary.run?.status === "running") {
 		return (
@@ -964,6 +977,13 @@ function BatchImportConfirmation({
 							edited values stay unconfirmed. The run walks the whole catalog in
 							order and re-checks the Baseline before recording each value.
 						</span>
+						{summary.introduced > 0 ? (
+							<span className="mt-2 block">
+								{NUMBER_FORMAT.format(summary.introduced)} values belong to keys
+								newly imported from Git. They require a deliberate first review
+								and are never included in this ordinary confirmation.
+							</span>
+						) : null}
 						{summary.run?.status === "done" ? (
 							<span className="mt-2 block">
 								Last run: {NUMBER_FORMAT.format(summary.run.confirmed)}{" "}
@@ -1003,6 +1023,7 @@ function BatchImportConfirmation({
 
 function CatalogScopeStrip({
 	counts,
+	introducedMessageCount,
 	navigationState,
 	onNavigationChange,
 	ordinaryImports,
@@ -1011,6 +1032,7 @@ function CatalogScopeStrip({
 	workHandoff,
 }: {
 	counts: NonNullable<StringsNavigationRead["valueStateCounts"]>;
+	introducedMessageCount: number;
 	navigationState: StringsCatalogNavigationState;
 	onNavigationChange: (state: StringsCatalogNavigationState) => void;
 	ordinaryImports?: StringsOrdinaryImportsSummary;
@@ -1042,7 +1064,8 @@ function CatalogScopeStrip({
 			) : null}
 			{CATALOG_SCOPE_DEFINITIONS.map(({ scope, label, countKey }) => {
 				const active = navigationState.scope === scope;
-				const count = counts[countKey];
+				const count =
+					countKey === "introduced" ? introducedMessageCount : counts[countKey];
 				return (
 					<Button
 						key={scope}
@@ -1488,6 +1511,7 @@ function VirtualizedCatalog({
 							{card ? (
 								<CatalogKeyCard
 									catalogKey={card}
+									introductionReviewPending={digest.introductionReviewPending}
 									highlighted={digest.messageId === targetId}
 									onNavigationChange={onNavigationChange}
 									onCommitValue={onCommitValue}
@@ -1703,6 +1727,13 @@ function StringsCatalogNavigator({
 	);
 	const projectionId = navigation.projectionId ?? "";
 	const keyCount = navigation.keyCount ?? matching.matchingDigests.length;
+	const introducedMessageCount = useMemo(
+		() =>
+			(navigation.keys ?? []).filter(
+				(digest) => digest.introductionReviewPending > 0,
+			).length,
+		[navigation.keys],
+	);
 	const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(
 		() => new Set(),
 	);
@@ -1797,6 +1828,7 @@ function StringsCatalogNavigator({
 			{navigation.valueStateCounts ? (
 				<CatalogScopeStrip
 					counts={navigation.valueStateCounts}
+					introducedMessageCount={introducedMessageCount}
 					navigationState={navigationState}
 					onNavigationChange={onNavigationChange}
 					ordinaryImports={ordinaryImports}

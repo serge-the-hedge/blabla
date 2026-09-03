@@ -186,8 +186,12 @@ function stripSystemFields(row: Doc<"catalogWorkspaceNavigationRows">) {
 		catalogIndex: row.catalogIndex,
 		searchCorpus: row.searchCorpus,
 		pendingSourceProposal: row.pendingSourceProposal,
+		introductionReviewPending: row.introductionReviewPending ?? 0,
 		source: row.source,
-		targets: row.targets,
+		targets: row.targets.map((target) => ({
+			...target,
+			firstReviewPending: target.firstReviewPending ?? false,
+		})),
 	};
 }
 
@@ -379,6 +383,70 @@ describe("Catalog Navigation Index", () => {
 			return { row: JSON.stringify(row), state: JSON.stringify(state) };
 		});
 		expect(after).toEqual(before);
+	}, 30_000);
+
+	test("keeps a populated post-bootstrap key in First Review until a person confirms it", async () => {
+		const user = await authenticatedBackend(t, "nav-introduced");
+		const projectId = await createProject(user);
+		const { targetId } = await bindEnglishAndGerman(user, projectId);
+		await ingestCatalog(user, { projectId, commit: "baseline" });
+		await user.action(api.snapshots.ingest, {
+			projectId,
+			repository: "repo",
+			commit: "next",
+			lineage: {
+				baselineCommit: "baseline",
+				relationship: "descendant",
+				mergeBase: "baseline",
+			},
+			files: [
+				{
+					catalogPath: "en.arb",
+					content:
+						'{"@@locale":"en","greeting":"Hello {name}","@greeting":{"placeholders":{"name":{"type":"String"}}},"farewell":"Goodbye","newKey":"Draft source"}',
+				},
+				{
+					catalogPath: "de.arb",
+					content:
+						'{"@@locale":"de","greeting":"Hallo {name}","farewell":"Tschüss","newKey":"Platzhalter"}',
+				},
+			],
+		});
+		const before = await t.run(async (ctx) => ({
+			row: await readNavigationRow(ctx, projectId, "newKey"),
+			state: await readNavigationState(ctx, projectId),
+		}));
+		expect(before.row).toMatchObject({
+			introductionReviewPending: 1,
+			targets: [{ localeId: targetId, firstReviewPending: true }],
+		});
+		expect(before.state?.ordinaryImportCounts).toMatchObject({
+			introduced: 1,
+		});
+
+		const workspace = await readWorkspace(user, projectId);
+		const target = workspaceValueOrThrow(
+			workspace,
+			"newKey",
+			(value) => !value.isSource,
+		);
+		await user.mutation(api.catalogWorkspace.commit, {
+			projectId,
+			messageId: "newKey",
+			localeId: targetId,
+			intent: { kind: "confirm" },
+			expectedGitValueFingerprint: target.gitValueFingerprint,
+			expectedGitValueRevision: target.gitValueRevision,
+			expectedWorkspaceRevision: target.workspaceRevision,
+			expectedSourceFingerprint: target.expectedSourceFingerprint,
+		});
+		const after = await t.run(
+			async (ctx) => await readNavigationRow(ctx, projectId, "newKey"),
+		);
+		expect(after).toMatchObject({
+			introductionReviewPending: 0,
+			targets: [{ localeId: targetId, firstReviewPending: false }],
+		});
 	}, 30_000);
 
 	test("recompute without an active Baseline stays a no-op", async () => {

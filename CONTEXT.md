@@ -45,6 +45,18 @@ values, per-message metadata, and document globals. It remains snapshot-bound
 evidence; catalog state exposes only the workflow facts derived from it.
 _Avoid_: message table, editable metadata
 
+**Catalog Message**:
+A stable message identifier joining one Source Contract to its target-Locale
+values and history. The identifier is the key; each Locale's text is a value,
+so neither should be called the string when the distinction matters.
+_Avoid_: string, translation row
+
+**Target Value**:
+The content one target Locale currently renders for a Catalog Message, together
+with the Source Fingerprint it answers. Presence, validity, and human
+confirmation are independent facts about it.
+_Avoid_: translation status, translated string
+
 **Baseline Snapshot**:
 A Source Snapshot from the configured release ref that anchors the accepted
 working catalog.
@@ -227,6 +239,22 @@ _Avoid_: direct unarchive, undo
 A durable, snapshot-bound record of detected changes and automatic actions,
 with recovery links but no pre-approval gate.
 _Avoid_: toast, approval queue
+
+**Introduced Message**:
+A Catalog Message first accepted from Git after the bootstrap Baseline whose
+target Locales active at that introduction have not all received a deliberate
+First Review. It is durable work provenance, not a content quality guess, and
+an archived or restored message retains its own provenance rather than becoming
+new again.
+_Avoid_: new string, Unconfirmed Import, recent key
+
+**First Review**:
+The first deliberate human decision for one target Locale of an Introduced
+Message: confirm, edit and save, accept a reviewed candidate, or record an
+Intentional Blank. It cannot be supplied by an agent or an ordinary-import
+batch, and later content changes remain governed by Translator Confirmation and
+Source Fingerprints.
+_Avoid_: automatic approval, bootstrap confirmation, translation presence
 
 **Release Scope**:
 The active, bound target Locales on a Baseline Snapshot that must be assessed

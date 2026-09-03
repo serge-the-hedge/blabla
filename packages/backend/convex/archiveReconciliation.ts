@@ -1214,6 +1214,12 @@ function archivedValueFromRow(
 			: {
 					declaredPlaceholderNameCount: row.declaredPlaceholderNameCount,
 				}),
+		...(row.introducedAt === undefined
+			? {}
+			: {
+					introducedAt: row.introducedAt,
+					introductionLocaleIds: [...(row.introductionLocaleIds ?? [])],
+				}),
 		materialized: row.materialized,
 		keyArchived: row.keyArchived,
 		localeArchived: row.localeArchived,

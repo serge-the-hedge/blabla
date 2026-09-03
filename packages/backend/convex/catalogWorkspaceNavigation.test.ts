@@ -229,6 +229,7 @@ describe("deriveNavigationDigest", () => {
 				touched: false,
 				confirmedGitContent: false,
 				confirmedContentPreviously: false,
+				firstReviewPending: false,
 				valueFingerprint: await sha256Hex("Hallo {name}"),
 				gitValueFingerprint: await sha256Hex("Hallo {name}"),
 			},
