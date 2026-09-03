@@ -20,6 +20,7 @@ import {
 } from "@/components/localization/project-shell";
 import { TranslationReviewEditor } from "@/components/localization/translation-review-value-editor";
 import { WhitespaceFacts } from "@/components/localization/whitespace-facts";
+import { canRecordIntentionalBlank } from "@/lib/catalog-value-lifecycle";
 import { api, convexId } from "@/lib/convex-api";
 import {
 	convexApplicationErrorMessage,
@@ -606,18 +607,20 @@ function ProposalDetailRoute() {
 												<TranslationReviewEditor.RevertChanges />
 											</TranslationReviewEditor.Actions>
 										</TranslationReviewEditor.Provider>
-										<Input
-											aria-label={`Reason for intentionally blank ${revision.messageId}`}
-											placeholder="Reason for an intentional blank"
-											value={blankReasons[revision._id] ?? ""}
-											onChange={(event) =>
-												setBlankReasons((previous) => ({
-													...previous,
-													[revision._id]: event.target.value,
-												}))
-											}
-											disabled={!canReview || reviewBusy || isReviewed}
-										/>
+										{canRecordIntentionalBlank(draft) ? (
+											<Input
+												aria-label={`Reason for intentionally blank ${revision.messageId}`}
+												placeholder="Reason for an intentional blank"
+												value={blankReasons[revision._id] ?? ""}
+												onChange={(event) =>
+													setBlankReasons((previous) => ({
+														...previous,
+														[revision._id]: event.target.value,
+													}))
+												}
+												disabled={!canReview || reviewBusy || isReviewed}
+											/>
+										) : null}
 									</div>
 								</div>
 								<div className="flex flex-wrap items-center gap-2">
@@ -655,25 +658,27 @@ function ProposalDetailRoute() {
 											Reject
 										</Button>
 									)}
-									<Button
-										size="sm"
-										variant="outline"
-										disabled={
-											isReviewed ||
-											!canReview ||
-											reviewBusy ||
-											!revisionBasisIsCurrent ||
-											blankReasonFor(revision._id).length === 0
-										}
-										onClick={() =>
-											void decide(revision.messageId, revision._id, {
-												kind: "intentionalBlank",
-												reason: blankReasonFor(revision._id),
-											})
-										}
-									>
-										Mark intentional blank
-									</Button>
+									{canRecordIntentionalBlank(draft) ? (
+										<Button
+											size="sm"
+											variant="outline"
+											disabled={
+												isReviewed ||
+												!canReview ||
+												reviewBusy ||
+												!revisionBasisIsCurrent ||
+												blankReasonFor(revision._id).length === 0
+											}
+											onClick={() =>
+												void decide(revision.messageId, revision._id, {
+													kind: "intentionalBlank",
+													reason: blankReasonFor(revision._id),
+												})
+											}
+										>
+											Mark intentional blank
+										</Button>
+									) : null}
 								</div>
 							</CardContent>
 						</Card>
