@@ -670,7 +670,7 @@ What blocks, precisely:
 | Source Echo | No |
 | Dictionary Conflict | No |
 | **Unconfirmed Import** | **No** |
-| **Unresolved Introduced Message** | **Yes** |
+| **Introduced Message with First Review pending** | **Yes** |
 
 **Unconfirmed Imports never block, and add no posture.** They are present,
 plausible, and in the right language — exactly what Brickit ships today. Gating
