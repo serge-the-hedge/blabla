@@ -289,6 +289,14 @@ Editing happens inline beneath the row, using the same block as Strings. Buttons
 exist only where clicking the row would not do the same thing: bind a Locale,
 restore an archived key, confirm a set, save.
 
+Translation review uses that same editing language for existing and new
+Locales: the Source Contract, the shared ICU-aware field, one **Save review**
+action for its current contents, a **Revert changes** action only while the
+local draft differs, and an explicit saved/unsaved phrase. Whether the save
+lands in the Catalog Workspace or a new-Locale draft is a private adapter
+choice. Exact agent text, human edits, and a human keep after Source drift are
+recorded as distinct immutable review evidence behind that one action.
+
 ### 5.4 There is no rebase step
 
 Blabla **transforms automatically wherever the transform loses nothing** and

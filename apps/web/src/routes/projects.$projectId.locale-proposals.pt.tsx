@@ -21,7 +21,6 @@ import {
 } from "@blabla/ui/components/empty";
 import { Input } from "@blabla/ui/components/input";
 import { Skeleton } from "@blabla/ui/components/skeleton";
-import { Textarea } from "@blabla/ui/components/textarea";
 import {
 	createFileRoute,
 	Link,
@@ -48,6 +47,7 @@ import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
+import { TranslationReviewEditor } from "@/components/localization/translation-review-value-editor";
 import { WhitespaceFacts } from "@/components/localization/whitespace-facts";
 import { api, convexId } from "@/lib/convex-api";
 import { localeProposalReviewState } from "@/lib/locale-proposal-review-state";
@@ -105,6 +105,9 @@ export function PortugueseLocaleProposalWorkbench({
 	const reviewStagedValue = useMutation(api.localeProposals.reviewStagedValue);
 	const reviewTaskValue = useMutation(
 		api.agentTranslationProposals.reviewTaskValue,
+	);
+	const saveTaskValue = useMutation(
+		api.agentTranslationProposals.saveTaskValue,
 	);
 	const acceptTaskCandidates = useMutation(
 		api.agentTranslationProposals.acceptTaskCandidates,
@@ -239,7 +242,12 @@ export function PortugueseLocaleProposalWorkbench({
 		return detail.messages.flatMap((message) => {
 			const draft = drafts[message.messageId];
 			const currentValue =
-				message.candidate?.value ?? message.value?.value ?? "";
+				message.candidate?.review?.finalValue ??
+				message.review?.finalValue ??
+				(message.facts.state === "humanDraft"
+					? message.value?.value
+					: (message.candidate?.value ?? message.value?.value)) ??
+				"";
 			if (draft === undefined || draft === currentValue) return [];
 			if (draft.trim().length === 0) return [];
 			return [
@@ -399,6 +407,53 @@ export function PortugueseLocaleProposalWorkbench({
 			setNotice("Human review recorded.");
 		});
 
+	const saveMessageReview = (
+		message: NonNullable<typeof detail>["messages"][number],
+		value: string,
+		candidateToken: string | undefined,
+		kind: "taskCandidate" | "stagedValue",
+	) =>
+		run(`review:${message.messageId}`, async () => {
+			if (!activeProposalId) return;
+			if (taskId && kind === "taskCandidate" && candidateToken) {
+				await saveTaskValue({
+					taskId: convexId<"agentTranslationProposals">(taskId),
+					messageId: message.messageId,
+					candidateToken,
+					value,
+				});
+			} else if (candidateToken && message.facts.state === "awaiting") {
+				const candidateValue =
+					message.candidate?.value ?? message.value?.value ?? "";
+				await reviewValue(
+					message.messageId,
+					candidateToken,
+					value === candidateValue
+						? { kind: "accept" }
+						: { kind: "acceptWithEdits", value },
+					kind,
+				);
+			} else {
+				await stageForReview({
+					projectId: convexProjectId,
+					proposalId: convexId<"localeProposals">(activeProposalId),
+					items: [
+						{
+							messageId: message.messageId,
+							value,
+							sourceFingerprint: message.sourceFingerprint,
+						},
+					],
+				});
+			}
+			setDrafts((previous) => {
+				const next = { ...previous };
+				delete next[message.messageId];
+				return next;
+			});
+			setNotice("Review saved.");
+		});
+
 	const acceptSelectedAgentCandidates = () =>
 		run("accept-selected", async () => {
 			if (!activeProposalId || selectedAgentCandidates.length === 0) return;
@@ -442,7 +497,7 @@ export function PortugueseLocaleProposalWorkbench({
 			}
 			setSelectedCandidateTokens({});
 			setNotice(
-				`${accepted} selected candidate${accepted === 1 ? "" : "s"} accepted with human confirmation.`,
+				`${accepted} selected candidate${accepted === 1 ? "" : "s"} approved.`,
 			);
 		});
 
@@ -771,19 +826,23 @@ export function PortugueseLocaleProposalWorkbench({
 									below.
 								</p>
 							</div>
-							<div className="flex flex-wrap gap-2">
-								<Button
-									size="sm"
-									onClick={saveVisible}
-									disabled={
-										busy !== null || dirtyItems.length === 0 || proposalReadOnly
-									}
-								>
-									<Save data-icon="inline-start" />
-									Save visible edits
-									{dirtyItems.length ? ` (${dirtyItems.length})` : ""}
-								</Button>
-							</div>
+							{taskId ? null : (
+								<div className="flex flex-wrap gap-2">
+									<Button
+										size="sm"
+										onClick={saveVisible}
+										disabled={
+											busy !== null ||
+											dirtyItems.length === 0 ||
+											proposalReadOnly
+										}
+									>
+										<Save data-icon="inline-start" />
+										Save visible edits
+										{dirtyItems.length ? ` (${dirtyItems.length})` : ""}
+									</Button>
+								</div>
+							)}
 						</CardHeader>
 						<CardContent className="grid gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-3">
 							<div className="bg-background p-3">
@@ -884,7 +943,7 @@ export function PortugueseLocaleProposalWorkbench({
 									}
 								>
 									<Check data-icon="inline-start" />
-									Accept selected ({selectedAgentCandidates.length})
+									Approve selected ({selectedAgentCandidates.length})
 								</Button>
 							</div>
 						</CardContent>
@@ -895,9 +954,16 @@ export function PortugueseLocaleProposalWorkbench({
 						aria-busy={queueIsLoading}
 					>
 						{detail.messages.map((message) => {
-							const value =
+							const candidateValue =
 								message.candidate?.value ?? message.value?.value ?? "";
-							const draft = drafts[message.messageId] ?? value;
+							const savedValue =
+								message.candidate?.review?.finalValue ??
+								message.review?.finalValue ??
+								(message.facts.state === "humanDraft"
+									? message.value?.value
+									: candidateValue) ??
+								"";
+							const draft = drafts[message.messageId] ?? savedValue;
 							const reviewed = message.facts.state === "reviewed";
 							const reviewToken =
 								message.candidate?.revisionId ??
@@ -980,7 +1046,17 @@ export function PortugueseLocaleProposalWorkbench({
 													<Badge variant="outline">edge whitespace</Badge>
 												) : null}
 												{message.facts.staleSource ? (
-													<Badge variant="destructive">Source changed</Badge>
+													<Badge
+														variant={
+															message.candidate?.review?.reviewBasisIsCurrent
+																? "outline"
+																: "destructive"
+														}
+													>
+														{message.candidate?.review?.reviewBasisIsCurrent
+															? "Earlier Source"
+															: "Source changed"}
+													</Badge>
 												) : null}
 											</div>
 											<div className="mt-2 grid gap-2 text-sm md:grid-cols-2">
@@ -988,7 +1064,7 @@ export function PortugueseLocaleProposalWorkbench({
 													{message.sourceValue || "Empty Source value"}
 												</p>
 												<p className="line-clamp-2 whitespace-pre-wrap">
-													{value || "No candidate value"}
+													{savedValue || "No candidate value"}
 												</p>
 											</div>
 										</button>
@@ -1029,23 +1105,53 @@ export function PortugueseLocaleProposalWorkbench({
 											</div>
 											<div className="flex flex-col gap-2">
 												<div className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
-													Portuguese candidate
+													Portuguese review value
 												</div>
-												<Textarea
-													aria-label={`Portuguese value for ${message.messageId}`}
-													value={draft}
-													onChange={(event) =>
-														setDrafts((previous) => ({
-															...previous,
-															[message.messageId]: event.target.value,
-														}))
-													}
-													disabled={
-														proposalReadOnly || busy !== null || queueIsLoading
-													}
-													rows={3}
-												/>
-												<WhitespaceFacts value={draft} />
+												<TranslationReviewEditor.Provider
+													state={{
+														draftValue: draft,
+														savedValue,
+														phase:
+															message.facts.state === "awaiting" ||
+															(message.facts.staleSource &&
+																!message.candidate?.review
+																	?.reviewBasisIsCurrent)
+																? "needsReview"
+																: "saved",
+														disabled:
+															proposalReadOnly ||
+															queueIsLoading ||
+															busy !== null,
+														isSaving: busy === `review:${message.messageId}`,
+													}}
+													actions={{
+														update: (value) =>
+															setDrafts((previous) => ({
+																...previous,
+																[message.messageId]: value,
+															})),
+														save: () =>
+															void saveMessageReview(
+																message,
+																draft,
+																reviewToken,
+																reviewKind,
+															),
+													}}
+													meta={{
+														messageId: message.messageId,
+														localeId: activeProposalId,
+														localeCode: detail.locale.runtimeLocale,
+														sourceValue: message.sourceValue,
+													}}
+												>
+													<TranslationReviewEditor.Field />
+													<TranslationReviewEditor.Status />
+													<TranslationReviewEditor.Actions>
+														<TranslationReviewEditor.SaveReview />
+														<TranslationReviewEditor.RevertChanges />
+													</TranslationReviewEditor.Actions>
+												</TranslationReviewEditor.Provider>
 												<div className="flex flex-col gap-2">
 													<div className="flex flex-col gap-2 sm:flex-row">
 														<Input
@@ -1094,52 +1200,6 @@ export function PortugueseLocaleProposalWorkbench({
 														<div className="flex flex-wrap gap-2">
 															<Button
 																size="sm"
-																onClick={() =>
-																	void decide(
-																		message.messageId,
-																		reviewToken,
-																		{
-																			kind: "accept",
-																		},
-																		reviewKind,
-																	)
-																}
-																disabled={
-																	busy !== null ||
-																	reviewed ||
-																	message.facts.staleSource ||
-																	proposalReadOnly
-																}
-															>
-																<Check data-icon="inline-start" /> Accept
-															</Button>
-															<Button
-																size="sm"
-																variant="secondary"
-																onClick={() =>
-																	void decide(
-																		message.messageId,
-																		reviewToken,
-																		{
-																			kind: "acceptWithEdits",
-																			value: draft,
-																		},
-																		reviewKind,
-																	)
-																}
-																disabled={
-																	busy !== null ||
-																	reviewed ||
-																	message.facts.staleSource ||
-																	draft.trim().length === 0 ||
-																	draft === value ||
-																	proposalReadOnly
-																}
-															>
-																Accept edited
-															</Button>
-															<Button
-																size="sm"
 																variant="outline"
 																onClick={() =>
 																	void decide(
@@ -1186,15 +1246,22 @@ export function PortugueseLocaleProposalWorkbench({
 														<p className="flex items-center gap-2 text-muted-foreground text-xs">
 															<TriangleAlert aria-hidden className="size-4" />
 															This candidate was rejected. Replace it above,
-															then save the visible edit.
+															then save the review.
 														</p>
 													) : null}
 												</div>
 												{message.facts.staleSource ? (
-													<p className="flex items-center gap-2 text-destructive text-xs">
+													<p
+														className={`flex items-center gap-2 text-xs ${
+															message.candidate?.review?.reviewBasisIsCurrent
+																? "text-muted-foreground"
+																: "text-destructive"
+														}`}
+													>
 														<TriangleAlert aria-hidden className="size-4" />
-														The Source changed after this candidate. Ask the
-														agent for a new revision.
+														{message.candidate?.review?.reviewBasisIsCurrent
+															? "The agent authored this candidate against an earlier Source; your saved review is current."
+															: "The Source changed after this candidate. Review the value above, then save it if it still fits or edit it first."}
 													</p>
 												) : null}
 											</div>

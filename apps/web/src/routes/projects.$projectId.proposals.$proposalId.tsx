@@ -9,18 +9,23 @@ import {
 } from "@blabla/ui/components/card";
 import { Input } from "@blabla/ui/components/input";
 import { Skeleton } from "@blabla/ui/components/skeleton";
-import { Textarea } from "@blabla/ui/components/textarea";
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { ArrowLeft, Bot, Check, X } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
+import { TranslationReviewEditor } from "@/components/localization/translation-review-value-editor";
 import { WhitespaceFacts } from "@/components/localization/whitespace-facts";
 import { api, convexId } from "@/lib/convex-api";
+import {
+	convexApplicationErrorMessage,
+	exactTaskBatchRevisionIds,
+	type TranslationTaskBasisState,
+} from "@/lib/translation-task-review";
 import { PortugueseLocaleProposalWorkbench } from "@/routes/projects.$projectId.locale-proposals.pt";
 
 export const Route = createFileRoute(
@@ -29,10 +34,37 @@ export const Route = createFileRoute(
 	component: ProposalDetailRoute,
 });
 
-function CandidateReviewContext({ revisionId }: { revisionId: string }) {
+function CandidateReviewContext({
+	revisionId,
+	onContextChange,
+}: {
+	revisionId: string;
+	onContextChange: (
+		revisionId: string,
+		context: {
+			basisState: TranslationTaskBasisState;
+			sourceValue: string;
+			localeCode: string;
+		},
+	) => void;
+}) {
 	const context = useQuery(api.agentTranslationProposals.contextForReview, {
 		revisionId: convexId<"agentTranslationCandidateRevisions">(revisionId),
 	});
+	useEffect(() => {
+		if (context === undefined) return;
+		const basisState =
+			context === null || !context.available
+				? "unavailable"
+				: (context.reviewBasisIsCurrent ?? context.basisIsCurrent)
+					? "current"
+					: "changed";
+		onContextChange(revisionId, {
+			basisState,
+			sourceValue: context?.available ? context.source.value : "",
+			localeCode: context?.available ? context.localeCode : "target",
+		});
+	}, [context, onContextChange, revisionId]);
 	if (context === undefined) {
 		return <Skeleton className="h-28 w-full" />;
 	}
@@ -94,13 +126,23 @@ function CandidateReviewContext({ revisionId }: { revisionId: string }) {
 					</span>
 				) : null}
 			</div>
+			{!context.basisIsCurrent ? (
+				<Alert>
+					<AlertDescription>
+						{context.reviewBasisIsCurrent
+							? "The agent authored this candidate against an earlier basis; your saved review is current."
+							: "The source or target changed after this candidate was authored. Review the live Source Contract, then save this value if it still fits or edit it first."}
+					</AlertDescription>
+				</Alert>
+			) : null}
 		</div>
 	);
 }
 
 function reviewDecisionLabel(kind: string) {
-	if (kind === "accept") return "accepted";
-	if (kind === "acceptWithEdits") return "accepted with edits";
+	if (kind === "accept") return "review saved";
+	if (kind === "keepForCurrentSource") return "saved for current source";
+	if (kind === "acceptWithEdits") return "edited review saved";
 	if (kind === "reject") return "rejected";
 	if (kind === "intentionalBlank") return "intentional blank";
 	return kind;
@@ -119,6 +161,9 @@ function ProposalDetailRoute() {
 	const reviewTaskValue = useMutation(
 		api.agentTranslationProposals.reviewTaskValue,
 	);
+	const saveTaskValue = useMutation(
+		api.agentTranslationProposals.saveTaskValue,
+	);
 	const reviewCandidate = useMutation(
 		api.agentTranslationProposals.reviewCandidate,
 	);
@@ -136,6 +181,36 @@ function ProposalDetailRoute() {
 		null,
 	);
 	const [isFinalizing, setIsFinalizing] = useState(false);
+	const [reviewContext, setReviewContext] = useState<
+		Record<
+			string,
+			| {
+					basisState: TranslationTaskBasisState;
+					sourceValue: string;
+					localeCode: string;
+			  }
+			| undefined
+		>
+	>({});
+	const recordReviewContext = useCallback(
+		(
+			revisionId: string,
+			context: {
+				basisState: TranslationTaskBasisState;
+				sourceValue: string;
+				localeCode: string;
+			},
+		) => {
+			setReviewContext((previous) =>
+				previous[revisionId]?.basisState === context.basisState &&
+				previous[revisionId]?.sourceValue === context.sourceValue &&
+				previous[revisionId]?.localeCode === context.localeCode
+					? previous
+					: { ...previous, [revisionId]: context },
+			);
+		},
+		[],
+	);
 
 	if (detail === undefined) {
 		return (
@@ -168,20 +243,19 @@ function ProposalDetailRoute() {
 	}
 
 	const proposal = detail.proposal;
-	const canReview =
-		proposal.status === "open" &&
-		(project?.role === "owner" || project?.role === "editor");
-	const exactBatchRevisionIds = detail.candidates
-		.flatMap(({ revision, reviews }) =>
-			revision &&
-			reviews.length === 0 &&
-			(drafts[revision._id] === undefined ||
-				drafts[revision._id] === revision.value) &&
-			(blankReasons[revision._id]?.trim().length ?? 0) === 0
-				? [revision._id]
-				: [],
-		)
-		.slice(0, 16);
+	const isEditor = project?.role === "owner" || project?.role === "editor";
+	const canReview = proposal.status === "open" && isEditor;
+	const exactBatchRevisionIds = exactTaskBatchRevisionIds({
+		candidates: detail.candidates,
+		drafts,
+		blankReasons,
+		basisState: Object.fromEntries(
+			Object.entries(reviewContext).map(([revisionId, context]) => [
+				revisionId,
+				context?.basisState,
+			]),
+		),
+	});
 	const acceptExactBatch = async () => {
 		if (!canReview || exactBatchRevisionIds.length === 0 || isBatchAccepting) {
 			return;
@@ -197,10 +271,10 @@ function ProposalDetailRoute() {
 				),
 			});
 			setNotice(
-				`${result.accepted} exact candidate${result.accepted === 1 ? "" : "s"} accepted.`,
+				`${result.accepted} exact candidate${result.accepted === 1 ? "" : "s"} approved.`,
 			);
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : "Batch review failed.");
+			setError(convexApplicationErrorMessage(cause, "Batch review failed."));
 		} finally {
 			setIsBatchAccepting(false);
 		}
@@ -210,6 +284,7 @@ function ProposalDetailRoute() {
 		candidateToken: string,
 		decision:
 			| { kind: "accept" }
+			| { kind: "keepForCurrentSource" }
 			| { kind: "acceptWithEdits"; value: string }
 			| { kind: "reject"; reason?: string }
 			| { kind: "intentionalBlank"; reason: string },
@@ -235,13 +310,56 @@ function ProposalDetailRoute() {
 			}
 			setRejectArmed(null);
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : "Review failed.");
+			setError(convexApplicationErrorMessage(cause, "Review failed."));
 		} finally {
 			setReviewingMessageId(null);
 		}
 	};
 	const blankReasonFor = (revisionId: string) =>
 		blankReasons[revisionId]?.trim() ?? "";
+	const saveReview = async (
+		messageId: string,
+		candidateToken: string,
+		value: string,
+		basis: TranslationTaskBasisState | undefined,
+		candidateValue: string,
+	) => {
+		if (isBatchAccepting || reviewingMessageId !== null) return;
+		setError(null);
+		setNotice(null);
+		setReviewingMessageId(messageId);
+		try {
+			if (proposal.taskScope) {
+				await saveTaskValue({
+					taskId: convexId<"agentTranslationProposals">(proposal._id),
+					messageId,
+					candidateToken,
+					value,
+				});
+			} else {
+				await reviewCandidate({
+					candidateRevisionId:
+						convexId<"agentTranslationCandidateRevisions">(candidateToken),
+					decision:
+						value !== candidateValue
+							? { kind: "acceptWithEdits", value }
+							: basis === "changed"
+								? { kind: "keepForCurrentSource" }
+								: { kind: "accept" },
+				});
+			}
+			setDrafts((previous) => {
+				const next = { ...previous };
+				delete next[candidateToken];
+				return next;
+			});
+			setNotice("Review saved.");
+		} catch (cause) {
+			setError(convexApplicationErrorMessage(cause, "Review save failed."));
+		} finally {
+			setReviewingMessageId(null);
+		}
+	};
 	const taskScope = proposal.taskScope;
 	const finalize = async () => {
 		if (!taskScope || proposal.status === "open" || isFinalizing) return;
@@ -259,7 +377,7 @@ function ProposalDetailRoute() {
 			);
 		} catch (cause) {
 			setError(
-				cause instanceof Error ? cause.message : "Task finalization failed.",
+				convexApplicationErrorMessage(cause, "Task finalization failed."),
 			);
 		} finally {
 			setIsFinalizing(false);
@@ -326,8 +444,8 @@ function ProposalDetailRoute() {
 							>
 								<Check data-icon="inline-start" />
 								{isBatchAccepting
-									? "Accepting…"
-									: `Accept next ${exactBatchRevisionIds.length} exact`}
+									? "Approving…"
+									: `Approve next ${exactBatchRevisionIds.length} exact`}
 							</Button>
 						) : null}
 					</AlertDescription>
@@ -396,8 +514,14 @@ function ProposalDetailRoute() {
 				{detail.candidates.map(({ candidate, revision, reviews }) => {
 					if (!revision) return null;
 					const review = reviews[0];
-					const draft = drafts[revision._id] ?? revision.value;
+					const savedValue = review?.finalValue ?? revision.value;
+					const draft = drafts[revision._id] ?? savedValue;
 					const isReviewed = review !== undefined;
+					const revisionContext = reviewContext[revision._id];
+					const revisionBasisState = revisionContext?.basisState;
+					const revisionBasisIsCurrent = revisionBasisState === "current";
+					const isDirty = draft !== savedValue;
+					const canEditValue = proposal.taskScope ? isEditor : canReview;
 					const reviewBusy = isBatchAccepting || reviewingMessageId !== null;
 					return (
 						<Card key={candidate._id}>
@@ -408,14 +532,23 @@ function ProposalDetailRoute() {
 										{revision.messageId}
 									</CardTitle>
 								</div>
-								<Badge variant={isReviewed ? "default" : "secondary"}>
-									{review
-										? reviewDecisionLabel(review.decision.kind)
-										: "waiting"}
+								<Badge
+									variant={
+										isDirty ? "secondary" : isReviewed ? "default" : "secondary"
+									}
+								>
+									{isDirty
+										? "unsaved changes"
+										: review
+											? reviewDecisionLabel(review.decision.kind)
+											: "waiting"}
 								</Badge>
 							</CardHeader>
 							<CardContent className="flex flex-col gap-3">
-								<CandidateReviewContext revisionId={revision._id} />
+								<CandidateReviewContext
+									revisionId={revision._id}
+									onContextChange={recordReviewContext}
+								/>
 								<div className="grid gap-3 md:grid-cols-2">
 									<div className="rounded-md border bg-muted/20 p-3">
 										<div className="mb-1 font-medium text-muted-foreground text-xs uppercase tracking-wide">
@@ -430,19 +563,49 @@ function ProposalDetailRoute() {
 										<div className="mb-1 font-medium text-muted-foreground text-xs uppercase tracking-wide">
 											Your final value
 										</div>
-										<Textarea
-											aria-label={`Final value for ${revision.messageId}`}
-											value={draft}
-											onChange={(event) =>
-												setDrafts((previous) => ({
-													...previous,
-													[revision._id]: event.target.value,
-												}))
-											}
-											disabled={isReviewed || !canReview || reviewBusy}
-											rows={3}
-										/>
-										<WhitespaceFacts value={draft} />
+										<TranslationReviewEditor.Provider
+											state={{
+												draftValue: draft,
+												savedValue,
+												phase:
+													!isReviewed || !revisionBasisIsCurrent
+														? "needsReview"
+														: "saved",
+												disabled:
+													!canEditValue ||
+													revisionBasisState === "unavailable" ||
+													reviewBusy,
+												isSaving: reviewingMessageId === revision.messageId,
+											}}
+											actions={{
+												update: (value) =>
+													setDrafts((previous) => ({
+														...previous,
+														[revision._id]: value,
+													})),
+												save: () =>
+													void saveReview(
+														revision.messageId,
+														revision._id,
+														draft,
+														revisionBasisState,
+														revision.value,
+													),
+											}}
+											meta={{
+												messageId: revision.messageId,
+												localeId: revision.localeId ?? "target",
+												localeCode: revisionContext?.localeCode ?? "target",
+												sourceValue: revisionContext?.sourceValue ?? "",
+											}}
+										>
+											<TranslationReviewEditor.Field />
+											<TranslationReviewEditor.Status />
+											<TranslationReviewEditor.Actions>
+												<TranslationReviewEditor.SaveReview />
+												<TranslationReviewEditor.RevertChanges />
+											</TranslationReviewEditor.Actions>
+										</TranslationReviewEditor.Provider>
 										<Input
 											aria-label={`Reason for intentionally blank ${revision.messageId}`}
 											placeholder="Reason for an intentional blank"
@@ -453,46 +616,11 @@ function ProposalDetailRoute() {
 													[revision._id]: event.target.value,
 												}))
 											}
-											disabled={isReviewed || !canReview || reviewBusy}
+											disabled={!canReview || reviewBusy || isReviewed}
 										/>
 									</div>
 								</div>
 								<div className="flex flex-wrap items-center gap-2">
-									<Button
-										size="sm"
-										disabled={
-											isReviewed ||
-											!canReview ||
-											reviewBusy ||
-											draft !== revision.value
-										}
-										onClick={() =>
-											void decide(revision.messageId, revision._id, {
-												kind: "accept",
-											})
-										}
-									>
-										<Check data-icon="inline-start" />
-										Accept exact
-									</Button>
-									<Button
-										size="sm"
-										variant="secondary"
-										disabled={
-											isReviewed ||
-											!canReview ||
-											reviewBusy ||
-											draft.length === 0
-										}
-										onClick={() =>
-											void decide(revision.messageId, revision._id, {
-												kind: "acceptWithEdits",
-												value: draft,
-											})
-										}
-									>
-										Accept edited
-									</Button>
 									{rejectArmed === revision._id ? (
 										<>
 											<Button
@@ -534,6 +662,7 @@ function ProposalDetailRoute() {
 											isReviewed ||
 											!canReview ||
 											reviewBusy ||
+											!revisionBasisIsCurrent ||
 											blankReasonFor(revision._id).length === 0
 										}
 										onClick={() =>
