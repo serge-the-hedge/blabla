@@ -33,6 +33,9 @@ const ordinaryImportCounts = {
 	stale: v.number(),
 	alreadyConfirmed: v.number(),
 	pendingSourceProposal: v.number(),
+	// Optional only for the deployment that upgrades existing persisted
+	// Navigation State rows. Policy v3 always writes this count.
+	introduced: v.optional(v.number()),
 };
 const catalogWorkspaceDecisionRecordCommon = {
 	projectId: v.id("projects"),
@@ -223,6 +226,7 @@ const releaseFindingKind = v.union(
 	v.literal("contract_invalid"),
 	v.literal("missing_value"),
 	v.literal("semantic_source_change"),
+	v.literal("introduction_review"),
 );
 const releasePosture = v.union(
 	v.literal("blocked"),
@@ -734,6 +738,8 @@ export default defineSchema({
 		declaredPlaceholderNames: v.optional(v.array(v.string())),
 		declaredPlaceholderNamesComplete: v.optional(v.boolean()),
 		declaredPlaceholderNameCount: v.optional(v.number()),
+		introducedAt: v.optional(v.number()),
+		introductionLocaleIds: v.optional(v.array(v.id("locales"))),
 		materialized: v.boolean(),
 	})
 		.index("by_projection", ["projectionId"])
@@ -879,6 +885,9 @@ export default defineSchema({
 		catalogIndex: v.number(),
 		searchCorpus: v.array(v.string()),
 		pendingSourceProposal: v.boolean(),
+		// Policy v3 rows always carry First Review facts. Optional storage keeps
+		// the schema deployable over disposable policy-v2 rows until backfill.
+		introductionReviewPending: v.optional(v.number()),
 		source: v.object({
 			localeId: v.id("locales"),
 			// The Git content identity used by Source-identical and repeated-value
@@ -903,6 +912,7 @@ export default defineSchema({
 				// Some earlier Translator Confirmation covered the Git content, so
 				// its Source Contract has since changed.
 				confirmedContentPreviously: v.boolean(),
+				firstReviewPending: v.optional(v.boolean()),
 				// The visible value identity lets one key detect suspicious repetition
 				// across its own target Locales without comparing unrelated keys.
 				repeatedGitContent: v.optional(v.boolean()),
@@ -1425,6 +1435,8 @@ export default defineSchema({
 		declaredPlaceholderNames: v.optional(v.array(v.string())),
 		declaredPlaceholderNamesComplete: v.optional(v.boolean()),
 		declaredPlaceholderNameCount: v.optional(v.number()),
+		introducedAt: v.optional(v.number()),
+		introductionLocaleIds: v.optional(v.array(v.id("locales"))),
 		materialized: v.boolean(),
 		keyArchived: v.boolean(),
 		localeArchived: v.boolean(),
@@ -1465,6 +1477,8 @@ export default defineSchema({
 		declaredPlaceholderNames: v.optional(v.array(v.string())),
 		declaredPlaceholderNamesComplete: v.optional(v.boolean()),
 		declaredPlaceholderNameCount: v.optional(v.number()),
+		introducedAt: v.optional(v.number()),
+		introductionLocaleIds: v.optional(v.array(v.id("locales"))),
 		materialized: v.boolean(),
 		keyArchived: v.boolean(),
 		localeArchived: v.boolean(),

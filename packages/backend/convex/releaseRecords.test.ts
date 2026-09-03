@@ -22,19 +22,29 @@ describe("Release Assessment policy", () => {
 		expect(
 			isReleaseDelta({
 				pendingSourceProposal: false,
+				introductionReviewPending: 0,
 				targets: [{ touched: false }, { touched: false }],
 			}),
 		).toBe(false);
 		expect(
 			isReleaseDelta({
 				pendingSourceProposal: true,
+				introductionReviewPending: 0,
 				targets: [{ touched: false }],
 			}),
 		).toBe(true);
 		expect(
 			isReleaseDelta({
 				pendingSourceProposal: false,
+				introductionReviewPending: 0,
 				targets: [{ touched: false }, { touched: true }],
+			}),
+		).toBe(true);
+		expect(
+			isReleaseDelta({
+				pendingSourceProposal: false,
+				introductionReviewPending: 1,
+				targets: [{ touched: false }],
 			}),
 		).toBe(true);
 	});
@@ -70,6 +80,7 @@ describe("Release Assessment policy", () => {
 					{ kind: "contract_invalid" },
 					{ kind: "missing_value" },
 					{ kind: "semantic_source_change" },
+					{ kind: "introduction_review" },
 				],
 				evidence: { kind: "intentional_blank" },
 				unconfirmedImport: true,
@@ -77,7 +88,7 @@ describe("Release Assessment policy", () => {
 		).toEqual({
 			scopeValueCount: 1,
 			blockedCount: 1,
-			needsDecisionCount: 2,
+			needsDecisionCount: 3,
 			intentionalBlankCount: 1,
 			sourceIdenticalCount: 0,
 			unconfirmedImportCount: 1,

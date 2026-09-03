@@ -25,6 +25,7 @@ function windowedProps(catalog: {
 	snapshotId?: string;
 	canEdit?: boolean;
 	valueStateCounts?: NonNullable<StringsNavigationRead["valueStateCounts"]>;
+	introducedMessageIds?: ReadonlySet<string>;
 	keys: readonly StringsCatalogKey[];
 }): {
 	navigation: StringsNavigationRead;
@@ -41,6 +42,9 @@ function windowedProps(catalog: {
 			keys: keys.map((key, index) => ({
 				messageId: key.id,
 				catalogIndex: index,
+				introductionReviewPending: catalog.introducedMessageIds?.has(key.id)
+					? key.targets.length
+					: 0,
 				searchCorpus: [
 					key.id.toLowerCase(),
 					key.source.value.toLowerCase(),
@@ -57,6 +61,8 @@ function windowedProps(catalog: {
 					touched: true,
 					confirmedGitContent: true,
 					confirmedContentPreviously: true,
+					firstReviewPending:
+						catalog.introducedMessageIds?.has(key.id) ?? false,
 					gitValueFingerprint: target.gitValueFingerprint,
 				})),
 			})),
@@ -398,6 +404,46 @@ describe("StringsCatalogView", () => {
 		expect(markup).toContain('aria-label="Show Unconfirmed scope (1)"');
 	});
 
+	test("marks populated post-bootstrap keys without replacing their value state", () => {
+		const markup = renderToStaticMarkup(
+			<StringsCatalogView
+				{...navigationProps}
+				{...windowedProps({
+					introducedMessageIds: new Set(["new_copy"]),
+					valueStateCounts: {
+						waiting: 0,
+						unconfirmedImport: 1,
+						stale: 0,
+						settled: 0,
+					},
+					keys: [
+						{
+							id: "new_copy",
+							source: {
+								localeCode: "en",
+								isSource: true,
+								value: "Draft source",
+								materialized: false,
+							},
+							targets: [
+								{
+									localeCode: "de",
+									isSource: false,
+									value: "Platzhalter",
+									materialized: false,
+									valueState: "unconfirmedImport",
+								},
+							],
+						},
+					],
+				})}
+			/>,
+		);
+
+		expect(markup).toContain("New from Git · 1");
+		expect(markup).toContain('aria-label="Show New from Git scope (1)"');
+	});
+
 	test("shows a removable Release work hand-off beside local scopes", () => {
 		const markup = renderToStaticMarkup(
 			<StringsCatalogView
@@ -478,6 +524,7 @@ describe("StringsCatalogView", () => {
 					stale: 1,
 					alreadyConfirmed: 0,
 					pendingSourceProposal: 0,
+					introduced: 0,
 					run: null,
 				}}
 				{...windowedProps({
@@ -522,6 +569,7 @@ describe("StringsCatalogView", () => {
 					stale: 0,
 					alreadyConfirmed: 0,
 					pendingSourceProposal: 0,
+					introduced: 0,
 					run: null,
 				}}
 				{...windowedProps({

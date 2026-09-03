@@ -111,7 +111,8 @@ function isDigestLevelCandidate(
 		!target.confirmedGitContent &&
 		!target.confirmedContentPreviously &&
 		!target.touched &&
-		!digest.pendingSourceProposal
+		!digest.pendingSourceProposal &&
+		(digest.introductionReviewPending ?? 0) === 0
 	);
 }
 
@@ -559,6 +560,7 @@ export const pageOrdinaryImportCandidates = internalQuery({
 				stale: v.number(),
 				alreadyConfirmed: v.number(),
 				pendingSourceProposal: v.number(),
+				introduced: v.number(),
 			}),
 			candidates: v.array(
 				v.object({

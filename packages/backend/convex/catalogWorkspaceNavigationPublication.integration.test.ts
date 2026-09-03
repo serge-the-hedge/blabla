@@ -199,8 +199,12 @@ function stripSystemFields(row: Doc<"catalogWorkspaceNavigationRows">) {
 		catalogIndex: row.catalogIndex,
 		searchCorpus: row.searchCorpus,
 		pendingSourceProposal: row.pendingSourceProposal,
+		introductionReviewPending: row.introductionReviewPending ?? 0,
 		source: row.source,
-		targets: row.targets,
+		targets: row.targets.map((target) => ({
+			...target,
+			firstReviewPending: target.firstReviewPending ?? false,
+		})),
 	};
 }
 
@@ -440,6 +444,7 @@ describe("Catalog Navigation Index publication", () => {
 				stale: 0,
 				alreadyConfirmed: 0,
 				pendingSourceProposal: 0,
+				introduced: 0,
 			},
 		});
 		let phase = "clearing";
@@ -470,6 +475,7 @@ describe("Catalog Navigation Index publication", () => {
 			stale: 0,
 			alreadyConfirmed: 0,
 			pendingSourceProposal: 0,
+			introduced: 0,
 		});
 		expect(final.rows.length).toBe(2);
 		const status = await user.query(

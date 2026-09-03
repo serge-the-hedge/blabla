@@ -1,6 +1,7 @@
 import { ConvexError } from "convex/values";
 
 import type { Doc, Id } from "./_generated/dataModel";
+import { pendingIntroductionLocaleIds } from "./catalogIntroductionReviews";
 
 export const ORDINARY_IMPORT_CONFIRMATION_POLICY = "ordinary-v1" as const;
 export const MAX_ORDINARY_CONFIRMATIONS_PER_MUTATION = 256;
@@ -22,6 +23,7 @@ export type OrdinaryImportConfirmationCounts = {
 	stale: number;
 	alreadyConfirmed: number;
 	pendingSourceProposal: number;
+	introduced: number;
 };
 
 type ConfirmationRow = Pick<
@@ -34,6 +36,8 @@ type ConfirmationRow = Pick<
 	| "sourceFingerprint"
 	| "gitValueFingerprint"
 	| "gitValueRevision"
+	| "introducedAt"
+	| "introductionLocaleIds"
 > & { valueFingerprint: string };
 
 type ConfirmationHead = Pick<
@@ -46,7 +50,13 @@ type ConfirmationHead = Pick<
 
 type ConfirmationDecision = Pick<
 	Doc<"catalogWorkspaceDecisionRecords">,
-	"kind" | "messageId" | "localeId" | "sourceFingerprint" | "valueFingerprint"
+	| "kind"
+	| "messageId"
+	| "localeId"
+	| "sourceFingerprint"
+	| "valueFingerprint"
+	| "recordedAt"
+	| "recordedBy"
 >;
 
 function valueIdentity(input: {
@@ -105,6 +115,7 @@ export function ordinaryImportConfirmationPlan(input: {
 	const sourceByMessageId = new Map<string, ConfirmationRow>();
 	const targetByIdentity = new Map<string, ConfirmationRow>();
 	const messageValueCounts = new Map<string, number>();
+	const targetLocaleIdsByMessage = new Map<string, Set<Id<"locales">>>();
 	for (const row of input.rows) {
 		if (row.isSource) {
 			if (sourceByMessageId.has(row.messageId)) {
@@ -118,6 +129,10 @@ export function ordinaryImportConfirmationPlan(input: {
 			continue;
 		}
 		targetByIdentity.set(valueIdentity(row), row);
+		const localeIds =
+			targetLocaleIdsByMessage.get(row.messageId) ?? new Set<Id<"locales">>();
+		localeIds.add(row.localeId);
+		targetLocaleIdsByMessage.set(row.messageId, localeIds);
 		const identity = messageValueIdentity(row);
 		messageValueCounts.set(
 			identity,
@@ -144,6 +159,23 @@ export function ordinaryImportConfirmationPlan(input: {
 				: [],
 		),
 	);
+	const decisionsByMessage = new Map<string, ConfirmationDecision[]>();
+	for (const decision of input.decisions) {
+		const decisions = decisionsByMessage.get(decision.messageId) ?? [];
+		decisions.push(decision);
+		decisionsByMessage.set(decision.messageId, decisions);
+	}
+	const introducedMessageIds = new Set(
+		[...sourceByMessageId.values()].flatMap((source) => {
+			const pending = pendingIntroductionLocaleIds({
+				source,
+				activeTargetLocaleIds:
+					targetLocaleIdsByMessage.get(source.messageId) ?? new Set(),
+				decisions: decisionsByMessage.get(source.messageId) ?? [],
+			});
+			return pending.size > 0 ? [source.messageId] : [];
+		}),
+	);
 	const counts: OrdinaryImportConfirmationCounts = {
 		total: 0,
 		eligible: 0,
@@ -154,6 +186,7 @@ export function ordinaryImportConfirmationPlan(input: {
 		stale: 0,
 		alreadyConfirmed: 0,
 		pendingSourceProposal: 0,
+		introduced: 0,
 	};
 	const candidates: OrdinaryImportConfirmationCandidate[] = [];
 
@@ -188,6 +221,10 @@ export function ordinaryImportConfirmationPlan(input: {
 		}
 		if (input.pendingSourceMessageIds.has(row.messageId)) {
 			counts.pendingSourceProposal++;
+			continue;
+		}
+		if (introducedMessageIds.has(row.messageId)) {
+			counts.introduced++;
 			continue;
 		}
 		if (row.value.length === 0) {

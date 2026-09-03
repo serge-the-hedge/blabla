@@ -10,6 +10,7 @@ import {
 	query,
 } from "./_generated/server";
 import { hasMinimumRole } from "./accessControl";
+import { pendingIntroductionLocaleIds } from "./catalogIntroductionReviews";
 import {
 	activeProjectionFor,
 	MAX_PROJECTED_LOCALES,
@@ -78,6 +79,7 @@ const ordinaryImportCountsValidatorFields = {
 	stale: v.number(),
 	alreadyConfirmed: v.number(),
 	pendingSourceProposal: v.number(),
+	introduced: v.number(),
 };
 
 export type CatalogWorkspaceNavigationTargetDigest = {
@@ -100,6 +102,8 @@ export type CatalogWorkspaceNavigationTargetDigest = {
 	 * legacy digest summaries exact without carrying the value itself. */
 	valueFingerprint?: string;
 	gitValueFingerprint?: string;
+	/** This Locale is still inside the key's post-bootstrap First Review. */
+	firstReviewPending: boolean;
 };
 
 export type CatalogWorkspaceNavigationDigest = {
@@ -111,6 +115,7 @@ export type CatalogWorkspaceNavigationDigest = {
 	 * Source/target value, so local substring search keeps exact semantics. */
 	searchCorpus: string[];
 	pendingSourceProposal: boolean;
+	introductionReviewPending: number;
 	source: {
 		localeId: Id<"locales">;
 		gitValueFingerprint: string;
@@ -165,6 +170,13 @@ export async function deriveNavigationDigest(input: {
 	);
 	const decisionsByIdentity = decisionRecordMap(input.decisions);
 	const confirmationsByValue = translatorConfirmationMap(input.decisions);
+	const pendingIntroductionLocales = pendingIntroductionLocaleIds({
+		source: sourceRow,
+		activeTargetLocaleIds: new Set(
+			input.rows.flatMap((row) => (row.isSource ? [] : [row.localeId])),
+		),
+		decisions: input.decisions,
+	});
 	const headByMessageId = input.sourceProposalHead
 		? new Map([[input.sourceProposalHead.messageId, input.sourceProposalHead]])
 		: new Map<string, Doc<"catalogWorkspaceSourceProposalHeads">>();
@@ -299,6 +311,7 @@ export async function deriveNavigationDigest(input: {
 			...(targetRow.gitValueFingerprint === undefined
 				? {}
 				: { gitValueFingerprint: targetRow.gitValueFingerprint }),
+			firstReviewPending: pendingIntroductionLocales.has(targetRow.localeId),
 		});
 		searchCorpus.add(foldCase(effective.value));
 	}
@@ -310,6 +323,7 @@ export async function deriveNavigationDigest(input: {
 		catalogIndex: sourceRow.catalogIndex,
 		searchCorpus: [...searchCorpus],
 		pendingSourceProposal: pendingSourceProposalFingerprint !== undefined,
+		introductionReviewPending: pendingIntroductionLocales.size,
 		source: {
 			localeId: sourceRow.localeId,
 			gitValueFingerprint: gitSourceValueFingerprint,
@@ -328,10 +342,11 @@ const ORDINARY_IMPORT_COUNT_FIELDS = [
 	"stale",
 	"alreadyConfirmed",
 	"pendingSourceProposal",
+	"introduced",
 ] as const satisfies readonly (keyof OrdinaryImportConfirmationCounts)[];
 
 /** Bump when the meaning of persisted ordinary-import categories changes. */
-const ORDINARY_IMPORT_POLICY_VERSION = 2;
+const ORDINARY_IMPORT_POLICY_VERSION = 3;
 
 function backfillStepIsPending(
 	state: Pick<
@@ -366,6 +381,7 @@ function emptyOrdinaryImportCounts(): OrdinaryImportConfirmationCounts {
 		stale: 0,
 		alreadyConfirmed: 0,
 		pendingSourceProposal: 0,
+		introduced: 0,
 	};
 }
 
@@ -424,6 +440,10 @@ export function ordinaryImportCountsForDigest(
 		}
 		if (digest.pendingSourceProposal) {
 			counts.pendingSourceProposal++;
+			continue;
+		}
+		if (digest.introductionReviewPending > 0) {
+			counts.introduced++;
 			continue;
 		}
 		if (target.valueState === "waiting") {
@@ -576,11 +596,22 @@ function navigationStateFor(
  * fallback scan. Keep its preview and its mutating run behind the same
  * completeness gate so neither can start from a legacy or partially rebuilt
  * generation. */
-type ReadyNavigationState = Doc<"catalogWorkspaceNavigationStates"> & {
+type ReadyNavigationState = Omit<
+	Doc<"catalogWorkspaceNavigationStates">,
+	"ordinaryImportCounts"
+> & {
 	status: "ready";
 	expectedRowCount: number;
 	ordinaryImportCounts: OrdinaryImportConfirmationCounts;
 };
+
+function normalizedOrdinaryImportCounts(
+	counts: NonNullable<
+		Doc<"catalogWorkspaceNavigationStates">["ordinaryImportCounts"]
+	>,
+): OrdinaryImportConfirmationCounts {
+	return { ...counts, introduced: counts.introduced ?? 0 };
+}
 
 export async function readyNavigationStateFor(
 	ctx: MutationCtx | QueryCtx,
@@ -606,7 +637,14 @@ export async function readyNavigationStateFor(
 				"Ordinary-import candidates are unavailable until the Navigation Index backfill completes.",
 		});
 	}
-	return state as ReadyNavigationState;
+	return {
+		...state,
+		status: "ready",
+		expectedRowCount: state.expectedRowCount,
+		ordinaryImportCounts: normalizedOrdinaryImportCounts(
+			state.ordinaryImportCounts,
+		),
+	};
 }
 
 function navigationStagingFor(
@@ -629,8 +667,12 @@ function navigationRowToDigest(
 		catalogIndex: row.catalogIndex,
 		searchCorpus: [...row.searchCorpus],
 		pendingSourceProposal: row.pendingSourceProposal,
+		introductionReviewPending: row.introductionReviewPending ?? 0,
 		source: { ...row.source },
-		targets: row.targets.map((target) => ({ ...target })),
+		targets: row.targets.map((target) => ({
+			...target,
+			firstReviewPending: target.firstReviewPending ?? false,
+		})),
 	};
 }
 
@@ -647,6 +689,7 @@ function navigationRowMatchesDigest(
 		current.messageId === digest.messageId &&
 		current.catalogIndex === digest.catalogIndex &&
 		current.pendingSourceProposal === digest.pendingSourceProposal &&
+		current.introductionReviewPending === digest.introductionReviewPending &&
 		JSON.stringify(current.searchCorpus) ===
 			JSON.stringify(digest.searchCorpus) &&
 		current.source.localeId === digest.source.localeId &&
@@ -662,6 +705,7 @@ function navigationRowMatchesDigest(
 				target.touched === next.touched &&
 				target.confirmedGitContent === next.confirmedGitContent &&
 				target.confirmedContentPreviously === next.confirmedContentPreviously &&
+				target.firstReviewPending === next.firstReviewPending &&
 				target.repeatedGitContent === next.repeatedGitContent &&
 				target.valueFingerprint === next.valueFingerprint &&
 				target.gitValueFingerprint === next.gitValueFingerprint
@@ -749,10 +793,13 @@ async function upsertNavigationRow(
 	if (existing && navigationRowMatchesDigest(existing, input.digest)) {
 		return false;
 	}
-	const existingCounts =
+	const storedExistingCounts =
 		input.envelope.kind === "active"
 			? input.envelope.state.ordinaryImportCounts
 			: input.envelope.staging.ordinaryImportCounts;
+	const existingCounts = storedExistingCounts
+		? normalizedOrdinaryImportCounts(storedExistingCounts)
+		: undefined;
 	let nextOrdinaryImportCounts = existingCounts;
 	if (existingCounts) {
 		if (existing) {
@@ -844,10 +891,13 @@ async function removeNavigationRow(
 			message: "Catalog Workspace Navigation Index envelope went negative.",
 		});
 	}
-	const ordinaryImportCounts =
+	const storedOrdinaryImportCounts =
 		input.envelope.kind === "active"
 			? input.envelope.state.ordinaryImportCounts
 			: input.envelope.staging.ordinaryImportCounts;
+	const ordinaryImportCounts = storedOrdinaryImportCounts
+		? normalizedOrdinaryImportCounts(storedOrdinaryImportCounts)
+		: undefined;
 	const nextOrdinaryImportCounts = ordinaryImportCounts
 		? combineOrdinaryImportCounts(
 				ordinaryImportCounts,
@@ -1330,7 +1380,9 @@ async function navigationBackfillStatusFor(
 		byteLength: state.byteLength,
 		expectedRowCount: state.expectedRowCount ?? null,
 		expectedByteLength: state.expectedByteLength ?? null,
-		ordinaryImportCounts: state.ordinaryImportCounts ?? null,
+		ordinaryImportCounts: state.ordinaryImportCounts
+			? normalizedOrdinaryImportCounts(state.ordinaryImportCounts)
+			: null,
 		stepPending: backfillStepIsPending(state),
 		forceRebuild: state.backfillForceRebuild ?? false,
 		failure: state.backfillFailure ?? null,
@@ -1923,6 +1975,7 @@ const navigationTargetDigestValidator = v.object({
 	touched: v.boolean(),
 	confirmedGitContent: v.boolean(),
 	confirmedContentPreviously: v.boolean(),
+	firstReviewPending: v.boolean(),
 	repeatedGitContent: v.optional(v.boolean()),
 	gitValueFingerprint: v.optional(v.string()),
 });
@@ -1932,6 +1985,7 @@ const navigationDigestValidator = v.object({
 	catalogIndex: v.number(),
 	searchCorpus: v.array(v.string()),
 	pendingSourceProposal: v.boolean(),
+	introductionReviewPending: v.number(),
 	source: v.object({
 		localeId: v.id("locales"),
 		gitValueFingerprint: v.string(),
@@ -2165,7 +2219,9 @@ export const navigation = query({
 			.order("desc")
 			.take(1);
 		const run = latestRun[0];
-		const ordinaryImportCounts = state.ordinaryImportCounts;
+		const ordinaryImportCounts = normalizedOrdinaryImportCounts(
+			state.ordinaryImportCounts,
+		);
 		const result: CatalogWorkspaceNavigationRead = {
 			kind: "ready",
 			...navigationReadIdentity(projection),

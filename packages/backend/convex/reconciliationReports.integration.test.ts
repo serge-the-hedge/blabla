@@ -184,7 +184,7 @@ describe("Reconciliation Reports", () => {
 				{
 					catalogPath: "de.arb",
 					content:
-						'{"@@locale":"de","broken":"{count} Dinge","git":"Geändert","review":"Alt"}',
+						'{"@@locale":"de","broken":"{count} Dinge","git":"Geändert","review":"Alt","new":"Neu"}',
 				},
 			],
 		});
@@ -243,6 +243,12 @@ describe("Reconciliation Reports", () => {
 				expect.objectContaining({
 					group: "to_translate",
 					messageId: "new",
+					locales: [
+						expect.objectContaining({
+							localeId: targetId,
+							facts: [expect.objectContaining({ kind: "new_target_value" })],
+						}),
+					],
 				}),
 			]),
 		);

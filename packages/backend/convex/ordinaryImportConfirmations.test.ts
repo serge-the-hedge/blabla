@@ -65,6 +65,8 @@ describe("ordinary import confirmation policy", () => {
 					localeId,
 					sourceFingerprint: "stale-previous-source",
 					valueFingerprint: "stale-de",
+					recordedBy: { kind: "user", id: "reviewer" },
+					recordedAt: 1,
 				},
 				{
 					kind: "translatorConfirmation",
@@ -72,6 +74,8 @@ describe("ordinary import confirmation policy", () => {
 					localeId,
 					sourceFingerprint: "confirmed-source",
 					valueFingerprint: "confirmed-de",
+					recordedBy: { kind: "user", id: "reviewer" },
+					recordedAt: 1,
 				},
 			],
 			pendingSourceMessageIds: new Set(["pending-source"]),
@@ -87,6 +91,7 @@ describe("ordinary import confirmation policy", () => {
 			stale: 1,
 			alreadyConfirmed: 1,
 			pendingSourceProposal: 1,
+			introduced: 0,
 		});
 		expect(plan.candidates.map((candidate) => candidate.messageId)).toEqual([
 			"eligible",

@@ -12,11 +12,13 @@ function digest(input: {
 	catalogIndex: number;
 	corpus: string[];
 	targetStates?: string[];
+	introductionReviewPending?: number;
 }): StringsNavigationDigest {
 	return {
 		messageId: input.messageId,
 		catalogIndex: input.catalogIndex,
 		searchCorpus: input.corpus,
+		introductionReviewPending: input.introductionReviewPending ?? 0,
 		source: {
 			localeId: "source-locale",
 			gitValueFingerprint: "source-fingerprint",
@@ -32,6 +34,7 @@ function digest(input: {
 			touched: true,
 			confirmedGitContent: true,
 			confirmedContentPreviously: true,
+			firstReviewPending: false,
 		})),
 	};
 }
@@ -103,6 +106,23 @@ describe("navigateStringsDigests", () => {
 		]);
 	});
 
+	test("matches introduced provenance independently of target value state", () => {
+		const introduced = digest({
+			messageId: "new_populated_key",
+			catalogIndex: 3,
+			corpus: ["new_populated_key", "placeholder"],
+			targetStates: ["unconfirmedImport"],
+			introductionReviewPending: 1,
+		});
+		const result = navigateStringsDigests(
+			{ ...navigation, keys: [...navigation.keys, introduced] },
+			{ query: "", scope: "introduced" },
+		);
+		expect(result.matchingDigests.map((item) => item.messageId)).toEqual([
+			"new_populated_key",
+		]);
+	});
+
 	test("combines a frozen hand-off with search and scope without changing Catalog Order", () => {
 		const result = navigateStringsDigests(navigation, {
 			query: "title",
@@ -144,6 +164,7 @@ describe("translationTaskLocales", () => {
 			touched: true,
 			confirmedGitContent: true,
 			confirmedContentPreviously: true,
+			firstReviewPending: false,
 		});
 		const first = {
 			...digest({ messageId: "first", catalogIndex: 0, corpus: [] }),

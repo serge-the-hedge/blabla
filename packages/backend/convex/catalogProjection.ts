@@ -117,6 +117,11 @@ export type ProjectedMessage = {
 	declaredPlaceholderNames?: string[];
 	declaredPlaceholderNamesComplete?: boolean;
 	declaredPlaceholderNameCount?: number;
+	/** Post-bootstrap Git introductions carry the time and frozen target-Locale
+	 * scope of their First Review on the source row only. The provenance follows
+	 * the key through later projections and Archive Reconciliation. */
+	introducedAt?: number;
+	introductionLocaleIds?: Id<"locales">[];
 	materialized: boolean;
 };
 
@@ -208,6 +213,8 @@ export const projectedMessageFields = {
 	declaredPlaceholderNames: v.optional(v.array(v.string())),
 	declaredPlaceholderNamesComplete: v.optional(v.boolean()),
 	declaredPlaceholderNameCount: v.optional(v.number()),
+	introducedAt: v.optional(v.number()),
+	introductionLocaleIds: v.optional(v.array(v.id("locales"))),
 	materialized: v.boolean(),
 } as const;
 
@@ -383,7 +390,18 @@ export function assertProjectedMessage(message: ProjectedMessage): void {
 			message.valueFingerprint.length === 0) ||
 		(message.gitValueRevision !== undefined &&
 			(!Number.isSafeInteger(message.gitValueRevision) ||
-				message.gitValueRevision < 0))
+				message.gitValueRevision < 0)) ||
+		(message.introducedAt === undefined) !==
+			(message.introductionLocaleIds === undefined) ||
+		(message.introducedAt !== undefined &&
+			message.introductionLocaleIds !== undefined &&
+			(!message.isSource ||
+				!Number.isSafeInteger(message.introducedAt) ||
+				message.introducedAt < 0 ||
+				message.introductionLocaleIds.length > MAX_PROJECTED_LOCALES - 1 ||
+				new Set(message.introductionLocaleIds).size !==
+					message.introductionLocaleIds.length ||
+				message.introductionLocaleIds.includes(message.localeId)))
 	) {
 		throw new ConvexError({
 			code: "VALIDATION",
@@ -409,6 +427,73 @@ export function assertProjectedMessage(message: ProjectedMessage): void {
 			"declared placeholder",
 		);
 	}
+}
+
+/** Carry a post-bootstrap key's First Review provenance forward, including
+ * through an archive. A source absent from both active and retained evidence is
+ * a genuine Git introduction only when a prior Baseline existed; the first
+ * Baseline remains the separately approved bootstrap. */
+export function attachIntroductionReviews(input: {
+	hadPreviousBaseline: boolean;
+	previousMessages: readonly ProjectedMessage[];
+	retainedMessages: readonly ProjectedMessage[];
+	currentMessages: readonly ProjectedMessage[];
+	introducedAt: number;
+}): ProjectedMessage[] {
+	if (!Number.isSafeInteger(input.introducedAt) || input.introducedAt < 0) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Catalog introduction provenance has an invalid timestamp.",
+		});
+	}
+	const previousSources = new Map(
+		input.previousMessages
+			.filter((message) => message.isSource)
+			.map((message) => [message.messageId, message] as const),
+	);
+	const retainedSources = new Map(
+		input.retainedMessages
+			.filter((message) => message.isSource)
+			.map((message) => [message.messageId, message] as const),
+	);
+	const currentTargetsByMessage = new Map<string, Id<"locales">[]>();
+	for (const message of input.currentMessages) {
+		if (message.isSource) continue;
+		const localeIds = currentTargetsByMessage.get(message.messageId) ?? [];
+		localeIds.push(message.localeId);
+		currentTargetsByMessage.set(message.messageId, localeIds);
+	}
+
+	return input.currentMessages.map((message) => {
+		if (!message.isSource) {
+			const {
+				introducedAt: _introducedAt,
+				introductionLocaleIds: _introductionLocaleIds,
+				...target
+			} = message;
+			return target;
+		}
+		const prior =
+			previousSources.get(message.messageId) ??
+			retainedSources.get(message.messageId);
+		const introducedAt = prior?.introducedAt;
+		const introductionLocaleIds = prior?.introductionLocaleIds;
+		if (introducedAt !== undefined && introductionLocaleIds !== undefined) {
+			return {
+				...message,
+				introducedAt,
+				introductionLocaleIds: [...introductionLocaleIds],
+			};
+		}
+		if (prior || !input.hadPreviousBaseline) return message;
+		return {
+			...message,
+			introducedAt: input.introducedAt,
+			introductionLocaleIds: [
+				...(currentTargetsByMessage.get(message.messageId) ?? []),
+			],
+		};
+	});
 }
 
 function assertGitAuthoredChange(change: GitAuthoredChange): void {
@@ -1302,6 +1387,12 @@ function projectedMessageFromRow(
 			? {}
 			: {
 					declaredPlaceholderNameCount: row.declaredPlaceholderNameCount,
+				}),
+		...(row.introducedAt === undefined
+			? {}
+			: {
+					introducedAt: row.introducedAt,
+					introductionLocaleIds: [...(row.introductionLocaleIds ?? [])],
 				}),
 		materialized: row.materialized,
 	};
