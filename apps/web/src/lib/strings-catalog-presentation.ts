@@ -1,3 +1,4 @@
+import { canRecordIntentionalBlank } from "./catalog-value-lifecycle";
 import type { CatalogWorkspaceValue } from "./strings-catalog";
 
 /**
@@ -147,9 +148,13 @@ export function presentCatalogWorkspaceValue(
 	if (isFocused || isDirty) {
 		if (shortcut === "save") affordances.push("commit");
 		// Clearing a field and walking away must mean undecided, so a deliberate
-		// blank stays an explicit act — and is not offered on a value that
-		// already renders nothing.
-		if (!value.isSource && !isIntentionalBlank(value)) {
+		// blank stays an explicit act. The decision is useful only for an exactly
+		// empty draft; whitespace remains real catalog content.
+		if (
+			!value.isSource &&
+			canRecordIntentionalBlank(draftValue) &&
+			!isIntentionalBlank(value)
+		) {
 			affordances.push("intentionalBlank");
 		}
 	}

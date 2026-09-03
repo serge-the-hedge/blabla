@@ -49,6 +49,7 @@ import {
 } from "@/components/localization/project-shell";
 import { TranslationReviewEditor } from "@/components/localization/translation-review-value-editor";
 import { WhitespaceFacts } from "@/components/localization/whitespace-facts";
+import { canRecordIntentionalBlank } from "@/lib/catalog-value-lifecycle";
 import { api, convexId } from "@/lib/convex-api";
 import { localeProposalReviewState } from "@/lib/locale-proposal-review-state";
 
@@ -1153,26 +1154,25 @@ export function PortugueseLocaleProposalWorkbench({
 													</TranslationReviewEditor.Actions>
 												</TranslationReviewEditor.Provider>
 												<div className="flex flex-col gap-2">
-													<div className="flex flex-col gap-2 sm:flex-row">
-														<Input
-															aria-label={`Reason for intentionally blank ${message.messageId}`}
-															placeholder="Reason for an intentional blank"
-															value={
-																blankReasons[message.messageId] ??
-																message.candidate?.intentionalBlankReason ??
-																message.value?.intentionalBlankReason ??
-																""
-															}
-															onChange={(event) =>
-																setBlankReasons((previous) => ({
-																	...previous,
-																	[message.messageId]: event.target.value,
-																}))
-															}
-															disabled={proposalReadOnly}
-														/>
-														{!message.value ||
-														message.value.value.length === 0 ? (
+													{canRecordIntentionalBlank(draft) ? (
+														<div className="flex flex-col gap-2 sm:flex-row">
+															<Input
+																aria-label={`Reason for intentionally blank ${message.messageId}`}
+																placeholder="Reason for an intentional blank"
+																value={
+																	blankReasons[message.messageId] ??
+																	message.candidate?.intentionalBlankReason ??
+																	message.value?.intentionalBlankReason ??
+																	""
+																}
+																onChange={(event) =>
+																	setBlankReasons((previous) => ({
+																		...previous,
+																		[message.messageId]: event.target.value,
+																	}))
+																}
+																disabled={proposalReadOnly}
+															/>
 															<Button
 																size="sm"
 																variant="outline"
@@ -1194,8 +1194,8 @@ export function PortugueseLocaleProposalWorkbench({
 															>
 																Mark intentional blank
 															</Button>
-														) : null}
-													</div>
+														</div>
+													) : null}
 													{reviewToken && message.facts.state === "awaiting" ? (
 														<div className="flex flex-wrap gap-2">
 															<Button
@@ -1219,26 +1219,6 @@ export function PortugueseLocaleProposalWorkbench({
 																}
 															>
 																<X data-icon="inline-start" /> Reject
-															</Button>
-															<Button
-																size="sm"
-																variant="outline"
-																onClick={() =>
-																	void markIntentionalBlank(message)
-																}
-																disabled={
-																	busy !== null ||
-																	reviewed ||
-																	message.facts.staleSource ||
-																	proposalReadOnly ||
-																	!(
-																		blankReasons[message.messageId] ??
-																		message.candidate?.intentionalBlankReason ??
-																		""
-																	).trim()
-																}
-															>
-																Mark intentional blank
 															</Button>
 														</div>
 													) : null}

@@ -141,21 +141,41 @@ describe("presentCatalogWorkspaceValue", () => {
 });
 
 describe("affordances follow focus", () => {
-	test("a focused settled target offers only a deliberate blank", () => {
+	test("a focused non-empty target offers no deliberate blank", () => {
 		const presentation = present(target(), { isFocused: true });
 
-		expect(presentation.affordances).toEqual(["intentionalBlank"]);
+		expect(presentation.affordances).toEqual([]);
 		expect(presentation.commitHint).toBeUndefined();
 	});
 
-	test("a dirty target offers a save and a deliberate blank", () => {
+	test("a dirty non-empty target offers only a save", () => {
 		const presentation = present(target(), {
 			isDirty: true,
 			draftValue: "Kontostand",
 		});
 
-		expect(presentation.affordances).toEqual(["commit", "intentionalBlank"]);
+		expect(presentation.affordances).toEqual(["commit"]);
 		expect(presentation.commitHint).toBe("save");
+	});
+
+	test("an exactly empty draft offers a deliberate blank", () => {
+		const presentation = present(target(), {
+			isFocused: true,
+			isDirty: true,
+			draftValue: "",
+		});
+
+		expect(presentation.affordances).toEqual(["commit", "intentionalBlank"]);
+	});
+
+	test("a whitespace-only draft is content, not a deliberate blank", () => {
+		const presentation = present(target(), {
+			isFocused: true,
+			isDirty: true,
+			draftValue: " ",
+		});
+
+		expect(presentation.affordances).toEqual(["commit"]);
 	});
 
 	test("an untouched Unconfirmed Import keeps confirmation visible", () => {
@@ -163,7 +183,7 @@ describe("affordances follow focus", () => {
 			isFocused: true,
 		});
 
-		expect(presentation.affordances).toEqual(["confirm", "intentionalBlank"]);
+		expect(presentation.affordances).toEqual(["confirm"]);
 		expect(presentation.commitHint).toBe("still correct");
 	});
 
@@ -173,7 +193,7 @@ describe("affordances follow focus", () => {
 			{ isFocused: true },
 		);
 
-		expect(presentation.affordances).toEqual(["confirm", "intentionalBlank"]);
+		expect(presentation.affordances).toEqual(["confirm"]);
 		expect(presentation.commitHint).toBe("still correct");
 	});
 
@@ -183,7 +203,7 @@ describe("affordances follow focus", () => {
 			{ isFocused: true },
 		);
 
-		expect(presentation.affordances).toEqual(["intentionalBlank"]);
+		expect(presentation.affordances).toEqual([]);
 		expect(presentation.commitHint).toBeUndefined();
 	});
 
@@ -194,7 +214,7 @@ describe("affordances follow focus", () => {
 			draftValue: "Kontostand",
 		});
 
-		expect(presentation.affordances).toEqual(["commit", "intentionalBlank"]);
+		expect(presentation.affordances).toEqual(["commit"]);
 		expect(presentation.commitHint).toBe("save");
 	});
 
