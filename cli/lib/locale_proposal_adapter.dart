@@ -229,6 +229,14 @@ class PortugueseLocaleDelivery {
     }
   }
 
+  int catalogValueCount(LocaleProposalArtifact artifact) {
+    final document = jsonDecode(artifact.catalog.content) as Map;
+    return document.keys
+        .whereType<String>()
+        .where((key) => !key.startsWith('@'))
+        .length;
+  }
+
   Future<void> apply(
     Directory checkout,
     LocaleProposalArtifact artifact,

@@ -156,6 +156,7 @@ function ReleaseRoute() {
 								<ReleaseDeliveryHandoff
 									recordId={record.recordId}
 									changeKeyCount={bundle.changeKeyCount ?? 0}
+									targetValueCount={record.scopeValueCount}
 									localeProposal={readyLocaleProposal}
 								/>
 							)

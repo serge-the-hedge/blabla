@@ -114,10 +114,12 @@ function BaselineLine({ record }: { record: ReleaseSummary }) {
 export function ReleaseDeliveryHandoff({
 	recordId,
 	changeKeyCount,
+	targetValueCount,
 	localeProposal,
 }: {
 	recordId: ReleaseSummary["recordId"];
 	changeKeyCount: number;
+	targetValueCount: number;
 	localeProposal: ReadyLocaleProposal | null;
 }) {
 	if (changeKeyCount === 0 && !localeProposal) {
@@ -127,19 +129,33 @@ export function ReleaseDeliveryHandoff({
 			</p>
 		);
 	}
-	const existingSummary = `${NUMBER_FORMAT.format(changeKeyCount)} changed key${changeKeyCount === 1 ? "" : "s"}`;
-	const localeSummary = localeProposal
-		? `Portuguese · ${NUMBER_FORMAT.format(localeProposal.valueCount)} values`
-		: null;
 	const command = blablaCommand(
 		`deliver --release ${recordId}${localeProposal ? ` --locale-proposal ${localeProposal.proposalId}` : ""}`,
 	);
 
 	return (
-		<div className="flex flex-col gap-2">
+		<div className="flex flex-col gap-3">
+			<div className="grid overflow-hidden rounded-md border bg-border sm:grid-cols-2">
+				<div className="bg-background p-3">
+					<p className="font-medium text-sm">Existing locales</p>
+					<p className="mt-0.5 text-muted-foreground text-xs tabular-nums">
+						{NUMBER_FORMAT.format(changeKeyCount)} changed key
+						{changeKeyCount === 1 ? "" : "s"} ·{" "}
+						{NUMBER_FORMAT.format(targetValueCount)} target value
+						{targetValueCount === 1 ? "" : "s"}
+					</p>
+				</div>
+				{localeProposal ? (
+					<div className="border-border border-t bg-background p-3 sm:border-t-0 sm:border-l">
+						<p className="font-medium text-sm">Portuguese · new locale</p>
+						<p className="mt-0.5 text-muted-foreground text-xs tabular-nums">
+							{NUMBER_FORMAT.format(localeProposal.valueCount)} catalog values
+						</p>
+					</div>
+				) : null}
+			</div>
 			<p className="text-muted-foreground text-xs">
-				Ready · {[existingSummary, localeSummary].filter(Boolean).join(" + ")}.
-				Run
+				Ready. Run
 				{localeProposal ? " one combined delivery" : " the delivery"} from a
 				clean checkout:
 			</p>

@@ -169,6 +169,9 @@ class ReleaseRepositoryAdapter {
     if (localeArtifact != null) {
       _validateCombinedProvenance(summary, localeArtifact);
     }
+    final localeValueCount = localeArtifact == null
+        ? 0
+        : _portuguese.catalogValueCount(localeArtifact);
 
     final checkout = await _repositoryRoot(request.checkout);
     await _ensureReleaseMatchesCheckout(checkout, summary);
@@ -323,7 +326,7 @@ class ReleaseRepositoryAdapter {
           : 'feat(l10n): deliver reviewed translations and Portuguese';
       final localeTrailers = localeArtifact == null
           ? ''
-          : '\nBlabla-Locale-Proposal: ${localeArtifact.proposalId}\nBlabla-Source-Snapshot: ${localeArtifact.sourceSnapshot.id}';
+          : '\nBlabla-Locale-Proposal: ${localeArtifact.proposalId}\nBlabla-Locale-Values: $localeValueCount\nBlabla-Source-Snapshot: ${localeArtifact.sourceSnapshot.id}';
       await _git(checkout, [
         'commit',
         '--only',
@@ -338,6 +341,7 @@ class ReleaseRepositoryAdapter {
         delivery,
         appliedOnto,
         localeArtifact: localeArtifact,
+        localeValueCount: localeValueCount,
       );
       final pullRequestBodyFile = await _writePullRequestBody(
         checkout,
@@ -351,7 +355,9 @@ class ReleaseRepositoryAdapter {
         'Git distance from the Baseline (baseline-only, checkout-only): $commitDistance.',
       );
       request.write(
-        'Applied ${delivery.applied.length} key${delivery.applied.length == 1 ? '' : 's'}; skipped ${delivery.skipped.length}.',
+        localeArtifact == null
+            ? 'Applied ${delivery.applied.length} existing-locale key${delivery.applied.length == 1 ? '' : 's'}; skipped ${delivery.skipped.length}.'
+            : 'Applied ${delivery.applied.length} existing-locale key${delivery.applied.length == 1 ? '' : 's'}; added Portuguese with $localeValueCount catalog value${localeValueCount == 1 ? '' : 's'}; skipped ${delivery.skipped.length}.',
       );
       for (final skipped in delivery.skipped) {
         request.write('Skipped ${skipped.messageId}: ${skipped.reason}.');
@@ -882,6 +888,7 @@ class ReleaseRepositoryAdapter {
     ReleaseDeliveryTree delivery,
     String appliedOnto, {
     LocaleProposalArtifact? localeArtifact,
+    required int localeValueCount,
   }) {
     final skipped = delivery.skipped.isEmpty
         ? '- None'
@@ -893,7 +900,7 @@ class ReleaseRepositoryAdapter {
 - Release Record: `${summary.releaseRecord.id}`
 - Baseline: `${summary.releaseRecord.baselineCommit}`
 - Applied onto: `$appliedOnto`
-- Applied keys: ${delivery.applied.length}${localeArtifact == null ? '' : '\n- Locale Proposal: `${localeArtifact.proposalId}`\n- Source Snapshot: `${localeArtifact.sourceSnapshot.id}`'}
+- Existing-locale keys applied: ${delivery.applied.length}${localeArtifact == null ? '' : '\n- Portuguese catalog values added: $localeValueCount\n- Locale Proposal: `${localeArtifact.proposalId}`\n- Source Snapshot: `${localeArtifact.sourceSnapshot.id}`'}
 
 Skipped keys
 
