@@ -296,6 +296,15 @@ surfaces the residue as ordinary translation work with a per-Locale reason.
 Because ICU plural categories are per language, one contract change lands as a
 different amount of work in each Locale — and Chinese is often already finished.
 
+The same rule applies to a reviewed **new-Locale proposal** when Source advances.
+The old proposal and artifact remain immutable evidence; they are not globally
+obsolete. Continuing creates or resumes a proposal pinned to the current Source,
+materializes each human-authored or reviewed value whose Source Fingerprint is
+unchanged, never overwrites work already present there, and leaves only added or
+changed Source values as ordinary residue. An interrupted continuation is safe to
+retry. Final delivery remains strict: only the resulting current-source artifact
+can compose with a Release Bundle.
+
 ---
 
 ## 6. Storage
@@ -725,9 +734,12 @@ Blabla-Baseline-Commit: <sha>
 Blabla-Applied-Onto: <sha>
 ```
 
-plus the counts. Combined delivery also carries `Blabla-Locale-Proposal` and
-`Blabla-Source-Snapshot`. The full skipped-key body, with a reason per key, goes to a
-**file**, and the command prints a ready-to-run `gh pr create --body-file`
+plus the counts. Combined delivery also carries `Blabla-Locale-Proposal`,
+`Blabla-Locale-Values`, and `Blabla-Source-Snapshot`. User-facing release and CLI
+summaries keep existing-Locale keys/target values separate from the new Locale's
+complete catalog value count; a small existing-Locale delta must never visually
+hide a much larger new Locale. The full skipped-key body, with a reason per key,
+goes to a **file**, and the command prints a ready-to-run `gh pr create --body-file`
 invocation — printing the path alone when `gh` is absent. The durable copy is
 the Release Record.
 

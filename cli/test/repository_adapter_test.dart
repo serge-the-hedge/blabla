@@ -453,7 +453,7 @@ void main() {
       expect(
         output.toString(),
         allOf(
-          contains('Applied 1 key; skipped 1.'),
+          contains('Applied 1 existing-locale key; skipped 1.'),
           contains('Skipped farewell: source_changed.'),
           contains('gh pr create'),
           contains('--body-file'),
@@ -507,6 +507,7 @@ void main() {
         allOf(
           contains('Blabla-Release-Record: release_123'),
           contains('Blabla-Locale-Proposal: proposal_pt_123'),
+          contains('Blabla-Locale-Values: 1'),
           contains('Blabla-Source-Snapshot: snapshot_123'),
         ),
       );
@@ -527,12 +528,19 @@ void main() {
         allOf(
           contains('Release Record: `release_123`'),
           contains('Locale Proposal: `proposal_pt_123`'),
+          contains('Portuguese catalog values added: 1'),
           contains('Source Snapshot: `snapshot_123`'),
         ),
       );
       expect(
         output.toString(),
-        allOf(contains('git push'), contains('gh pr create')),
+        allOf(
+          contains(
+            'Applied 1 existing-locale key; added Portuguese with 1 catalog value; skipped 1.',
+          ),
+          contains('git push'),
+          contains('gh pr create'),
+        ),
       );
     },
   );
