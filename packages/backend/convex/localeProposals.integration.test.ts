@@ -1659,6 +1659,110 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 		expect(currentProposal.proposalId).not.toBe(oldProposal.proposalId);
 	});
 
+	test("carries compatible reviewed values onto the current Source and leaves only residue", async () => {
+		const user = await authenticatedBackend(
+			t,
+			"locale-proposal-continuation-owner",
+		);
+		const projectId = await createProject(user);
+		await ingestSourceBaseline(user, projectId, {
+			content: JSON.stringify({
+				"@@locale": "en",
+				unchanged: "Unchanged",
+				changed: "Before",
+			}),
+		});
+		const oldTask = await user.mutation(
+			api.agentTranslationProposals.createTask,
+			{
+				projectId,
+				title: "Portuguese first pass",
+				target: { kind: "newLocale", localeCode: "pt" },
+				scope: { kind: "completeCatalog" },
+			},
+		);
+		const oldTaskDetail = await user.query(
+			api.agentTranslationProposals.getForReview,
+			{ proposalId: oldTask.taskId },
+		);
+		const oldProposalId =
+			oldTaskDetail?.proposal.localeProposalTaskScope?.localeProposalId;
+		if (!oldProposalId) throw new Error("Expected the old Locale Proposal.");
+		const oldPage = await user.query(api.localeProposals.getForReview, {
+			proposalId: oldProposalId,
+			taskId: oldTask.taskId,
+			limit: 16,
+		});
+		if (!oldPage) throw new Error("Expected the old review page.");
+		await user.mutation(api.localeProposals.stageForReview, {
+			projectId,
+			proposalId: oldProposalId,
+			items: oldPage.messages.map((message) => ({
+				messageId: message.messageId,
+				value: message.messageId === "unchanged" ? "Sem mudancas" : "Antes",
+				sourceFingerprint: message.sourceFingerprint,
+			})),
+		});
+		await user.action(api.agentTranslationProposals.finalizeTask, {
+			taskId: oldTask.taskId,
+		});
+
+		await ingestSourceBaseline(user, projectId, {
+			commit: "next",
+			content: JSON.stringify({
+				"@@locale": "en",
+				unchanged: "Unchanged",
+				changed: "After",
+				added: "Added",
+			}),
+			lineage: {
+				baselineCommit: "baseline",
+				relationship: "descendant",
+				mergeBase: "baseline",
+			},
+		});
+
+		await expect(
+			user.query(api.localeProposals.getForReview, {
+				proposalId: oldProposalId,
+				taskId: oldTask.taskId,
+				limit: 16,
+			}),
+		).resolves.toMatchObject({
+			isCurrentBaseline: false,
+			messages: [],
+		});
+
+		const continued = await user.action(
+			api.agentTranslationProposals.continueNewLocaleTask,
+			{ taskId: oldTask.taskId },
+		);
+		expect(continued).toMatchObject({
+			carriedValueCount: 1,
+			remainingValueCount: 2,
+			totalValueCount: 3,
+		});
+		expect(continued.taskId).not.toBe(oldTask.taskId);
+
+		const currentPage = await user.query(api.localeProposals.getForReview, {
+			proposalId: continued.localeProposalId,
+			taskId: continued.taskId,
+			focus: "all",
+			limit: 16,
+		});
+		expect(currentPage?.messages).toMatchObject([
+			{ messageId: "unchanged", value: { value: "Sem mudancas" } },
+			{ messageId: "changed", value: null },
+			{ messageId: "added", value: null },
+		]);
+		expect(
+			await user.action(api.localeProposals.artifactForReview, {
+				projectId,
+				proposalId: oldProposalId,
+			}),
+		).toMatchObject({ proposalId: oldProposalId });
+	}, 60_000);
+
 	test("accepts an exact Intentional Blank with its reason", async () => {
 		const user = await authenticatedBackend(t, "locale-proposal-owner");
 		const projectId = await createProject(user);

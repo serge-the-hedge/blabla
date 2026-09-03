@@ -22,7 +22,12 @@ import {
 import { Input } from "@blabla/ui/components/input";
 import { Skeleton } from "@blabla/ui/components/skeleton";
 import { Textarea } from "@blabla/ui/components/textarea";
-import { createFileRoute, Link, useParams } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	useNavigate,
+	useParams,
+} from "@tanstack/react-router";
 import { useAction, useMutation, useQuery } from "convex/react";
 import {
 	ArrowLeft,
@@ -30,6 +35,7 @@ import {
 	ChevronDown,
 	Download,
 	Languages,
+	RefreshCw,
 	Save,
 	Search,
 	Sparkles,
@@ -106,6 +112,13 @@ export function PortugueseLocaleProposalWorkbench({
 	const finalizeForReview = useAction(api.localeProposals.finalizeForReview);
 	const finalizeTask = useAction(api.agentTranslationProposals.finalizeTask);
 	const artifactForReview = useAction(api.localeProposals.artifactForReview);
+	const carryForwardForReview = useAction(
+		api.localeProposals.carryForwardForReview,
+	);
+	const continueNewLocaleTask = useAction(
+		api.agentTranslationProposals.continueNewLocaleTask,
+	);
+	const navigate = useNavigate();
 	const [proposalId, setProposalId] = useState<string | null>(null);
 	const activeProposalId = initialProposalId ?? proposalId ?? currentProposalId;
 	const [cursor, setCursor] = useState(0);
@@ -291,6 +304,29 @@ export function PortugueseLocaleProposalWorkbench({
 			setProposalId(result.proposalId);
 			setNotice(
 				"Portuguese is ready for manual editing or agent-assisted review.",
+			);
+		});
+
+	const continueOnCurrentSource = () =>
+		run("continue-source", async () => {
+			if (!activeProposalId) return;
+			if (taskId) {
+				const result = await continueNewLocaleTask({
+					taskId: convexId<"agentTranslationProposals">(taskId),
+				});
+				await navigate({
+					to: "/projects/$projectId/proposals/$proposalId",
+					params: { projectId, proposalId: result.taskId },
+				});
+				return;
+			}
+			const result = await carryForwardForReview({
+				projectId: convexProjectId,
+				proposalId: convexId<"localeProposals">(activeProposalId),
+			});
+			setProposalId(result.localeProposalId);
+			setNotice(
+				`${result.carriedValueCount.toLocaleString()} compatible value${result.carriedValueCount === 1 ? "" : "s"} carried forward; ${result.remainingValueCount.toLocaleString()} need work on the current source.`,
 			);
 		});
 
@@ -619,14 +655,28 @@ export function PortugueseLocaleProposalWorkbench({
 					</AlertDescription>
 				</Alert>
 			) : null}
-			{reviewState?.phase === "stale" ? (
-				<Alert variant="destructive" className="mb-4">
-					<TriangleAlert aria-hidden className="size-4" />
-					<AlertTitle>Source changed</AlertTitle>
-					<AlertDescription>
-						This proposal is pinned to an older Baseline Snapshot and cannot be
-						finalized. Start a fresh new-Locale task against the current
-						baseline.
+			{reviewState?.phase === "stale" ||
+			reviewState?.phase === "previousSource" ? (
+				<Alert className="mb-4">
+					<RefreshCw aria-hidden className="size-4" />
+					<AlertTitle>Continue on the current source</AlertTitle>
+					<AlertDescription className="flex flex-col items-start gap-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+						<span>
+							This work remains pinned and inspectable here. Carry every value
+							whose source is unchanged into a current proposal; only changed or
+							added source values will remain to translate.
+						</span>
+						<Button
+							size="sm"
+							className="shrink-0"
+							onClick={continueOnCurrentSource}
+							disabled={busy !== null}
+						>
+							<RefreshCw data-icon="inline-start" />
+							{busy === "continue-source"
+								? "Carrying work forward…"
+								: "Continue on current source"}
+						</Button>
 					</AlertDescription>
 				</Alert>
 			) : null}

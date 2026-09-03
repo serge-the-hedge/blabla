@@ -2,6 +2,7 @@ export type LocaleProposalReviewPhase =
 	| "reviewing"
 	| "readyToFinalize"
 	| "stale"
+	| "previousSource"
 	| "finalized";
 
 export type LocaleProposalReviewState = {
@@ -19,6 +20,16 @@ export function localeProposalReviewState(input: {
 	remaining: number;
 	pendingHumanReview: { count: number; hasMore: boolean };
 }): LocaleProposalReviewState {
+	if (!input.isCurrentBaseline && input.status === "ready") {
+		return {
+			phase: "previousSource",
+			badgeLabel: "Ready on previous source",
+			emptyTitle: "Ready on previous source",
+			emptyDescription:
+				"Carry compatible reviewed values forward and finish only the changed source residue.",
+			canFinalize: false,
+		};
+	}
 	if (input.status === "ready") {
 		return {
 			phase: "finalized",

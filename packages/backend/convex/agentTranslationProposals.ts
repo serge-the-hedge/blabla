@@ -26,8 +26,10 @@ import { readyNavigationStateFor } from "./catalogWorkspaceNavigation";
 import { assertTargetValueContract } from "./contractTransforms";
 import { type HumanActor, now, sha256Hex } from "./lib";
 import {
+	carryForwardLocaleProposal,
 	ensureLocaleProposalForReview,
 	finalizeProposal,
+	type LocaleProposalCarryForwardResult,
 } from "./localeProposals";
 import { requireEditor, requireViewer } from "./permissions";
 import {
@@ -941,6 +943,120 @@ export const createTask = mutation({
 			title: args.title,
 			userId,
 		});
+	},
+});
+
+export const newLocaleContinuationBasis = internalQuery({
+	args: { taskId: v.id("agentTranslationProposals") },
+	handler: async (ctx, args) => {
+		const task = await ctx.db.get(args.taskId);
+		if (
+			task?.target.kind !== "localeProposal" ||
+			!task.localeProposalTaskScope ||
+			task.localeProposalTaskScope.localeProposalId !==
+				task.target.localeProposalId
+		) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "New-Locale Translation Task not found.",
+			});
+		}
+		const { userId } = await requireEditor(ctx, task.projectId);
+		return {
+			projectId: task.projectId,
+			fromProposalId: task.target.localeProposalId,
+			userId,
+		};
+	},
+});
+
+export const createContinuedNewLocaleTask = internalMutation({
+	args: {
+		fromTaskId: v.id("agentTranslationProposals"),
+		localeProposalId: v.id("localeProposals"),
+		userId: v.string(),
+	},
+	handler: async (ctx, args) => {
+		const [fromTask, localeProposal] = await Promise.all([
+			ctx.db.get(args.fromTaskId),
+			ctx.db.get(args.localeProposalId),
+		]);
+		if (
+			fromTask?.target.kind !== "localeProposal" ||
+			!fromTask.localeProposalTaskScope ||
+			!localeProposal ||
+			localeProposal.projectId !== fromTask.projectId
+		) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "New-Locale Translation Task continuation was not found.",
+			});
+		}
+		const snapshot = await ctx.db.get(localeProposal.sourceSnapshotId);
+		if (!snapshot || snapshot.projectId !== fromTask.projectId) {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "The current Source Snapshot is missing.",
+			});
+		}
+		const task = await createNewLocaleTaskForHuman(ctx, {
+			projectId: fromTask.projectId,
+			title: `pt · complete catalog · ${snapshot.commit.slice(0, 12)}`,
+			userId: args.userId,
+		});
+		const created = await ctx.db.get(task.taskId);
+		if (
+			created?.target.kind !== "localeProposal" ||
+			created.target.localeProposalId !== args.localeProposalId
+		) {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message:
+					"The continued task does not target the current Locale Proposal.",
+			});
+		}
+		return task;
+	},
+});
+
+/** Move a new-Locale task onto the current Source without discarding work
+ * whose per-value Source fingerprint still matches. */
+export const continueNewLocaleTask = action({
+	args: { taskId: v.id("agentTranslationProposals") },
+	handler: async (
+		ctx,
+		args,
+	): Promise<
+		LocaleProposalCarryForwardResult & {
+			taskId: Id<"agentTranslationProposals">;
+			title: string;
+			localeCode: string;
+			targetCount: number;
+		}
+	> => {
+		const basis: {
+			projectId: Id<"projects">;
+			fromProposalId: Id<"localeProposals">;
+			userId: string;
+		} = await ctx.runQuery(
+			internal.agentTranslationProposals.newLocaleContinuationBasis,
+			{ taskId: args.taskId },
+		);
+		const carried = await carryForwardLocaleProposal(ctx, basis);
+		const task: {
+			taskId: Id<"agentTranslationProposals">;
+			title: string;
+			localeCode: string;
+			targetCount: number;
+		} = await ctx.runMutation(
+			internal.agentTranslationProposals.createContinuedNewLocaleTask,
+			{
+				fromTaskId: args.taskId,
+				localeProposalId: carried.localeProposalId,
+				userId: basis.userId,
+			},
+		);
+		return { ...task, ...carried };
 	},
 });
 
