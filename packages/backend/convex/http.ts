@@ -1410,7 +1410,8 @@ http.route({
 										if (
 											target.currentCandidate?.value === item.value &&
 											target.currentCandidate.intentionalBlankReason ===
-												item.intentionalBlankReason
+												item.intentionalBlankReason &&
+											target.currentCandidate.basisIsCurrent
 										) {
 											existingResults.set(item.messageId, {
 												candidateId: target.currentCandidate.candidateId,
@@ -1497,7 +1498,8 @@ http.route({
 									if (
 										target.currentCandidate?.value === item.value &&
 										target.currentCandidate.intentionalBlankReason ===
-											item.intentionalBlankReason
+											item.intentionalBlankReason &&
+										target.currentCandidate.basisIsCurrent
 									) {
 										existingResults.set(item.messageId, {
 											candidateId: target.currentCandidate.candidateId,

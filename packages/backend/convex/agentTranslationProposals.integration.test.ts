@@ -738,6 +738,218 @@ describe("Agent Translation Proposals", () => {
 		expect(reviewed?.proposal.status).toBe("accepted");
 	});
 
+	test("keeps a frozen task scope live across a Source Proposal", async () => {
+		const user = await authenticatedBackend(t, "live-translation-task-basis");
+		const { projectId, targetId, token } = await setupProject(user);
+		const task = await user.mutation(api.agentTranslationProposals.createTask, {
+			projectId,
+			title: "Keep German greeting current",
+			target: { kind: "existingLocale", localeId: targetId },
+			scope: { kind: "selectedMessages", messageIds: ["greeting"] },
+		});
+		const submit = () =>
+			agentRequest(
+				t,
+				token,
+				`/api/agent/v1/translation-tasks/${task.taskId}/candidates`,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						items: [{ messageId: "greeting", value: "Guten Tag {name}" }],
+					}),
+				},
+			);
+
+		const firstSubmission = await submit();
+		expect(firstSubmission.status).toBe(200);
+		const firstRevisionId = (
+			(await firstSubmission.json()) as {
+				revisions: Array<{
+					revisionId: Id<"agentTranslationCandidateRevisions">;
+				}>;
+			}
+		).revisions[0]?.revisionId;
+		if (!firstRevisionId) throw new Error("Expected the first task revision.");
+
+		const workspace = await readWorkspaceKeyCards(user, projectId);
+		const source = workspace.keys
+			.find((key) => key.id === "greeting")
+			?.values.find((value) => value.isSource);
+		if (
+			!source ||
+			source.gitValueFingerprint === undefined ||
+			source.gitValueRevision === undefined ||
+			source.workspaceRevision === undefined
+		) {
+			throw new Error("Expected the Source concurrency basis.");
+		}
+		await user.mutation(api.catalogWorkspace.commit, {
+			projectId,
+			messageId: "greeting",
+			localeId: source.localeId,
+			intent: { kind: "save", value: "Welcome {name}" },
+			expectedGitValueFingerprint: source.gitValueFingerprint,
+			expectedGitValueRevision: source.gitValueRevision,
+			expectedWorkspaceRevision: source.workspaceRevision,
+		});
+
+		const refreshedTask = await agentRequest(
+			t,
+			token,
+			`/api/agent/v1/translation-tasks/${task.taskId}`,
+		);
+		expect(refreshedTask.status).toBe(200);
+		expect(await refreshedTask.json()).toMatchObject({
+			targets: [
+				expect.objectContaining({
+					messageId: "greeting",
+					sourceValue: "Welcome {name}",
+				}),
+			],
+		});
+
+		const refreshedSubmission = await submit();
+		expect(refreshedSubmission.status).toBe(200);
+		const refreshedRevisionId = (
+			(await refreshedSubmission.json()) as {
+				revisions: Array<{
+					revisionId: Id<"agentTranslationCandidateRevisions">;
+				}>;
+			}
+		).revisions[0]?.revisionId;
+		if (!refreshedRevisionId) {
+			throw new Error("Expected the refreshed task revision.");
+		}
+		expect(refreshedRevisionId).not.toBe(firstRevisionId);
+		expect(
+			await user.query(api.agentTranslationProposals.contextForReview, {
+				revisionId: refreshedRevisionId,
+			}),
+		).toMatchObject({
+			available: true,
+			basisIsCurrent: true,
+			source: { value: "Welcome {name}" },
+		});
+		expect(
+			await user.mutation(api.agentTranslationProposals.acceptTaskCandidates, {
+				proposalId: task.taskId,
+				candidateRevisionIds: [refreshedRevisionId],
+			}),
+		).toEqual({ accepted: 1, status: "accepted" });
+	});
+
+	test("lets a human keep a stale candidate for the current Source Contract", async () => {
+		const user = await authenticatedBackend(t, "keep-stale-translation-task");
+		const { projectId, targetId, token } = await setupProject(user);
+		const task = await user.mutation(api.agentTranslationProposals.createTask, {
+			projectId,
+			title: "Review German greeting",
+			target: { kind: "existingLocale", localeId: targetId },
+			scope: { kind: "selectedMessages", messageIds: ["greeting"] },
+		});
+		const submission = await agentRequest(
+			t,
+			token,
+			`/api/agent/v1/translation-tasks/${task.taskId}/candidates`,
+			{
+				method: "POST",
+				body: JSON.stringify({
+					items: [{ messageId: "greeting", value: "Guten Tag {name}" }],
+				}),
+			},
+		);
+		const revisionId = (
+			(await submission.json()) as {
+				revisions: Array<{
+					revisionId: Id<"agentTranslationCandidateRevisions">;
+				}>;
+			}
+		).revisions[0]?.revisionId;
+		if (!revisionId) throw new Error("Expected a task candidate revision.");
+
+		const workspace = await readWorkspaceKeyCards(user, projectId);
+		const source = workspace.keys
+			.find((key) => key.id === "greeting")
+			?.values.find((value) => value.isSource);
+		if (
+			!source ||
+			source.gitValueFingerprint === undefined ||
+			source.gitValueRevision === undefined ||
+			source.workspaceRevision === undefined
+		) {
+			throw new Error("Expected the Source concurrency basis.");
+		}
+		await user.mutation(api.catalogWorkspace.commit, {
+			projectId,
+			messageId: "greeting",
+			localeId: source.localeId,
+			intent: { kind: "save", value: "Welcome {name}" },
+			expectedGitValueFingerprint: source.gitValueFingerprint,
+			expectedGitValueRevision: source.gitValueRevision,
+			expectedWorkspaceRevision: source.workspaceRevision,
+		});
+		expect(
+			await user.query(api.agentTranslationProposals.contextForReview, {
+				revisionId,
+			}),
+		).toMatchObject({
+			available: true,
+			basisIsCurrent: false,
+			source: { value: "Welcome {name}" },
+		});
+
+		await expect(
+			user.mutation(api.agentTranslationProposals.saveTaskValue, {
+				taskId: task.taskId,
+				messageId: "greeting",
+				candidateToken: revisionId,
+				value: "Guten Tag {name}",
+			}),
+		).resolves.toMatchObject({
+			decision: { kind: "keepForCurrentSource" },
+		});
+		await expect(
+			user.mutation(api.agentTranslationProposals.saveTaskValue, {
+				taskId: task.taskId,
+				messageId: "greeting",
+				candidateToken: revisionId,
+				value: "Willkommen {name}",
+			}),
+		).resolves.toMatchObject({
+			decision: {
+				kind: "acceptWithEdits",
+				value: "Willkommen {name}",
+			},
+		});
+		const after = await readWorkspaceKeyCards(user, projectId);
+		expect(
+			after.keys
+				.find((key) => key.id === "greeting")
+				?.values.find((value) => value.localeId === targetId),
+		).toMatchObject({ value: "Willkommen {name}", valueState: "settled" });
+		const evidence = await t.run(async (ctx) => {
+			return await ctx.db
+				.query("agentTranslationCandidateReviews")
+				.withIndex("by_revision", (q) => q.eq("revisionId", revisionId))
+				.order("desc")
+				.collect();
+		});
+		expect(evidence).toHaveLength(2);
+		expect(evidence[0]).toMatchObject({
+			decision: {
+				kind: "acceptWithEdits",
+				value: "Willkommen {name}",
+			},
+		});
+		expect(evidence[1]).toMatchObject({
+			decision: { kind: "keepForCurrentSource" },
+			appliedBasis: { kind: "catalogWorkspace" },
+		});
+		expect(evidence[1]?.appliedBasis).not.toEqual(
+			(await t.run((ctx) => ctx.db.get(revisionId)))?.basis,
+		);
+	});
+
 	test("creates the same existing-Locale task through explicit and legacy targets", async () => {
 		const user = await authenticatedBackend(t, "agent-owned-translation-task");
 		const { token } = await setupWorkQueueProject(user);

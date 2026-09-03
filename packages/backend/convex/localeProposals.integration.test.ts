@@ -968,6 +968,38 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 				candidateRevisionIds: currentRevisionIds,
 			}),
 		).resolves.toEqual({ accepted: 2, status: "open" });
+		const firstCandidate = currentReviewPage?.messages.find(
+			(message) => message.messageId === "first",
+		)?.candidate;
+		if (!firstCandidate)
+			throw new Error("Expected the first current candidate.");
+		await expect(
+			user.mutation(api.agentTranslationProposals.saveTaskValue, {
+				taskId: task.taskId,
+				messageId: "first",
+				candidateToken: firstCandidate.revisionId,
+				value: "Primeiro revisto",
+			}),
+		).resolves.toMatchObject({
+			decision: { kind: "acceptWithEdits", value: "Primeiro revisto" },
+		});
+		const revisedPage = await user.query(api.localeProposals.getForReview, {
+			proposalId: localeProposalId,
+			taskId: task.taskId,
+			focus: "reviewed",
+			limit: 16,
+		});
+		expect(
+			revisedPage?.messages.find((message) => message.messageId === "first"),
+		).toMatchObject({
+			value: { value: "Primeiro revisto", updatedBy: { kind: "user" } },
+			candidate: {
+				review: {
+					finalValue: "Primeiro revisto",
+					reviewBasisIsCurrent: true,
+				},
+			},
+		});
 	}, 60_000);
 
 	test("keeps an agent-proposed Intentional Blank inert until human review", async () => {
