@@ -134,6 +134,7 @@ class ReleaseDeliveryResult {
     required this.skipped,
     required this.pullRequestBodyFile,
     required this.pullRequestCommand,
+    required this.sourceChanged,
     this.localeProposalId,
   });
 
@@ -143,7 +144,15 @@ class ReleaseDeliveryResult {
   final List<SkippedReleaseKey> skipped;
   final String pullRequestBodyFile;
   final String pullRequestCommand;
+  final bool sourceChanged;
   final String? localeProposalId;
+}
+
+class _VerifiedCandidate {
+  const _VerifiedCandidate({required this.paths, required this.sourceChanged});
+
+  final List<String> paths;
+  final bool sourceChanged;
 }
 
 /// Delivers an immutable Release Bundle into the current integration branch.
@@ -265,7 +274,7 @@ class ReleaseRepositoryAdapter {
           'Flutter generation changed the public localization interface. The release introduced a getter or method signature change and was not written.',
         );
       }
-      final changedPaths = await _verifiedCandidatePaths(
+      final verifiedCandidate = await _verifiedCandidatePaths(
         staging.root,
         summary,
         delivery,
@@ -274,6 +283,8 @@ class ReleaseRepositoryAdapter {
         request.flutter,
         localeArtifact: localeArtifact,
       );
+      final changedPaths = verifiedCandidate.paths;
+      final sourceChanged = verifiedCandidate.sourceChanged;
       final candidateFiles = await _readCandidateFiles(
         staging.root,
         changedPaths,
@@ -322,7 +333,11 @@ class ReleaseRepositoryAdapter {
         );
       }
       final commitTitle = localeArtifact == null
-          ? 'fix(l10n): deliver reviewed translations'
+          ? sourceChanged
+                ? 'fix(l10n): deliver reviewed localization'
+                : 'fix(l10n): deliver reviewed translations'
+          : sourceChanged
+          ? 'feat(l10n): deliver reviewed localization and Portuguese'
           : 'feat(l10n): deliver reviewed translations and Portuguese';
       final localeTrailers = localeArtifact == null
           ? ''
@@ -331,7 +346,7 @@ class ReleaseRepositoryAdapter {
         'commit',
         '--only',
         '-m',
-        '$commitTitle\n\nBlabla-Release-Record: ${summary.releaseRecord.id}\nBlabla-Baseline-Commit: ${summary.releaseRecord.baselineCommit}\nBlabla-Applied-Onto: $appliedOnto\nBlabla-Applied-Keys: ${delivery.applied.length}\nBlabla-Skipped-Keys: ${delivery.skipped.length}$localeTrailers',
+        '$commitTitle\n\nBlabla-Release-Record: ${summary.releaseRecord.id}\nBlabla-Baseline-Commit: ${summary.releaseRecord.baselineCommit}\nBlabla-Applied-Onto: $appliedOnto\nBlabla-Applied-Keys: ${delivery.applied.length}\nBlabla-Source-Changed: ${sourceChanged ? 'yes' : 'no'}\nBlabla-Skipped-Keys: ${delivery.skipped.length}$localeTrailers',
         '--',
         ...changedPaths,
       ]);
@@ -342,6 +357,7 @@ class ReleaseRepositoryAdapter {
         appliedOnto,
         localeArtifact: localeArtifact,
         localeValueCount: localeValueCount,
+        sourceChanged: sourceChanged,
       );
       final pullRequestBodyFile = await _writePullRequestBody(
         checkout,
@@ -356,8 +372,8 @@ class ReleaseRepositoryAdapter {
       );
       request.write(
         localeArtifact == null
-            ? 'Applied ${delivery.applied.length} existing-locale key${delivery.applied.length == 1 ? '' : 's'}; skipped ${delivery.skipped.length}.'
-            : 'Applied ${delivery.applied.length} existing-locale key${delivery.applied.length == 1 ? '' : 's'}; added Portuguese with $localeValueCount catalog value${localeValueCount == 1 ? '' : 's'}; skipped ${delivery.skipped.length}.',
+            ? 'Applied ${delivery.applied.length} reviewed key${delivery.applied.length == 1 ? '' : 's'}${sourceChanged ? ', including reviewed Source changes' : ''}; skipped ${delivery.skipped.length}.'
+            : 'Applied ${delivery.applied.length} reviewed key${delivery.applied.length == 1 ? '' : 's'}${sourceChanged ? ', including reviewed Source changes' : ''}; added Portuguese with $localeValueCount catalog value${localeValueCount == 1 ? '' : 's'}; skipped ${delivery.skipped.length}.',
       );
       for (final skipped in delivery.skipped) {
         request.write('Skipped ${skipped.messageId}: ${skipped.reason}.');
@@ -375,6 +391,7 @@ class ReleaseRepositoryAdapter {
         skipped: delivery.skipped,
         pullRequestBodyFile: pullRequestBodyFile,
         pullRequestCommand: pullRequestCommand,
+        sourceChanged: sourceChanged,
         localeProposalId: localeArtifact?.proposalId,
       );
     } finally {
@@ -658,7 +675,7 @@ class ReleaseRepositoryAdapter {
     }
   }
 
-  Future<List<String>> _verifiedCandidatePaths(
+  Future<_VerifiedCandidate> _verifiedCandidatePaths(
     Directory staging,
     ReleaseSummary summary,
     ReleaseDeliveryTree delivery,
@@ -680,26 +697,23 @@ class ReleaseRepositoryAdapter {
         .toSet();
     if (delivery.applied.isNotEmpty && changedCatalogPaths.isEmpty) {
       throw RepositoryAdapterException(
-        'Blabla reported applied release keys without changing any target catalog bytes.',
+        'Blabla reported applied release keys without changing any bound catalog bytes.',
       );
     }
     final sourcePath = summary.catalogs
         .singleWhere((catalog) => catalog.isSource)
         .catalogPath;
-    if (changedCatalogPaths.contains(sourcePath)) {
-      throw RepositoryAdapterException(
-        'Blabla returned a delivery tree that changes the Source catalog. Release delivery may only change reviewed target values.',
-      );
-    }
+    final sourceChanged = changedCatalogPaths.contains(sourcePath);
     final combinedGeneratedPaths = localeArtifact == null
         ? const <String>{}
         : {
             for (final catalog in summary.catalogs.where(
-              (catalog) =>
-                  !catalog.isSource &&
-                  changedCatalogPaths.contains(catalog.catalogPath),
+              (catalog) => changedCatalogPaths.contains(catalog.catalogPath),
             ))
-              '$_l10nDirectory/app_localizations_${catalog.localeCode}.dart',
+              if (generatedBefore.contains(
+                '$_l10nDirectory/app_localizations_${catalog.localeCode}.dart',
+              ))
+                '$_l10nDirectory/app_localizations_${catalog.localeCode}.dart',
             _portuguese.generatedLocalizationPath,
             _portuguese.generatedLocalePath,
           };
@@ -707,6 +721,7 @@ class ReleaseRepositoryAdapter {
         ? {...catalogPaths, ...generatedBefore}
         : {
             ...changedCatalogPaths,
+            ...(sourceChanged ? generatedBefore : const <String>{}),
             ...combinedGeneratedPaths,
             _portuguese.catalogPath,
             _portuguese.runtimeConstantsPath,
@@ -745,7 +760,10 @@ class ReleaseRepositoryAdapter {
       }
       await _portuguese.verifyGenerated(staging, localeArtifact, flutter);
     }
-    return changed.toList()..sort();
+    return _VerifiedCandidate(
+      paths: changed.toList()..sort(),
+      sourceChanged: sourceChanged,
+    );
   }
 
   Future<Set<String>> _changedPaths(Directory checkout) async {
@@ -889,18 +907,20 @@ class ReleaseRepositoryAdapter {
     String appliedOnto, {
     LocaleProposalArtifact? localeArtifact,
     required int localeValueCount,
+    required bool sourceChanged,
   }) {
     final skipped = delivery.skipped.isEmpty
         ? '- None'
         : delivery.skipped
               .map((key) => '- `${key.messageId}` — `${key.reason}`')
               .join('\n');
-    return '''Delivers reviewed Blabla translations.
+    return '''Delivers reviewed Blabla localization work.
 
 - Release Record: `${summary.releaseRecord.id}`
 - Baseline: `${summary.releaseRecord.baselineCommit}`
 - Applied onto: `$appliedOnto`
-- Existing-locale keys applied: ${delivery.applied.length}${localeArtifact == null ? '' : '\n- Portuguese catalog values added: $localeValueCount\n- Locale Proposal: `${localeArtifact.proposalId}`\n- Source Snapshot: `${localeArtifact.sourceSnapshot.id}`'}
+- Reviewed keys applied: ${delivery.applied.length}
+- Source catalog changed: ${sourceChanged ? 'yes' : 'no'}${localeArtifact == null ? '' : '\n- Portuguese catalog values added: $localeValueCount\n- Locale Proposal: `${localeArtifact.proposalId}`\n- Source Snapshot: `${localeArtifact.sourceSnapshot.id}`'}
 
 Skipped keys
 
