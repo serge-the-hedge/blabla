@@ -70,10 +70,12 @@ intentionally one-time visible.
    `POST /translation-tasks/:id/candidates`. The server resolves and validates
    the frozen concurrency basis; the agent supplies only message ids and
    values.
-5. Open the task in the human review workbench. Accepting an exact
-   candidate, accepting edited text, rejecting it, or recording an Intentional
-   Blank leaves immutable review evidence; only an editor acceptance changes
-   the Catalog Workspace.
+5. Open the task in the human review workbench. One **Save review** action
+   accepts whatever is currently in the field; the server records whether that
+   was the exact candidate, a human edit, or an explicit keep on a newer Source
+   basis. Re-saving an already reviewed field appends immutable human review
+   evidence. Rejection and Intentional Blank remain explicit decisions. Only an
+   editor save changes the Catalog Workspace or new-Locale draft.
 6. Report a value as **proposed** until the human review succeeds. The API
    never claims that an agent submission is live.
 
@@ -272,8 +274,8 @@ the key for a different target returns `IDEMPOTENCY_KEY_REUSED`.
 ### `POST /translation-tasks`
 
 Creates or resumes a Translation Task. An existing-Locale task freezes the
-selected keys, Locale, current Source Contract, target values, and concurrency
-basis on the server:
+selected keys and Locale. Its Source Contract, target values, and concurrency
+basis remain live on the server:
 
 ```json
 {
@@ -325,11 +327,13 @@ to discover and resume work instead of guessing task ids or creating duplicates.
 
 Returns a bounded page of the task (`limit` 1–16) and a `nextCursor`, which is
 `null` on the final page. Pass that cursor unchanged until it is `null`.
-Existing-Locale targets come from their frozen selection. New-Locale targets
-page the complete pinned Source template. Each target includes exact Source and
-current human-applied target text. A new-Locale target also returns its current
-immutable candidate revision, when one exists. Private Snapshot, fingerprint,
-workspace, and Convex-id basis fields are not exposed.
+Existing-Locale targets come from their frozen selection but resolve exact
+Source and current human-applied target text when each page is read. A Source
+Proposal or target edit therefore updates the existing task rather than making
+the entire key selection obsolete. New-Locale targets page the complete pinned
+Source template. A new-Locale target also returns its current immutable
+candidate revision, when one exists. Private Snapshot, fingerprint, workspace,
+and Convex-id basis fields are not exposed.
 
 ### `POST /translation-tasks/:id/candidates`
 
@@ -359,13 +363,22 @@ An Intentional Blank candidate and its reason remain inert, cannot be exact-batc
 accepted, and must be confirmed individually by a human.
 
 An exact retry is safe. A correction appends an immutable revision and makes it
-the candidate's current revision. The
+the candidate's current revision. A changed Source or target basis also creates
+a new immutable revision even when the proposed target text is unchanged. The
 server derives existing-Locale revision idempotency and new-Locale Source
 fingerprints from task-owned evidence. Candidates remain inert until an editor
 reviews them. Existing-Locale review is in Translation Tasks; new-Locale review
 is in the configured Locale Proposal workbench mounted by the task route. Both
-task kinds can accept up to 16 exact current revisions atomically. Edited
-acceptance, rejection, and Intentional Blanks remain individual decisions.
+task kinds can accept up to 16 exact current revisions atomically; stale
+revisions remain visible evidence but are excluded from exact-batch acceptance.
+When an existing-Locale Source Contract changes but the proposed translation is
+still correct, the editor leaves the field unchanged and chooses **Save
+review**. The server records that as `keepForCurrentSource`, validates it
+against the live Source Contract, and stores the applied basis without altering
+the agent's original revision. This avoids a needless agent rerun while
+preserving which source the agent actually saw. A later human edit can be saved
+again as another immutable review event. Edited acceptance, rejection, and
+Intentional Blanks also remain individual decisions.
 
 ### `POST /translation-proposals/:id/candidate-revisions`
 

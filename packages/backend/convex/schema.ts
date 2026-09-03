@@ -111,6 +111,7 @@ const agentTranslationProposalTarget = v.union(
 );
 const agentTranslationCandidateReviewDecision = v.union(
 	v.object({ kind: v.literal("accept") }),
+	v.object({ kind: v.literal("keepForCurrentSource") }),
 	v.object({ kind: v.literal("acceptWithEdits"), value: v.string() }),
 	v.object({
 		kind: v.literal("reject"),
@@ -1590,9 +1591,10 @@ export default defineSchema({
 		])
 		.index("by_project_and_updatedAt", ["projectId", "updatedAt"]),
 
-	// A Translation Task freezes a small, human-legible work scope without
-	// copying the catalog into one reactive document. Candidate revisions use
-	// this server-owned basis, so agents submit only message/value pairs.
+	// A Translation Task freezes a small, human-legible key/Locale scope without
+	// copying the catalog into one reactive document. Reads resolve each target's
+	// live Source and target facts; every immutable candidate revision captures
+	// the server-owned basis it actually answers, so agents submit only values.
 	translationTaskTargets: defineTable({
 		projectId: v.id("projects"),
 		proposalId: v.id("agentTranslationProposals"),
@@ -1666,6 +1668,9 @@ export default defineSchema({
 		reviewer: actor,
 		finalValue: v.optional(v.string()),
 		finalValueFingerprint: v.optional(v.string()),
+		// The candidate keeps its authored basis. This separate basis records what
+		// the human actually applied, including an explicit keep after Source drift.
+		appliedBasis: v.optional(agentTranslationCandidateBasis),
 		createdAt: v.number(),
 	})
 		.index("by_proposal", ["proposalId"])

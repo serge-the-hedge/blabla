@@ -2247,9 +2247,72 @@ export const stageForReview = mutation({
 	},
 });
 
+/** Persist a reviewed Translation Task value through the private Locale
+ * Proposal adapter. The Translation Task module owns its immutable review
+ * evidence; this helper only validates and stages the human-authored value. */
+export async function applyTaskReviewedValue(
+	ctx: MutationCtx,
+	input: {
+		projectId: Id<"projects">;
+		proposalId: Id<"localeProposals">;
+		messageId: string;
+		sourceSnapshotId: Id<"sourceSnapshots">;
+		sourceFingerprint: string;
+		value: string;
+		reviewer: { kind: "user"; id: string };
+	},
+) {
+	const proposal = await ctx.db.get(input.proposalId);
+	if (!proposal || proposal.projectId !== input.projectId) {
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message: "Locale Proposal not found.",
+		});
+	}
+	const project = await projectFor(ctx, input.projectId);
+	const source = await pinnedSourceEvidenceForProposal(ctx, project, proposal);
+	if (
+		!source.isCurrentBaseline ||
+		source.snapshotId !== input.sourceSnapshotId
+	) {
+		sourceStaleError();
+	}
+	const sourceMessage = await currentSourceRowForProposal(
+		ctx,
+		input.projectId,
+		proposal,
+		input.messageId,
+	);
+	if (sourceMessage.sourceFingerprint !== input.sourceFingerprint) {
+		throw new ConvexError({
+			code: "STALE_BASIS",
+			message: "The Locale Proposal source contract changed; refresh it.",
+		});
+	}
+	const validated = await assertProposalItemsAgainstCurrentSource(
+		ctx,
+		input.projectId,
+		proposal,
+		[
+			{
+				messageId: input.messageId,
+				value: input.value,
+				sourceFingerprint: input.sourceFingerprint,
+			},
+		],
+	);
+	await ctx.runMutation(internal.localeProposals.stageBatch, {
+		projectId: input.projectId,
+		proposalId: input.proposalId,
+		sourceSnapshotId: source.snapshotId,
+		actor: input.reviewer,
+		items: validated,
+	});
+}
+
 /** Apply one human decision to a Locale Proposal value. This internal seam is
- * shared by manual review and Agent Translation Proposal review, so both paths
- * produce the same human-authored value and immutable review evidence. */
+ * shared by manual review and legacy Agent Translation Proposal review, so
+ * both paths produce the same human-authored value and immutable evidence. */
 export const applyReviewedValue = internalMutation({
 	args: {
 		projectId: v.id("projects"),
@@ -2672,7 +2735,8 @@ export const getForReview = query({
 							.withIndex("by_revision", (q) =>
 								q.eq("revisionId", candidateRevision._id),
 							)
-							.unique()
+							.order("desc")
+							.first()
 					: null;
 				const value =
 					pendingValuesByMessageId.get(message.messageId) ??
@@ -2743,6 +2807,11 @@ export const getForReview = query({
 							? candidateRevision.basis.sourceFingerprint !== fingerprint
 							: value !== null && value.sourceFingerprint !== fingerprint,
 				};
+				const reviewBasisIsCurrent =
+					candidateReview?.appliedBasis?.kind === "localeProposal" &&
+					candidateReview.appliedBasis.localeProposalId === proposal._id &&
+					candidateReview.appliedBasis.snapshotId === source.snapshotId &&
+					candidateReview.appliedBasis.sourceFingerprint === fingerprint;
 				return {
 					messageId: message.messageId,
 					catalogIndex: message.catalogIndex,
@@ -2778,6 +2847,7 @@ export const getForReview = query({
 									? {
 											decision: candidateReview.decision,
 											finalValue: candidateReview.finalValue,
+											reviewBasisIsCurrent,
 										}
 									: null,
 							}
