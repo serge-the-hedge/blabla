@@ -20,6 +20,7 @@ import {
 import {
 	PreparingCard,
 	ReleaseDeliveryHandoff,
+	ReleaseDeliveryScope,
 	ReleaseRecordView,
 } from "@/components/localization/release-record-view";
 import { api, convexId } from "@/lib/convex-api";
@@ -149,40 +150,48 @@ function ReleaseRoute() {
 						</Button>
 					}
 					releaseAction={
-						bundle?.status === "ready" ? (
-							readyLocaleProposal === undefined ? (
-								<Skeleton className="h-12 w-full max-w-xl" />
-							) : (
-								<ReleaseDeliveryHandoff
-									recordId={record.recordId}
-									changeKeyCount={bundle.changeKeyCount ?? 0}
+						readyLocaleProposal === undefined ? (
+							<Skeleton className="h-12 w-full max-w-xl" />
+						) : bundle?.status === "ready" ? (
+							<ReleaseDeliveryHandoff
+								recordId={record.recordId}
+								changeKeyCount={bundle.changeKeyCount ?? 0}
+								targetValueCount={record.scopeValueCount}
+								localeProposal={readyLocaleProposal}
+							/>
+						) : (
+							<div className="flex flex-col gap-3">
+								<ReleaseDeliveryScope
+									changeKeyCount={record.deltaKeyCount}
 									targetValueCount={record.scopeValueCount}
 									localeProposal={readyLocaleProposal}
 								/>
-							)
-						) : (
-							<div className="flex flex-col gap-1.5">
-								<Button
-									size="sm"
-									disabled={
-										building ||
-										bundle === undefined ||
-										bundle?.status === "building"
-									}
-									onClick={build}
-								>
-									{building || bundle?.status === "building" ? (
-										<LoaderCircle aria-hidden="true" className="animate-spin" />
+								<div className="flex flex-col items-start gap-1.5">
+									<Button
+										size="sm"
+										disabled={
+											building ||
+											bundle === undefined ||
+											bundle?.status === "building"
+										}
+										onClick={build}
+									>
+										{building || bundle?.status === "building" ? (
+											<LoaderCircle
+												aria-hidden="true"
+												className="animate-spin"
+											/>
+										) : null}
+										{bundle?.status === "failed"
+											? "Retry build"
+											: "Build release"}
+									</Button>
+									{bundle?.failure ? (
+										<p className="text-destructive text-xs">
+											{bundle.failure.message}
+										</p>
 									) : null}
-									{bundle?.status === "failed"
-										? "Retry build"
-										: "Build release"}
-								</Button>
-								{bundle?.failure ? (
-									<p className="text-destructive text-xs">
-										{bundle.failure.message}
-									</p>
-								) : null}
+								</div>
 							</div>
 						)
 					}

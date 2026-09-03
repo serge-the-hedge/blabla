@@ -1730,7 +1730,10 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 			}),
 		).resolves.toMatchObject({
 			isCurrentBaseline: false,
-			messages: [],
+			messages: [
+				{ messageId: "unchanged", value: { value: "Sem mudancas" } },
+				{ messageId: "changed", value: { value: "Antes" } },
+			],
 		});
 
 		const continued = await user.action(
@@ -1755,12 +1758,100 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 			{ messageId: "changed", value: null },
 			{ messageId: "added", value: null },
 		]);
+		await user.mutation(api.localeProposals.stageForReview, {
+			projectId,
+			proposalId: continued.localeProposalId,
+			items:
+				currentPage?.messages
+					.filter((message) => message.value === null)
+					.map((message) => ({
+						messageId: message.messageId,
+						value: message.messageId === "changed" ? "Depois" : "Adicionado",
+						sourceFingerprint: message.sourceFingerprint,
+					})) ?? [],
+		});
+		await expect(
+			user.action(api.agentTranslationProposals.finalizeTask, {
+				taskId: continued.taskId,
+			}),
+		).resolves.toMatchObject({ deliveryStatus: "ready" });
 		expect(
 			await user.action(api.localeProposals.artifactForReview, {
 				projectId,
 				proposalId: oldProposalId,
 			}),
 		).toMatchObject({ proposalId: oldProposalId });
+	}, 60_000);
+
+	test("leaves metadata-only Source Contract changes as translation residue", async () => {
+		const user = await authenticatedBackend(
+			t,
+			"locale-proposal-contract-continuation-owner",
+		);
+		const projectId = await createProject(user);
+		await ingestSourceBaseline(user, projectId, {
+			content: JSON.stringify({
+				"@@locale": "en",
+				count: "{count} items",
+				"@count": { placeholders: { count: { type: "int" } } },
+			}),
+		});
+		const task = await user.mutation(api.agentTranslationProposals.createTask, {
+			projectId,
+			title: "Portuguese contract pass",
+			target: { kind: "newLocale", localeCode: "pt" },
+			scope: { kind: "completeCatalog" },
+		});
+		const taskDetail = await user.query(
+			api.agentTranslationProposals.getForReview,
+			{ proposalId: task.taskId },
+		);
+		const proposalId =
+			taskDetail?.proposal.localeProposalTaskScope?.localeProposalId;
+		if (!proposalId) throw new Error("Expected a Locale Proposal.");
+		const page = await user.query(api.localeProposals.getForReview, {
+			proposalId,
+			taskId: task.taskId,
+			limit: 16,
+		});
+		const [message] = page?.messages ?? [];
+		if (!message) throw new Error("Expected the source message.");
+		await user.mutation(api.localeProposals.stageForReview, {
+			projectId,
+			proposalId,
+			items: [
+				{
+					messageId: message.messageId,
+					value: "{count} itens",
+					sourceFingerprint: message.sourceFingerprint,
+				},
+			],
+		});
+
+		await ingestSourceBaseline(user, projectId, {
+			commit: "next-contract",
+			content: JSON.stringify({
+				"@@locale": "en",
+				count: "{count} items",
+				"@count": { placeholders: { count: { type: "String" } } },
+			}),
+			lineage: {
+				baselineCommit: "baseline",
+				relationship: "descendant",
+				mergeBase: "baseline",
+			},
+		});
+
+		await expect(
+			user.action(api.agentTranslationProposals.continueNewLocaleTask, {
+				taskId: task.taskId,
+			}),
+		).resolves.toMatchObject({
+			carriedValueCount: 0,
+			incompatibleValueCount: 1,
+			remainingValueCount: 1,
+			totalValueCount: 1,
+		});
 	}, 60_000);
 
 	test("accepts an exact Intentional Blank with its reason", async () => {

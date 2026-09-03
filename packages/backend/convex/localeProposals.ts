@@ -17,7 +17,10 @@ import {
 	activeProjectionFor,
 	MAX_WORKING_CATALOG_KEYS,
 } from "./catalogProjection";
-import { assertTargetValueContract } from "./contractTransforms";
+import {
+	assertTargetValueContract,
+	sourceContractsMatch,
+} from "./contractTransforms";
 import { DEFAULT_INTEGRATION_BRANCH, now, sha256Hex } from "./lib";
 import { declaredPlaceholderNames, messageFacts } from "./messageFacts";
 import { requireEditor, requireViewer } from "./permissions";
@@ -76,6 +79,10 @@ type ProposalValueInput = {
 	value: string;
 	sourceFingerprint: string;
 	intentionalBlankReason?: string;
+};
+
+type CarryForwardValueInput = ProposalValueInput & {
+	updatedBy: { kind: "user"; id: string };
 };
 
 type TemplateMessage = {
@@ -1203,22 +1210,26 @@ export const valuesForCarryForward = internalQuery({
 		if (values.length > MAX_LOCALE_PROPOSAL_MESSAGES) {
 			integrityError("Portuguese Locale Proposal exceeds its value envelope.");
 		}
-		const source = await pinnedSourceEvidenceForProposal(
-			ctx,
-			project,
-			toProposal,
-		);
+		const [fromSource, source] = await Promise.all([
+			pinnedSourceEvidenceForProposal(ctx, project, fromProposal),
+			pinnedSourceEvidenceForProposal(ctx, project, toProposal),
+		]);
 		return {
+			fromSource,
 			source,
 			values: values
 				.filter(
-					(value) =>
-						fromProposal.status === "ready" || value.updatedBy.kind !== "agent",
+					(
+						value,
+					): value is typeof value & {
+						updatedBy: { kind: "user"; id: string };
+					} => value.updatedBy.kind === "user",
 				)
 				.map((value) => ({
 					messageId: value.messageId,
 					value: value.value,
 					sourceFingerprint: value.sourceFingerprint,
+					updatedBy: value.updatedBy,
 					...(value.intentionalBlankReason === undefined
 						? {}
 						: { intentionalBlankReason: value.intentionalBlankReason }),
@@ -1240,6 +1251,7 @@ export const carryForwardBatch = internalMutation({
 				messageId: v.string(),
 				value: v.string(),
 				sourceFingerprint: v.string(),
+				updatedBy: v.object({ kind: v.literal("user"), id: v.string() }),
 				intentionalBlankReason: v.optional(v.string()),
 			}),
 		),
@@ -1314,7 +1326,7 @@ export const carryForwardBatch = internalMutation({
 					? {}
 					: { intentionalBlankReason: item.intentionalBlankReason }),
 				byteLength,
-				updatedBy: { kind: "system", id: args.fromProposalId },
+				updatedBy: item.updatedBy,
 				updatedAt: now(),
 			});
 			carriedValueCount += 1;
@@ -1345,10 +1357,10 @@ export const carryForwardBatch = internalMutation({
 });
 
 function carryForwardBatches(
-	values: ProposalValueInput[],
-): ProposalValueInput[][] {
-	const batches: ProposalValueInput[][] = [];
-	let batch: ProposalValueInput[] = [];
+	values: CarryForwardValueInput[],
+): CarryForwardValueInput[][] {
+	const batches: CarryForwardValueInput[][] = [];
+	let batch: CarryForwardValueInput[] = [];
 	for (const value of values) {
 		const candidate = [...batch, value];
 		if (
@@ -1388,27 +1400,43 @@ export async function carryForwardLocaleProposal(
 		});
 	}
 	const carrySource: {
+		fromSource: SourceEvidence;
 		source: SourceEvidence;
-		values: ProposalValueInput[];
+		values: CarryForwardValueInput[];
 	} = await ctx.runQuery(internal.localeProposals.valuesForCarryForward, {
 		projectId: args.projectId,
 		fromProposalId: args.fromProposalId,
 		toProposalId,
 	});
-	const currentDocument = await readSourceDocument(ctx, carrySource.source);
-	const currentSourceFingerprints = new Map(
+	const [previousDocument, currentDocument] = await Promise.all([
+		readSourceDocument(ctx, carrySource.fromSource),
+		readSourceDocument(ctx, carrySource.source),
+	]);
+	const previousSourceById = new Map(
+		previousDocument.messages.map((message) => [message.id, message] as const),
+	);
+	const previousSourceFingerprints = new Map(
 		await Promise.all(
-			currentDocument.messages.map(
+			previousDocument.messages.map(
 				async (message) =>
 					[message.id, await sourceFingerprint(message)] as const,
 			),
 		),
 	);
-	const values = carrySource.values.filter(
-		(value) =>
-			currentSourceFingerprints.get(value.messageId) ===
-			value.sourceFingerprint,
+	const currentSourceById = new Map(
+		currentDocument.messages.map((message) => [message.id, message] as const),
 	);
+	const values = carrySource.values.filter((value) => {
+		const previous = previousSourceById.get(value.messageId);
+		const current = currentSourceById.get(value.messageId);
+		return (
+			previous !== undefined &&
+			current !== undefined &&
+			previousSourceFingerprints.get(value.messageId) ===
+				value.sourceFingerprint &&
+			sourceContractsMatch(previous, current)
+		);
+	});
 	let carriedValueCount = 0;
 	const incompatibleValueCount = carrySource.values.length - values.length;
 	for (const items of carryForwardBatches(values)) {
@@ -2449,7 +2477,7 @@ export const getForReview = query({
 			project,
 			proposal,
 		);
-		const projection = await activeProjectionFor(ctx, proposal.projectId);
+		const activeProjection = await activeProjectionFor(ctx, proposal.projectId);
 		if (proposal.sourceMessageCount > MAX_LOCALE_PROPOSAL_MESSAGES) {
 			integrityError("Locale Proposal exceeds its source message envelope.");
 		}
@@ -2476,14 +2504,27 @@ export const getForReview = query({
 			validationError("Locale Proposal review cursor is invalid.");
 		}
 		if (
-			(!projection || projection.snapshotId !== proposal.sourceSnapshotId) &&
+			(!activeProjection ||
+				activeProjection.snapshotId !== proposal.sourceSnapshotId) &&
 			source.isCurrentBaseline
 		) {
 			integrityError(
 				"The active Catalog Workspace does not match the current Baseline Snapshot.",
 			);
 		}
-		if (!projection || projection.snapshotId !== proposal.sourceSnapshotId) {
+		const projection =
+			activeProjection?.snapshotId === proposal.sourceSnapshotId
+				? activeProjection
+				: await ctx.db
+						.query("catalogProjections")
+						.withIndex("by_project_and_snapshot_and_status", (q) =>
+							q
+								.eq("projectId", proposal.projectId)
+								.eq("snapshotId", proposal.sourceSnapshotId)
+								.eq("status", "published"),
+						)
+						.unique();
+		if (!projection) {
 			return {
 				proposal: proposalSummary(
 					proposal,
@@ -2505,7 +2546,7 @@ export const getForReview = query({
 				isDone: true,
 				pendingHumanReview: { count: 0, hasMore: false },
 				diagnostics,
-				isCurrentBaseline: false,
+				isCurrentBaseline: source.isCurrentBaseline,
 			};
 		}
 		const pendingAgentValueSummaryWindow =

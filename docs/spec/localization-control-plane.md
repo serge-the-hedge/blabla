@@ -300,10 +300,13 @@ The same rule applies to a reviewed **new-Locale proposal** when Source advances
 The old proposal and artifact remain immutable evidence; they are not globally
 obsolete. Continuing creates or resumes a proposal pinned to the current Source,
 materializes each human-authored or reviewed value whose Source Fingerprint is
-unchanged, never overwrites work already present there, and leaves only added or
-changed Source values as ordinary residue. An interrupted continuation is safe to
-retry. Final delivery remains strict: only the resulting current-source artifact
-can compose with a Release Bundle.
+unchanged **and whose executable Source Contract remains compatible**, never
+overwrites work already present there, and leaves added, changed, or
+contract-incompatible Source values as ordinary residue. The prior proposal is
+still available as a bounded read-only view over its historical projection. An
+interrupted continuation is safe to retry, and carried human authorship remains
+valid review evidence. Final delivery remains strict: only the resulting
+current-source artifact can compose with a Release Bundle.
 
 ---
 

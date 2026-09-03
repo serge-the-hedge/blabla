@@ -151,6 +151,55 @@ function placeholderDefinitions(
 	);
 }
 
+function stableJson(value: unknown): string {
+	if (Array.isArray(value)) {
+		return `[${value.map(stableJson).join(",")}]`;
+	}
+	if (isPlainObject(value)) {
+		return `{${Object.keys(value)
+			.sort()
+			.map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+			.join(",")}}`;
+	}
+	return JSON.stringify(value);
+}
+
+/** Compare the executable portion of two source messages. Source text owns ICU
+ * shape; Flutter's placeholder declaration owns runtime type and formatting.
+ * Human-facing examples and descriptions do not invalidate reviewed work. */
+export function sourceContractsMatch(
+	left: Pick<CatalogMessage, "value" | "metadata">,
+	right: Pick<CatalogMessage, "value" | "metadata">,
+): boolean {
+	if (left.value !== right.value) return false;
+	const executablePlaceholders = (metadata: JsonObject | undefined) => {
+		const placeholders = metadata?.placeholders;
+		if (!isPlainObject(placeholders)) return null;
+		return Object.fromEntries(
+			Object.entries(placeholders).map(([name, definition]) => {
+				if (!isPlainObject(definition)) return [name, definition];
+				return [
+					name,
+					Object.fromEntries(
+						[
+							"type",
+							"format",
+							"optionalParameters",
+							"isCustomDateFormat",
+						].flatMap((key) =>
+							definition[key] === undefined ? [] : [[key, definition[key]]],
+						),
+					),
+				];
+			}),
+		);
+	};
+	return (
+		stableJson(executablePlaceholders(left.metadata)) ===
+		stableJson(executablePlaceholders(right.metadata))
+	);
+}
+
 function placeholderDefinitionEqual(
 	left: PlaceholderDefinition,
 	right: PlaceholderDefinition,

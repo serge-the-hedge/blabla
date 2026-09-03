@@ -44,6 +44,43 @@ export type EvidenceStatus =
 	| "LoadingMore"
 	| "Exhausted";
 
+export function ReleaseDeliveryScope({
+	changeKeyCount,
+	targetValueCount,
+	localeProposal,
+}: {
+	changeKeyCount: number;
+	targetValueCount: number;
+	localeProposal: ReadyLocaleProposal | null;
+}) {
+	return (
+		<div
+			className={cn(
+				"grid overflow-hidden rounded-md border bg-border",
+				localeProposal && "sm:grid-cols-2",
+			)}
+		>
+			<div className="bg-background p-3">
+				<p className="font-medium text-sm">Existing locales</p>
+				<p className="mt-0.5 text-muted-foreground text-xs tabular-nums">
+					{NUMBER_FORMAT.format(changeKeyCount)} changed key
+					{changeKeyCount === 1 ? "" : "s"} ·{" "}
+					{NUMBER_FORMAT.format(targetValueCount)} target value
+					{targetValueCount === 1 ? "" : "s"}
+				</p>
+			</div>
+			{localeProposal ? (
+				<div className="border-border border-t bg-background p-3 sm:border-t-0 sm:border-l">
+					<p className="font-medium text-sm">Portuguese · new locale</p>
+					<p className="mt-0.5 text-muted-foreground text-xs tabular-nums">
+						{NUMBER_FORMAT.format(localeProposal.valueCount)} catalog values
+					</p>
+				</div>
+			) : null}
+		</div>
+	);
+}
+
 function localeSpread(
 	record: ReleaseSummary,
 	kind: "blockedCount" | "needsDecisionCount",
@@ -135,25 +172,11 @@ export function ReleaseDeliveryHandoff({
 
 	return (
 		<div className="flex flex-col gap-3">
-			<div className="grid overflow-hidden rounded-md border bg-border sm:grid-cols-2">
-				<div className="bg-background p-3">
-					<p className="font-medium text-sm">Existing locales</p>
-					<p className="mt-0.5 text-muted-foreground text-xs tabular-nums">
-						{NUMBER_FORMAT.format(changeKeyCount)} changed key
-						{changeKeyCount === 1 ? "" : "s"} ·{" "}
-						{NUMBER_FORMAT.format(targetValueCount)} target value
-						{targetValueCount === 1 ? "" : "s"}
-					</p>
-				</div>
-				{localeProposal ? (
-					<div className="border-border border-t bg-background p-3 sm:border-t-0 sm:border-l">
-						<p className="font-medium text-sm">Portuguese · new locale</p>
-						<p className="mt-0.5 text-muted-foreground text-xs tabular-nums">
-							{NUMBER_FORMAT.format(localeProposal.valueCount)} catalog values
-						</p>
-					</div>
-				) : null}
-			</div>
+			<ReleaseDeliveryScope
+				changeKeyCount={changeKeyCount}
+				targetValueCount={targetValueCount}
+				localeProposal={localeProposal}
+			/>
 			<p className="text-muted-foreground text-xs">
 				Ready. Run
 				{localeProposal ? " one combined delivery" : " the delivery"} from a

@@ -673,7 +673,13 @@ export default defineSchema({
 		snapshotId: v.optional(v.id("sourceSnapshots")),
 		status: v.union(v.literal("staging"), v.literal("published")),
 		createdAt: v.number(),
-	}).index("by_project", ["projectId"]),
+	})
+		.index("by_project", ["projectId"])
+		.index("by_project_and_snapshot_and_status", [
+			"projectId",
+			"snapshotId",
+			"status",
+		]),
 
 	// A deliberately small companion to a Catalog Projection. Resolution heads
 	// consult this record rather than repeatedly reading the projection's
